@@ -244,17 +244,27 @@ class SetupView(QWidget):
     def _calculate_dynamic_buffer_size(self, sample_rate_hz: float, num_active_channels: int) -> int:
         """Berechnet die Puffergröße dynamisch basierend auf verfügbarem RAM.
 
-        Nutzt ~10% des verfügbaren RAM für den Ring Buffer, mit einem Minimum
-        und Maximum als Fallback.
+        Nutzt ~10% des verfügbaren RAM für den Ring Buffer, gedeckelt auf
+        120s. Bei sehr wenig freiem RAM wird die sonst übliche
+        10s-Mindestgröße bewusst unterschritten (mit Warnung), statt die
+        RAM-Grenze zu überschreiten - ein fester Mindest-Puffer würde sonst
+        bei knappem Speicher zu einem MemoryError beim Messstart führen.
         """
         try:
             import psutil
             available_ram_bytes = psutil.virtual_memory().available
             bytes_per_sample = 8.0 * num_active_channels  # float64 pro Kanal
-            samples_from_ram = int(available_ram_bytes * 0.1 / bytes_per_sample)
-            # Mindestens 10s, höchstens 120s Puffergröße
-            duration_seconds = max(10, min(120, samples_from_ram / sample_rate_hz))
-            return int(sample_rate_hz * duration_seconds)
+            max_duration_from_ram = (available_ram_bytes * 0.1) / bytes_per_sample / sample_rate_hz
+
+            duration_seconds = min(120.0, max_duration_from_ram)
+            if duration_seconds < 10.0:
+                logger.warning(
+                    "Wenig freier Arbeitsspeicher (%.0f MB verfügbar): Ring Buffer "
+                    "wird auf %.1f s begrenzt statt der üblichen Mindestgröße von 10 s.",
+                    available_ram_bytes / (1024 ** 2),
+                    duration_seconds,
+                )
+            return max(1, int(sample_rate_hz * duration_seconds))
         except Exception:
             # Fallback auf statische Größe bei Fehler
             logger.debug("Fehler bei dynamischer RAM-Berechnung, nutze Fallback")
