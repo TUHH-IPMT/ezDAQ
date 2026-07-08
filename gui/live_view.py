@@ -31,16 +31,39 @@ import logging
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QTimer, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget, QGridLayout, QGroupBox
+from PyQt6.QtWidgets import (
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from core.controller import MeasurementController
 from core.measurement import apply_scaling
+from data.exporter import StorageWriter
 from data.models import Channel
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_DISPLAY_WINDOW_SECONDS = 10.0
 _UI_UPDATE_INTERVAL_MS = 33  # ~30 Hz; fluessigere Darstellung bei moderater Last
+_STORAGE_UPDATE_INTERVAL_MS = 1000  # Dateizugriff (stat) seltener als das Plot-Update
+_STORAGE_WARN_PERCENT = 70.0
+_STORAGE_CRITICAL_PERCENT = 90.0
+
+
+def _format_bytes(num_bytes: float) -> str:
+    """Formatiert eine Byte-Anzahl menschenlesbar (z. B. "12.3 MB")."""
+    value = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if abs(value) < 1024.0:
+            return f"{value:.1f} {unit}"
+        value /= 1024.0
+    return f"{value:.1f} TB"
 
 
 class LiveView(QWidget):
@@ -77,9 +100,16 @@ class LiveView(QWidget):
         # Stat-Panel Labels (werden in _rebuild_plots initialisiert)
         self._stat_labels: dict[str, QLabel] = {}
 
+        # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen").
+        self._storage_writer: StorageWriter | None = None
+
         self._timer = QTimer(self)
         self._timer.setInterval(_UI_UPDATE_INTERVAL_MS)
         self._timer.timeout.connect(self._on_timer_tick)
+
+        self._storage_timer = QTimer(self)
+        self._storage_timer.setInterval(_STORAGE_UPDATE_INTERVAL_MS)
+        self._storage_timer.timeout.connect(self._on_storage_timer_tick)
 
         self._build_ui()
 
@@ -109,17 +139,40 @@ class LiveView(QWidget):
         self._stat_layout = QGridLayout(self._stat_group)
         layout.addWidget(self._stat_group)
 
+        # Pufferauslastung des Storage Writers (Schreib-Rückstand ggü. DAQ-Thread).
+        self._storage_group = QGroupBox("Speicherpuffer (Schreib-Rückstand)")
+        storage_layout = QHBoxLayout(self._storage_group)
+        self._storage_progress = QProgressBar()
+        self._storage_progress.setRange(0, 100)
+        self._storage_progress.setTextVisible(True)
+        self._storage_progress.setFormat("%p%")
+        self._storage_detail_label = QLabel("-")
+        storage_layout.addWidget(self._storage_progress, stretch=1)
+        storage_layout.addWidget(self._storage_detail_label)
+        layout.addWidget(self._storage_group)
+        self._storage_group.setVisible(False)
+
     # ------------------------------------------------------------------ #
     # Öffentliche API (von main_window.py aufgerufen)
     # ------------------------------------------------------------------ #
 
-    def start_display(self, channels: list[Channel], sample_rate_hz: float) -> None:
+    def start_display(
+        self,
+        channels: list[Channel],
+        sample_rate_hz: float,
+        storage_writer: StorageWriter | None = None,
+    ) -> None:
         """Beginnt die Live-Anzeige für eine neu gestartete Messung.
 
         Registriert einen eigenen, unabhängigen Ring-Buffer-Reader (siehe
         `MeasurementController.register_reader`) - die Live View darf
         Samples verlieren/überspringen, ohne den Storage Writer zu
         beeinträchtigen (siehe `core/ringbuffer.py`).
+
+        Args:
+            storage_writer: Der `StorageWriter` der laufenden Messung, falls
+                gespeichert wird. `None` bei "Nur Live anzeigen" - dann
+                bleibt die Speicherpuffer-Anzeige ausgeblendet.
         """
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
@@ -129,6 +182,13 @@ class LiveView(QWidget):
         self._rebuild_plots()
         self._ensure_display_buffer(len(channels))
         self._timer.start()
+
+        self._storage_writer = storage_writer
+        self._storage_group.setVisible(storage_writer is not None)
+        if storage_writer is not None:
+            self._on_storage_timer_tick()
+            self._storage_timer.start()
+
         logger.info(
             "Live View gestartet für %d Kanäle bei %.1f Hz", len(channels), sample_rate_hz
         )
@@ -136,6 +196,7 @@ class LiveView(QWidget):
     def stop_display(self) -> None:
         """Beendet die Live-Anzeige (nach Messungsende)."""
         self._timer.stop()
+        self._storage_timer.stop()
         if self._reader_id is not None:
             self._controller.unregister_reader(self._reader_id)
             self._reader_id = None
@@ -203,6 +264,51 @@ class LiveView(QWidget):
         benötigt werden (mind. 2, um Division durch 0 zu vermeiden)."""
         ticks_per_second = 1000.0 / _UI_UPDATE_INTERVAL_MS
         return max(2, int(self._display_window_seconds * ticks_per_second) + 1)
+
+    def _on_storage_timer_tick(self) -> None:
+        """Aktualisiert die Speicherpuffer-Anzeige des Storage Writers.
+
+        Bezugsgröße ("Maximum") ist die konfigurierte Ring-Buffer-Kapazität
+        (`RingBuffer.capacity`, siehe `setup_view._calculate_dynamic_buffer_size`)
+        - nicht der freie Festplattenplatz. Angezeigt wird, wie viele bereits
+        vom DAQ-Thread geschriebene Samples der Storage Writer noch NICHT auf
+        die Festplatte übertragen hat (`StorageWriter.pending_samples`).
+        Kommt die Festplatte nicht hinterher (z. B. weil sie zu langsam oder
+        voll ist), wächst dieser Rückstand; erreicht er die Kapazität, werden
+        ungeschriebene Samples im Ring Buffer überschrieben - ein
+        unwiederbringlicher Datenverlust (Overrun, siehe `core/ringbuffer.py`).
+        Das ist damit ein direkterer Risikoindikator als der reine freie
+        Festplattenplatz.
+        """
+        if self._storage_writer is None:
+            return
+
+        ring_buffer = self._controller.get_ring_buffer()
+        if ring_buffer is None:
+            return
+
+        try:
+            pending = self._storage_writer.pending_samples
+            file_bytes = self._storage_writer.output_path.stat().st_size
+        except (KeyError, OSError):
+            logger.debug("Speicherpuffer-Status konnte nicht ermittelt werden", exc_info=True)
+            return
+
+        capacity = ring_buffer.capacity
+        percent = (pending / capacity * 100.0) if capacity > 0 else 0.0
+
+        self._storage_progress.setValue(int(round(min(100.0, percent))))
+        self._storage_detail_label.setText(
+            f"Datei: {_format_bytes(file_bytes)} — Rückstand: "
+            f"{pending:,} / {capacity:,} Samples ({percent:.1f} %)".replace(",", ".")
+        )
+        if percent >= _STORAGE_CRITICAL_PERCENT:
+            color = "#dc3545"  # rot
+        elif percent >= _STORAGE_WARN_PERCENT:
+            color = "#fd7e14"  # orange
+        else:
+            color = "#28a745"  # gruen
+        self._storage_progress.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
 
     def _on_timer_tick(self) -> None:
         if self._reader_id is None:

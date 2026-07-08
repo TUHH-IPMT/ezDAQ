@@ -130,6 +130,23 @@ class StorageWriter:
         """Anzahl bisher geschriebener Samples pro Kanal."""
         return self._total_samples_written
 
+    @property
+    def output_path(self) -> Path:
+        """Zieldatei, in die geschrieben wird."""
+        return self._output_path
+
+    @property
+    def pending_samples(self) -> int:
+        """Anzahl der vom DAQ-Thread bereits geschriebenen, vom StorageWriter
+        aber noch nicht auf die Festplatte übertragenen Samples.
+
+        Nähert sich dieser Wert der Ring-Buffer-Kapazität an (z. B. weil die
+        Festplatte nicht mitkommt oder voll ist), droht ein Overrun -
+        unwiederbringlicher Datenverlust, siehe
+        `core/ringbuffer.py::RingBuffer._check_overruns_locked`.
+        """
+        return self._ring_buffer.available_samples(self._reader_id)
+
     def start(self) -> None:
         """Startet den Storage-Writer-Thread.
 

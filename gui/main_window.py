@@ -243,7 +243,9 @@ class MainWindow(QMainWindow):
             self._storage_writer = None
 
         self._setup_view.set_start_enabled(False, "Messung läuft ...")
-        self._live_view.start_display(config.active_channels(), config.sample_rate_hz)
+        self._live_view.start_display(
+            config.active_channels(), config.sample_rate_hz, storage_writer=self._storage_writer
+        )
         self._nav_list.setCurrentRow(1)  # zur Live View wechseln
         self._status_label.setText(f"Messung '{config.name}' läuft ...")
 
