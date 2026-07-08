@@ -1,0 +1,203 @@
+"""
+data/models.py
+
+Zentrale Datenmodelle der Anwendung.
+
+Dieses Modul enthält reine Datenstrukturen (keine Hardware- oder GUI-Logik).
+Alle anderen Schichten (hardware, core, gui, analysis) verwenden diese
+Modelle als gemeinsame "Sprache", um Kanäle, Geräte und Messungen zu
+beschreiben.
+
+Design-Entscheidung:
+    Die Modelle sind bewusst als `dataclasses` mit Type Hints umgesetzt.
+    Das hält sie leichtgewichtig, JSON-serialisierbar (siehe data/metadata.py)
+    und einfach erweiterbar, ohne dass GUI- oder Hardware-Code sie kennen muss.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Optional
+
+
+class ModuleType(str, Enum):
+    """Unterstützte NI-cDAQ-Modultypen.
+
+    Wird als String-Enum umgesetzt, damit der Wert direkt und lesbar in
+    JSON-Konfigurationen und Metadaten gespeichert werden kann.
+    """
+
+    NI9215 = "NI9215"
+    NI9234 = "NI9234"
+
+
+class SignalType(str, Enum):
+    """Physikalischer Signaltyp eines Kanals.
+
+    Wird u. a. von der Hardware-Schicht genutzt, um zu entscheiden, welche
+    nidaqmx-Kanalfunktion (z. B. `ai_voltage_chan` vs. `ai_accel_chan`)
+    für einen Kanal aufgerufen werden muss.
+    """
+
+    VOLTAGE = "voltage"
+    IEPE_ACCELERATION = "iepe_acceleration"
+
+
+class StorageFormat(str, Enum):
+    """Von der Anwendung unterstützte Speicherformate für Messdaten."""
+
+    PARQUET = "parquet"
+    CSV = "csv"
+
+
+@dataclass
+class Channel:
+    """Repräsentiert einen einzelnen Messkanal.
+
+    Attributes:
+        hardware_channel: Physischer Hardwarekanal, z. B. "cDAQ1Mod1/ai0".
+        display_name: Frei wählbarer Anzeigename für GUI und Auswertung,
+            z. B. "Kraft Zylinder 1".
+        unit: Physikalische Einheit des skalierten Werts, z. B. "N", "m/s^2".
+        scale: Skalierungsfaktor der linearen Transformation.
+        offset: Offset der linearen Transformation.
+        signal_type: Physikalischer Signaltyp (Spannung, IEPE-Beschleunigung, ...).
+        module_type: Modul, an dem der Kanal hängt (NI9215, NI9234, ...).
+        enabled: Ob der Kanal für die nächste Messung aktiv ist.
+        min_range: Optionaler unterer Messbereich (z. B. -10.0 V bei NI9215).
+        max_range: Optionaler oberer Messbereich (z. B. +10.0 V bei NI9215).
+        sensitivity_mv_per_unit: Sensorempfindlichkeit in mV/Einheit,
+            relevant für IEPE-Beschleunigungssensoren (NI9234).
+
+    Die physikalische Umrechnung erfolgt gemäß:
+        physikalischer_wert = rohwert * scale + offset
+    """
+
+    hardware_channel: str
+    display_name: str
+    unit: str = ""
+    scale: float = 1.0
+    offset: float = 0.0
+    signal_type: SignalType = SignalType.VOLTAGE
+    module_type: ModuleType = ModuleType.NI9215
+    enabled: bool = True
+    min_range: Optional[float] = -10.0
+    max_range: Optional[float] = 10.0
+    sensitivity_mv_per_unit: Optional[float] = None
+
+    def to_physical(self, raw_value: float) -> float:
+        """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
+        return raw_value * self.scale + self.offset
+
+    def to_dict(self) -> dict:
+        """Serialisiert den Kanal in ein JSON-kompatibles Dictionary."""
+        return {
+            "hardware_channel": self.hardware_channel,
+            "display_name": self.display_name,
+            "unit": self.unit,
+            "scale": self.scale,
+            "offset": self.offset,
+            "signal_type": self.signal_type.value,
+            "module_type": self.module_type.value,
+            "enabled": self.enabled,
+            "min_range": self.min_range,
+            "max_range": self.max_range,
+            "sensitivity_mv_per_unit": self.sensitivity_mv_per_unit,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "Channel":
+        """Erstellt einen Channel aus einem Dictionary (z. B. aus JSON)."""
+        return cls(
+            hardware_channel=data["hardware_channel"],
+            display_name=data.get("display_name", data["hardware_channel"]),
+            unit=data.get("unit", ""),
+            scale=data.get("scale", 1.0),
+            offset=data.get("offset", 0.0),
+            signal_type=SignalType(data.get("signal_type", SignalType.VOLTAGE.value)),
+            module_type=ModuleType(data.get("module_type", ModuleType.NI9215.value)),
+            enabled=data.get("enabled", True),
+            min_range=data.get("min_range", -10.0),
+            max_range=data.get("max_range", 10.0),
+            sensitivity_mv_per_unit=data.get("sensitivity_mv_per_unit"),
+        )
+
+
+@dataclass
+class DeviceInfo:
+    """Beschreibt ein erkanntes physisches NI-cDAQ-Modul/Gerät.
+
+    Attributes:
+        device_name: Von nidaqmx vergebener Gerätename, z. B. "cDAQ1Mod1".
+        product_type: Produktbezeichnung, z. B. "NI 9215".
+        module_type: Zugeordneter ModuleType, falls vom System unterstützt.
+        num_channels: Anzahl physisch verfügbarer Kanäle auf dem Modul.
+    """
+
+    device_name: str
+    product_type: str
+    module_type: Optional[ModuleType] = None
+    num_channels: int = 0
+    # Liste der physischen Kanalnamen, z. B. ["cDAQ1Mod1/ai0", ...]
+    physical_channels: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MeasurementConfig:
+    """Konfiguration für eine einzelne Messung/Aufnahme.
+
+    Attributes:
+        name: Bezeichner der Messung, z. B. "measurement_001".
+        sample_rate_hz: Abtastrate in Hz (gilt für alle Kanäle der Messung).
+        channels: Liste der aktiven Kanäle für diese Messung.
+        storage_format: Gewähltes Speicherformat (Parquet/CSV).
+        samples_per_read: Blockgröße pro Lesevorgang vom DAQ-Gerät.
+        ring_buffer_size: Kapazität des Ring Buffers in Samples pro Kanal.
+    """
+
+    name: str
+    sample_rate_hz: float
+    channels: list[Channel] = field(default_factory=list)
+    storage_format: StorageFormat = StorageFormat.PARQUET
+    samples_per_read: int = 1000
+    ring_buffer_size: int = 100_000
+    save_to_disk: bool = True
+
+    def active_channels(self) -> list[Channel]:
+        """Gibt nur die aktivierten Kanäle zurück."""
+        return [ch for ch in self.channels if ch.enabled]
+
+
+@dataclass
+class MeasurementSession:
+    """Repräsentiert eine konkrete, laufende oder abgeschlossene Messung.
+
+    Trennt bewusst die statische Konfiguration (`MeasurementConfig`) von den
+    Laufzeit-/Ergebnisinformationen einer Aufnahme (Start-/Endzeit, Pfad).
+
+    Attributes:
+        config: Die verwendete Messkonfiguration.
+        start_time: Zeitpunkt des Messstarts.
+        end_time: Zeitpunkt des Messendes (None solange die Messung läuft).
+        file_path: Pfad zur gespeicherten Messdatei, sobald vorhanden.
+    """
+
+    config: MeasurementConfig
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    file_path: Optional[str] = None
+
+    @property
+    def is_running(self) -> bool:
+        """True, solange die Messung gestartet, aber nicht beendet ist."""
+        return self.start_time is not None and self.end_time is None
+
+    @property
+    def duration_seconds(self) -> Optional[float]:
+        """Dauer der Messung in Sekunden, falls Start- und Endzeit vorliegen."""
+        if self.start_time is None:
+            return None
+        end = self.end_time or datetime.now()
+        return (end - self.start_time).total_seconds()

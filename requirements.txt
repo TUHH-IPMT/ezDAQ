@@ -1,0 +1,13 @@
+# Kern-Abhängigkeiten der DAQSoftware
+PyQt6>=6.6.0
+pyqtgraph>=0.13.3
+nidaqmx>=0.9.0
+numpy>=1.26.0
+pandas>=2.2.0
+pyarrow>=15.0.0
+
+# Optional: Polars kann bei sehr großen Analyse-Datensätzen als
+# performantere Alternative zu Pandas eingebunden werden. Aktuell nutzt
+# die Anwendung Pandas (in data/exporter.py und data/loader.py); Polars
+# ist daher auskommentiert, um die Installation schlank zu halten.
+# polars>=0.20.0
