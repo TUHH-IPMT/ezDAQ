@@ -124,38 +124,6 @@ class AnalysisView(QWidget):
         if filename:
             self._load_file(Path(filename))
 
-    def _on_remove_clicked(self) -> None:
-        """Entfernt die ausgewählten Dateien (Top-Level) aus dem Baum und
-        aus `self._loaded_measurements`.
-        """
-        items = self._tree.selectedItems()
-        if not items:
-            return
-
-        # Bestimme die Top-Level-Items (Dateien) für alle Auswahlen
-        top_items = set()
-        for it in items:
-            top = it
-            while top.parent() is not None:
-                top = top.parent()
-            top_items.add(top)
-
-        # Entferne von unten nach oben
-        removed_count = 0
-        for top in list(top_items):
-            file_path_str = top.data(0, Qt.ItemDataRole.UserRole)
-            # Entferne Eintrag aus geladenen Messungen
-            self._loaded_measurements = [pair for pair in self._loaded_measurements if str(pair[0]) != str(file_path_str) and pair[0].name != str(file_path_str)]
-            # Entferne Top-Level-Item aus Tree
-            idx = self._tree.indexOfTopLevelItem(top)
-            if idx != -1:
-                self._tree.takeTopLevelItem(idx)
-                removed_count += 1
-
-        if removed_count > 0:
-            self._drop_label.setText(f"Geladen: {len(self._loaded_measurements)} Datei(en)")
-            self._update_plot()
-
     def _on_tree_context_menu(self, point) -> None:
         """Zeigt ein Kontextmenü zum Entfernen der Datei unter dem angeklickten Tree-Item."""
         item = self._tree.itemAt(point)
@@ -237,13 +205,6 @@ class AnalysisView(QWidget):
         self._drop_label.setText(f"Geladen: {len(self._loaded_measurements)} Datei(en)")
         self._update_plot()
 
-    def _update_available_channels(self) -> None:
-        # No longer used (tree-based UI)
-        return
-
-    def _on_file_item_changed(self, _item: QListWidgetItem) -> None:
-        self._update_plot()
-    
     def _on_tree_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         # When a parent is checked/unchecked, propagate to children
         state = item.checkState(0)

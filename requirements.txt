@@ -5,6 +5,7 @@ nidaqmx>=0.9.0
 numpy>=1.26.0
 pandas>=2.2.0
 pyarrow>=15.0.0
+psutil>=5.9.0
 
 # Optional: Polars kann bei sehr großen Analyse-Datensätzen als
 # performantere Alternative zu Pandas eingebunden werden. Aktuell nutzt
