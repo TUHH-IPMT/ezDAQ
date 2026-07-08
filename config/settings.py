@@ -13,6 +13,7 @@ reine Datenstrukturen.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -21,6 +22,22 @@ APP_NAME = "DAQSoftware"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
+
+
+def get_resource_path(*parts: str) -> Path:
+    """Liefert den Pfad zu einer mitgelieferten Ressourcendatei (z. B. Icon).
+
+    Funktioniert sowohl im Entwicklungsbetrieb (``python main.py``, Basis ist
+    dann das Projektverzeichnis) als auch in einer mit PyInstaller gepackten
+    Anwendung: Im "onefile"-Modus liegen mit ``--add-data`` gebündelte
+    Dateien im temporären Entpackverzeichnis (``sys._MEIPASS``), im
+    "onedir"-Modus (siehe README) neben der ``.exe`` (``sys.executable``).
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", None) or Path(sys.executable).parent)
+    else:
+        base = Path(__file__).resolve().parent.parent
+    return base.joinpath("resources", *parts)
 
 
 def get_config_directory() -> Path:

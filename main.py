@@ -37,14 +37,22 @@ def main() -> int:
 
     # Importe bewusst innerhalb von main(), damit ein reiner Import von
     # main.py (z. B. durch Tooling) nicht sofort PyQt6 lädt.
+    from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
     from config.configuration_manager import ConfigurationManager
+    from config.settings import get_resource_path
     from core.controller import MeasurementController
     from gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("DAQSoftware")
+
+    icon_path = get_resource_path("icon.png")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
+    else:
+        logger.warning("Anwendungs-Icon nicht gefunden unter %s", icon_path)
 
     configuration_manager = ConfigurationManager()
     controller = MeasurementController(configuration_manager)

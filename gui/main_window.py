@@ -31,6 +31,7 @@ import logging
 from pathlib import Path
 
 from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -42,6 +43,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.configuration_manager import ConfigurationManager
+from config.settings import get_resource_path
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
@@ -77,6 +79,9 @@ class MainWindow(QMainWindow):
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
 
         self.setWindowTitle("DAQSoftware - Messdatenerfassung und Analyse")
+        icon_path = get_resource_path("icon.png")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self._restore_window_geometry()
 
         self._setup_view = SetupView(configuration_manager)

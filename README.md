@@ -59,11 +59,19 @@ Verzeichnisse:
 - `analysis/` – vorbereitete Erweiterungspunkte (FFT, Filter, RMS,
   Statistik – noch nicht implementiert)
 - `config/` – persistente Konfiguration
+- `resources/` – Anwendungs-Icon (`icon.png`/`icon.ico`), Zugriff zur
+  Laufzeit über `config.settings.get_resource_path()`
 
 ## Verpacken als portable Windows-Anwendung (PyInstaller)
 
     pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name DAQSoftware main.py
+    pyinstaller --noconfirm --windowed --name DAQSoftware ^
+        --icon resources\icon.ico --add-data "resources;resources" main.py
+
+`--icon` setzt das Icon der erzeugten `.exe` (Explorer/Taskbar), `--add-data`
+bündelt den `resources/`-Ordner mit, damit `get_resource_path()` das Icon
+auch im gepackten Programm zur Laufzeit findet (Fenster-/Taskbar-Icon,
+About-Dialog).
 
 Hinweis: `nidaqmx` lädt die native NI-DAQmx-Bibliothek zur Laufzeit vom
 Zielsystem; der NI-DAQmx-Treiber muss daher auch auf dem Zielrechner
