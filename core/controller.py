@@ -27,7 +27,7 @@ from core.measurement import MeasurementConfigError, create_devices
 from core.ringbuffer import RingBuffer
 from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession
 from hardware.base_device import AcquisitionError, BaseDevice
-from hardware.nidaq_device import discover_devices
+from hardware.nidaq_device import NIDAQSharedTask, discover_devices
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +102,25 @@ class MeasurementController:
 
     @property
     def active_channels(self) -> list[Channel]:
-        """Aktive Kanäle der laufenden Messung, für Skalierung/Anzeige durch Konsumenten."""
+        """Aktive Kanäle in der gleichen Reihenfolge wie der Ring Buffer sie schreibt."""
         with self._lock:
             if self._session is None:
                 return []
-            return self._session.config.active_channels()
+            return self.acquisition_channels
+
+    @property
+    def acquisition_channels(self) -> list[Channel]:
+        """Gibt die aktiven Kanäle in der Reihenfolge der DAQ-Acquisition zurück."""
+        with self._lock:
+            if self._session is None:
+                return []
+            if not self._devices:
+                return self._session.config.active_channels()
+
+            channels: list[Channel] = []
+            for device in self._devices:
+                channels.extend(device.active_channels)
+            return channels
 
     @property
     def active_device_infos(self) -> list[DeviceInfo]:
@@ -157,9 +171,17 @@ class MeasurementController:
             devices = create_devices(active_channels, discovered_devices)
 
             configured_devices: list[BaseDevice] = []
+            shared_task: Optional[NIDAQSharedTask] = None
+            if len(devices) > 1:
+                shared_task = NIDAQSharedTask()
             try:
                 for device in devices:
-                    device.configure(config.sample_rate_hz, config.samples_per_read)
+                    device.configure(
+                        config.sample_rate_hz,
+                        config.samples_per_read,
+                        sample_clock_source=None,
+                        shared_task=shared_task,
+                    )
                     configured_devices.append(device)
             except AcquisitionError:
                 self._close_devices(configured_devices)

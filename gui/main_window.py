@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
             data_path = self._storage_path / f"{config.name}{extension}"
             self._storage_writer = StorageWriter(
                 ring_buffer=ring_buffer,
-                channels=config.active_channels(),
+                channels=self._controller.active_channels,
                 output_path=data_path,
                 storage_format=config.storage_format,
                 sample_rate_hz=config.sample_rate_hz,
@@ -249,7 +249,9 @@ class MainWindow(QMainWindow):
 
         self._setup_view.set_start_enabled(False, "Messung läuft ...")
         self._live_view.start_display(
-            config.active_channels(), config.sample_rate_hz, storage_writer=self._storage_writer
+            self._controller.active_channels,
+            config.sample_rate_hz,
+            storage_writer=self._storage_writer,
         )
         self._nav_list.setCurrentRow(1)  # zur Live View wechseln
         self._status_label.setText(f"Messung '{config.name}' läuft ...")

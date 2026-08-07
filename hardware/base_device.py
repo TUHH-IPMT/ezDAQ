@@ -77,7 +77,12 @@ class BaseDevice(ABC):
         return [ch for ch in self.channels if ch.enabled]
 
     @abstractmethod
-    def configure(self, sample_rate_hz: float, samples_per_read: int) -> None:
+    def configure(
+        self,
+        sample_rate_hz: float,
+        samples_per_read: int,
+        sample_clock_source: str | None = None,
+    ) -> None:
         """Konfiguriert die Hardware für eine Messung.
 
         Legt typischerweise den zugrunde liegenden Task an, fügt alle
@@ -87,6 +92,9 @@ class BaseDevice(ABC):
             sample_rate_hz: Abtastrate in Hz.
             samples_per_read: Blockgröße für spätere `read()`-Aufrufe
                 (bestimmt u. a. den Timing-Buffer der Hardware).
+            sample_clock_source: Optionale Clock-Quelle für eine
+                hardwareseitig synchronisierte Mehrmodul-Erfassung, z. B.
+                ein gemeinsamer NI-Clock-Source-String.
 
         Raises:
             AcquisitionError: falls die Konfiguration fehlschlägt

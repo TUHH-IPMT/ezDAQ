@@ -20,22 +20,19 @@ Design-Entscheidung:
     (Reihenfolge der Geräte entspricht der Kanal-Reihenfolge im Ring Buffer,
     siehe `core/measurement.py::create_devices`).
 
-    Bekannte Einschränkung: Die python-seitigen `read()`-Aufrufe für
-    verschiedene Module erfolgen nacheinander, nicht durch einen
-    gemeinsamen Hardware-Trigger synchronisiert. Für die meisten
-    Laboranwendungen ist der resultierende Versatz (deutlich unter einer
-    Blockdauer) vernachlässigbar. Falls eine hardware-synchronisierte
-    Mehrmodul-Erfassung mit gemeinsamem Chassis-Sample-Clock benötigt
-    wird, müsste die Hardware-Schicht dafür erweitert werden (ein
-    gemeinsamer nidaqmx-Task über alle Module hinweg). Das ist als
-    spätere Erweiterung vorgesehen und hier bewusst nicht implementiert,
-    um den Umfang dieses Entwicklungsschritts nicht zu sprengen.
+    Die `read()`-Aufrufe verschiedener Module erfolgen jetzt parallel auf
+    der Python-Seite, damit ein zeitlicher Versatz zwischen den Modulen
+    deutlich reduziert wird. Für eine echte hardware-synchronisierte
+    Mehrmodul-Erfassung mit gemeinsamem Chassis-Sample-Clock müsste die
+    Hardware-Schicht jedoch um einen gemeinsamen nidaqmx-Task erweitert
+    werden.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Optional
 
 import numpy as np
@@ -159,12 +156,7 @@ class AcquisitionThread:
         """Haupt-Schleife des DAQ-Threads (läuft im Hintergrund-Thread)."""
         try:
             while not self._stop_event.is_set():
-                blocks = []
-                for device in self._devices:
-                    block = device.read(
-                        self._samples_per_read, timeout=self._read_timeout_seconds
-                    )
-                    blocks.append(block)
+                blocks = self._read_blocks_from_devices()
                 combined = np.concatenate(blocks, axis=0)
                 self._ring_buffer.write(combined)
                 self.total_samples_acquired += combined.shape[1]
@@ -178,3 +170,27 @@ class AcquisitionThread:
             self._last_error = exc
             if self._on_error is not None:
                 self._on_error(exc)
+
+    def _read_blocks_from_devices(self) -> list[np.ndarray]:
+        """Liest von allen Geräten einen gemeinsamen Datenblock ein."""
+        if not self._devices:
+            return []
+
+        shared_devices = [device for device in self._devices if getattr(device, "_shared_task", None) is not None]
+        if shared_devices:
+            shared_block = shared_devices[0].read_shared_block(
+                self._samples_per_read,
+                timeout=self._read_timeout_seconds,
+            )
+            return [device.read_from_shared_block(shared_block) for device in self._devices]
+
+        with ThreadPoolExecutor(max_workers=max(1, len(self._devices))) as executor:
+            futures = [
+                executor.submit(
+                    device.read,
+                    self._samples_per_read,
+                    timeout=self._read_timeout_seconds,
+                )
+                for device in self._devices
+            ]
+            return [future.result() for future in futures]
