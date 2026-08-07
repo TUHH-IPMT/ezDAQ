@@ -11,21 +11,19 @@ Architektur (siehe Vorgabe):
 
 Design-Entscheidung:
     Pro Messung gibt es GENAU EINEN `AcquisitionThread`, der in jedem
-    Zyklus sequentiell von jedem konfigurierten Gerät (z. B. ein
-    NI9215-Modul, ein NI9234-Modul) einen Block liest und die Blöcke
-    entlang der Kanalachse zu EINEM kombinierten Block zusammenfügt,
-    bevor dieser einmalig in den (einzigen, gemeinsamen) Ring Buffer
-    geschrieben wird. Das vermeidet mehrere gleichzeitige Schreiber in
-    denselben Ring Buffer und hält die Kanal-Reihenfolge eindeutig
-    (Reihenfolge der Geräte entspricht der Kanal-Reihenfolge im Ring Buffer,
-    siehe `core/measurement.py::create_devices`).
+    Zyklus einen gemeinsamen Datenblock von allen konfigurierten Geräten
+    erfasst und die resultierenden Teilblöcke entlang der Kanalachse zu
+    EINEM kombinierten Block zusammenfügt, bevor dieser einmalig in den
+    (einzigen, gemeinsamen) Ring Buffer geschrieben wird. Das vermeidet
+    mehrere gleichzeitige Schreiber in denselben Ring Buffer und hält die
+    Kanal-Reihenfolge eindeutig (Reihenfolge der Geräte entspricht der
+    Kanal-Reihenfolge im Ring Buffer, siehe `core/measurement.py::create_devices`).
 
-    Die `read()`-Aufrufe verschiedener Module erfolgen jetzt parallel auf
-    der Python-Seite, damit ein zeitlicher Versatz zwischen den Modulen
-    deutlich reduziert wird. Für eine echte hardware-synchronisierte
-    Mehrmodul-Erfassung mit gemeinsamem Chassis-Sample-Clock müsste die
-    Hardware-Schicht jedoch um einen gemeinsamen nidaqmx-Task erweitert
-    werden.
+    Bei mehreren NI-Geräten wird dabei automatisch ein gemeinsamer
+    nidaqmx-Task verwendet, damit die Samples aus derselben Abtastung
+    stammen. Die Acquisitionsschleife nutzt diesen gemeinsamen Task
+    automatisch, ohne dass der Nutzer eine zusätzliche Konfiguration
+    vornehmen muss.
 """
 
 from __future__ import annotations
