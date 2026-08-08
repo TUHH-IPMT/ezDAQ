@@ -173,6 +173,8 @@ class MeasurementController:
             configured_devices: list[BaseDevice] = []
             shared_task: Optional[NIDAQSharedTask] = None
             if len(devices) > 1:
+                # Mehrere Geräte bekommen einen gemeinsamen Task, damit sie
+                # hardwareseitig dieselbe Abtastung teilen.
                 shared_task = NIDAQSharedTask()
             try:
                 for device in devices:

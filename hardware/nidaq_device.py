@@ -131,6 +131,7 @@ class NIDAQSharedTask:
         self._reader: Optional["AnalogMultiChannelReader"] = None
         self._channel_count = 0
         self._configured = False
+        self._started = False
 
     def configure(self, sample_rate_hz: float, samples_per_read: int) -> None:
         if not NIDAQMX_AVAILABLE:
@@ -165,7 +166,13 @@ class NIDAQSharedTask:
     def start(self) -> None:
         if self._task is None:
             raise AcquisitionError("Shared task ist nicht konfiguriert.")
+        if self._started:
+            # Mehrere Geräte teilen sich diesen Task und rufen start()
+            # jeweils einzeln auf - ein erneuter Start des bereits
+            # laufenden Tasks würde nidaqmx einen Fehler werfen lassen.
+            return
         self._task.start()
+        self._started = True
 
     def stop(self) -> None:
         if self._task is not None:
@@ -174,6 +181,7 @@ class NIDAQSharedTask:
             self._task = None
             self._reader = None
             self._configured = False
+            self._started = False
 
     def read(self, samples_per_channel: int, timeout: float = 10.0) -> np.ndarray:
         if not self._configured or self._reader is None:
@@ -189,7 +197,8 @@ class NIDAQSharedTask:
 
 
 class NIDAQDevice(BaseDevice):
-    """Basisklasse für NI-cDAQ-Module; verwaltet den gemeinsamen nidaqmx-Task-Lebenszyklus.
+    """Basisklasse für NI-cDAQ-Module; verwaltet den Lebenszyklus eines
+    einzelnen Tasks oder eines gemeinsamen Shared-Tasks.
 
     Konkrete Subklassen (`NI9215`, `NI9234`) implementieren ausschließlich
     `_add_channel_to_task()`, um den modulspezifischen nidaqmx-Kanaltyp
@@ -231,6 +240,8 @@ class NIDAQDevice(BaseDevice):
 
         try:
             if shared_task is not None:
+                # Mehrere Geräte teilen sich denselben Hardware-Task, damit
+                # ihre Samples aus derselben Abtastung stammen.
                 self._shared_task = shared_task
                 if not self._shared_task._configured:
                     self._shared_task.configure(sample_rate_hz, samples_per_read)
@@ -360,8 +371,6 @@ class NIDAQDevice(BaseDevice):
 
     def read(self, samples_per_channel: int, timeout: float = 10.0) -> np.ndarray:
         if not self._is_running:
-            if self._shared_task is not None and not self._shared_task._configured:
-                self._shared_task.configure(1000.0, samples_per_channel)
             if self._shared_task is not None:
                 self._shared_task.start()
                 self._is_running = True

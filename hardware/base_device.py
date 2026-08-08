@@ -92,9 +92,10 @@ class BaseDevice(ABC):
             sample_rate_hz: Abtastrate in Hz.
             samples_per_read: Blockgröße für spätere `read()`-Aufrufe
                 (bestimmt u. a. den Timing-Buffer der Hardware).
-            sample_clock_source: Optionale Clock-Quelle für eine
-                hardwareseitig synchronisierte Mehrmodul-Erfassung, z. B.
-                ein gemeinsamer NI-Clock-Source-String.
+            sample_clock_source: Optionale Clock-Quelle für Geräte, die
+                ohne gemeinsamen Task arbeiten. Bei NI-Geräten mit einem
+                gemeinsamen Shared-Task wird die Abtastung in der Regel über
+                die Standard-Onboard-Clock des gemeinsamen Tasks gesteuert.
 
         Raises:
             AcquisitionError: falls die Konfiguration fehlschlägt
