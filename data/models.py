@@ -169,6 +169,33 @@ class MeasurementConfig:
         """Gibt nur die aktivierten Kanäle zurück."""
         return [ch for ch in self.channels if ch.enabled]
 
+    def to_dict(self) -> dict:
+        """Serialisiert die Konfiguration in ein JSON-kompatibles Dictionary."""
+        return {
+            "name": self.name,
+            "sample_rate_hz": self.sample_rate_hz,
+            "channels": [ch.to_dict() for ch in self.channels],
+            "storage_format": self.storage_format.value,
+            "samples_per_read": self.samples_per_read,
+            "ring_buffer_size": self.ring_buffer_size,
+            "save_to_disk": self.save_to_disk,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MeasurementConfig":
+        """Erstellt eine MeasurementConfig aus einem Dictionary (z. B. aus JSON)."""
+        return cls(
+            name=data["name"],
+            sample_rate_hz=data.get("sample_rate_hz", 1000.0),
+            channels=[Channel.from_dict(ch) for ch in data.get("channels", [])],
+            storage_format=StorageFormat(
+                data.get("storage_format", StorageFormat.PARQUET.value)
+            ),
+            samples_per_read=data.get("samples_per_read", 1000),
+            ring_buffer_size=data.get("ring_buffer_size", 100_000),
+            save_to_disk=data.get("save_to_disk", True),
+        )
+
 
 @dataclass
 class MeasurementSession:

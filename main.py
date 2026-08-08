@@ -13,6 +13,7 @@ Start:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
 
@@ -30,10 +31,31 @@ def configure_logging() -> None:
     )
 
 
+def _set_windows_app_user_model_id() -> None:
+    """Setzt unter Windows eine explizite AppUserModelID.
+
+    Ohne explizite ID gruppiert Windows Python-Programme in der Taskbar
+    häufig als "python.exe" und zeigt das Standard-Python-Icon.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "DAQSoftware.App"
+        )
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "AppUserModelID konnte nicht gesetzt werden", exc_info=True
+        )
+
+
 def main() -> int:
     configure_logging()
     logger = logging.getLogger(__name__)
     logger.info("DAQSoftware wird gestartet ...")
+    _set_windows_app_user_model_id()
 
     # Importe bewusst innerhalb von main(), damit ein reiner Import von
     # main.py (z. B. durch Tooling) nicht sofort PyQt6 lädt.
@@ -48,6 +70,9 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("DAQSoftware")
 
+    from gui.theme import init_theme
+    init_theme(app)
+
     icon_path = get_resource_path("icon.png")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -55,6 +80,13 @@ def main() -> int:
         logger.warning("Anwendungs-Icon nicht gefunden unter %s", icon_path)
 
     configuration_manager = ConfigurationManager()
+
+    from gui.i18n import set_language
+    set_language(configuration_manager.settings.language)
+
+    from gui.theme import set_theme
+    set_theme(configuration_manager.settings.theme)
+
     controller = MeasurementController(configuration_manager)
 
     window = MainWindow(controller, configuration_manager)

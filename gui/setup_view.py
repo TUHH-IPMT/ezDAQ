@@ -19,8 +19,10 @@ Hardware-Details direkt.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
-from PyQt6.QtCore import pyqtSignal
+from PyQt6.QtCore import QLocale, QSize, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -29,20 +31,51 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListWidget,
     QMessageBox,
     QPushButton,
     QCheckBox,
     QSpinBox,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from config.configuration_manager import ConfigurationManager
 from data.models import DeviceInfo, MeasurementConfig, StorageFormat
+from gui.i18n import connect_language_changed, t
+from gui.theme import connect_theme_changed, draw_play_icon
 from gui.widgets.channel_table import ChannelTableWidget
 
 logger = logging.getLogger(__name__)
+
+# Übersetzte Anzeige-Labels für die Speicherformat-Combobox. Der
+# eigentliche Wert (StorageFormat.value, z. B. "parquet") bleibt
+# unabhängig von der UI-Sprache stabil (Persistenz) und wird als
+# `userData` je Eintrag hinterlegt, siehe `_populate_storage_format_combo`.
+_STORAGE_FORMAT_LABEL_KEYS: dict[StorageFormat, str] = {
+    StorageFormat.PARQUET: "storage_format_parquet",
+    StorageFormat.CSV: "storage_format_csv",
+}
+
+
+@dataclass
+class NamingScheme:
+    """Steuert, wie `gui/main_window.py` aus dem eingegebenen Messnamen
+    den tatsächlich verwendeten Datei-/Messnamen aufbaut.
+
+    Attributes:
+        use_number_suffix: Ob ein Nummernsuffix (z. B. "_001") angehängt
+            wird, um Namenskonflikte automatisch aufzulösen.
+        number_suffix_digits: Stellenzahl des Nummernsuffix.
+        include_date: Ob das aktuelle Datum (YYYYMMDD) angehängt wird.
+        include_time: Ob die aktuelle Uhrzeit (HHMMSS) angehängt wird.
+    """
+
+    use_number_suffix: bool
+    number_suffix_digits: int
+    include_date: bool
+    include_time: bool
 
 
 class SetupView(QWidget):
@@ -67,43 +100,59 @@ class SetupView(QWidget):
         super().__init__(parent)
         self._configuration_manager = configuration_manager
         self._discovered_devices: list[DeviceInfo] = []
+        self._storage_path_is_set = False
+        self._status_reason_key = ""
 
         layout = QVBoxLayout(self)
 
         # --- Geräteerkennung ---
-        device_group = QGroupBox("Angeschlossene Geräte")
-        device_layout = QVBoxLayout(device_group)
-        self._discover_button = QPushButton("Geräte suchen")
+        self._device_header = QLabel(t("connected_devices"))
+        layout.addWidget(self._device_header)
+        self._device_group = QGroupBox()
+        device_layout = QVBoxLayout(self._device_group)
+        self._discover_button = QPushButton(t("search_devices"))
         self._discover_button.clicked.connect(self.discover_hardware_requested.emit)
-        self._device_list = QListWidget()
-        self._device_list.currentRowChanged.connect(self._on_device_selected)
+        # Baumansicht Gerät -> Kanäle (dieselbe Gruppierung wie im
+        # Kanal-Zuweisungsdialog, siehe
+        # `gui/widgets/channel_table.py::HardwareChannelPickerDialog`).
+        self._device_list = QTreeWidget()
+        self._device_list.setHeaderHidden(True)
         device_layout.addWidget(self._discover_button)
         device_layout.addWidget(self._device_list)
-        layout.addWidget(device_group)
+        layout.addWidget(self._device_group)
 
         # --- Kanalkonfiguration ---
-        channel_group = QGroupBox("Kanalkonfiguration")
-        channel_layout = QVBoxLayout(channel_group)
+        self._channel_header = QLabel(t("channel_configuration"))
+        layout.addWidget(self._channel_header)
+        self._channel_group = QGroupBox()
+        channel_layout = QVBoxLayout(self._channel_group)
         self._channel_table = ChannelTableWidget()
         channel_layout.addWidget(self._channel_table)
-        layout.addWidget(channel_group, stretch=1)
+        layout.addWidget(self._channel_group, stretch=1)
 
-        # --- Messparameter ---
-        params_group = QGroupBox("Messparameter")
-        params_layout = QFormLayout(params_group)
-
-        self._name_edit = QLineEdit(
-            configuration_manager.settings.last_measurement_name or "messung_001"
-        )
-        params_layout.addRow("Messungsname:", self._name_edit)
+        # --- Messeinstellungen ---
+        self._measurement_header = QLabel(t("measurement_settings"))
+        layout.addWidget(self._measurement_header)
+        self._measurement_group = QGroupBox()
+        self._measurement_layout = QFormLayout(self._measurement_group)
 
         self._sample_rate_spin = QDoubleSpinBox()
         self._sample_rate_spin.setRange(1.0, 100_000.0)
         self._sample_rate_spin.setDecimals(1)
+        self._sample_rate_spin.setSingleStep(100.0)
+        # Tausenderpunkt in der Anzeige (z. B. "100.000,0"), unabhängig vom
+        # Locale des Betriebssystems.
+        self._sample_rate_spin.setLocale(QLocale(QLocale.Language.German, QLocale.Country.Germany))
+        self._sample_rate_spin.setGroupSeparatorShown(True)
         self._sample_rate_spin.setValue(
             configuration_manager.settings.default_sample_rate_hz
         )
-        params_layout.addRow("Abtastrate [Hz]:", self._sample_rate_spin)
+        self._measurement_layout.addRow(f"{t('sample_rate_hz')}:", self._sample_rate_spin)
+
+        measurement_row = QHBoxLayout()
+        measurement_row.addWidget(self._measurement_group, stretch=1)
+        measurement_row.addStretch(1)
+        layout.addLayout(measurement_row)
 
         # Interne Performance-Parameter werden automatisch festgelegt,
         # damit der Nutzer hier nicht mit technischen Details belastet wird.
@@ -113,79 +162,209 @@ class SetupView(QWidget):
         self._max_samples_per_read = 2000
         self._default_ring_buffer_seconds = 30
 
-        self._storage_format_combo = QComboBox()
-        self._storage_format_combo.addItems([f.value for f in StorageFormat])
-        self._storage_format_combo.setCurrentText(
-            configuration_manager.settings.default_storage_format
-        )
-        params_layout.addRow("Speicherformat:", self._storage_format_combo)
+        # --- Speichereinstellungen ---
+        self._storage_header = QLabel(t("storage_settings"))
+        layout.addWidget(self._storage_header)
+        self._storage_group = QGroupBox()
+        self._storage_layout = QFormLayout(self._storage_group)
 
-        self._live_only_checkbox = QCheckBox("Nur Live anzeigen (nicht speichern)")
+        self._live_only_checkbox = QCheckBox(t("live_only"))
         self._live_only_checkbox.setChecked(configuration_manager.settings.last_live_only)
-        params_layout.addRow("", self._live_only_checkbox)
+        self._storage_layout.addRow("", self._live_only_checkbox)
 
-        self._storage_path_label = QLabel("Kein Speicherort gewählt")
-        self._storage_button = QPushButton("Speicherort wählen")
+        self._name_edit = QLineEdit(
+            configuration_manager.settings.last_measurement_name or "Messung"
+        )
+        self._storage_layout.addRow(f"{t('measurement_name')}:", self._name_edit)
+
+        naming_row = QHBoxLayout()
+        settings = configuration_manager.settings
+        self._naming_number_checkbox = QCheckBox(t("naming_number_suffix"))
+        self._naming_number_checkbox.setChecked(settings.name_use_number_suffix)
+        self._naming_digits_label = QLabel(f"{t('naming_digits')}:")
+        self._naming_digits_spin = QSpinBox()
+        self._naming_digits_spin.setRange(1, 6)
+        self._naming_digits_spin.setValue(settings.name_number_suffix_digits)
+        self._naming_digits_spin.setEnabled(settings.name_use_number_suffix)
+        self._naming_date_checkbox = QCheckBox(t("naming_include_date"))
+        self._naming_date_checkbox.setChecked(settings.name_include_date)
+        self._naming_time_checkbox = QCheckBox(t("naming_include_time"))
+        self._naming_time_checkbox.setChecked(settings.name_include_time)
+
+        naming_row.addWidget(self._naming_number_checkbox)
+        naming_row.addWidget(self._naming_digits_label)
+        naming_row.addWidget(self._naming_digits_spin)
+        naming_row.addWidget(self._naming_date_checkbox)
+        naming_row.addWidget(self._naming_time_checkbox)
+        naming_row.addStretch(1)
+        self._naming_row_label = QLabel(f"{t('naming_scheme')}:")
+        self._storage_layout.addRow(self._naming_row_label, naming_row)
+
+        self._naming_number_checkbox.toggled.connect(self._on_naming_scheme_changed)
+        self._naming_digits_spin.valueChanged.connect(self._on_naming_scheme_changed)
+        self._naming_date_checkbox.toggled.connect(self._on_naming_scheme_changed)
+        self._naming_time_checkbox.toggled.connect(self._on_naming_scheme_changed)
+
+        self._storage_format_combo = QComboBox()
+        self._populate_storage_format_combo(configuration_manager.settings.default_storage_format)
+        self._storage_layout.addRow(f"{t('storage_format')}:", self._storage_format_combo)
+
+        self._storage_path_label = QLabel(t("no_storage_location"))
+        self._storage_button = QPushButton(t("choose_storage_location"))
         self._storage_button.clicked.connect(self.storage_path_requested.emit)
-        params_layout.addRow("Speicherort:", self._storage_path_label)
-        params_layout.addRow("", self._storage_button)
+        self._storage_layout.addRow(f"{t('storage_location')}:", self._storage_path_label)
+        self._storage_layout.addRow("", self._storage_button)
 
-        layout.addWidget(params_group)
+        storage_row = QHBoxLayout()
+        storage_row.addWidget(self._storage_group, stretch=1)
+        storage_row.addStretch(1)
+        layout.addLayout(storage_row)
 
         # --- Start ---
         start_row = QHBoxLayout()
         self._status_label = QLabel("")
-        self._start_button = QPushButton("Messung starten")
+        self._start_button = QPushButton()
+        self._set_start_button_text()
+        self._start_button.setIconSize(QSize(18, 18))
+        self._retheme_start_button_icon()
         self._start_button.setStyleSheet(
-            "QPushButton { background-color: #28a745; color: white; border: none; padding: 6px 16px; border-radius: 4px; }"
-            "QPushButton:hover { background-color: #218838; }"
-            "QPushButton:pressed { background-color: #1e7e34; }"
+            "QPushButton { background-color: #1f7a36; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
+            "QPushButton:hover { background-color: #1a662e; }"
+            "QPushButton:pressed { background-color: #145125; }"
         )
         self._start_button.clicked.connect(self._on_start_clicked)
-        start_row.addWidget(self._status_label, stretch=1)
         start_row.addWidget(self._start_button)
+        start_row.addWidget(self._status_label, stretch=1)
         layout.addLayout(start_row)
+
+        self._apply_section_header_emphasis()
 
         # Zuletzt verwendete Kanalkonfiguration automatisch vorschlagen.
         last_channels = configuration_manager.load_channel_configuration()
         if last_channels:
             self._channel_table.set_channels(last_channels)
 
+        connect_language_changed(self.retranslate_ui)
+        connect_theme_changed(self._retheme_start_button_icon)
+
     # ------------------------------------------------------------------ #
     # Öffentliche API (von main_window.py aufgerufen)
     # ------------------------------------------------------------------ #
 
+    def retranslate_ui(self) -> None:
+        """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
+        self._device_header.setText(t("connected_devices"))
+        self._discover_button.setText(t("search_devices"))
+        self._channel_header.setText(t("channel_configuration"))
+        self._measurement_header.setText(t("measurement_settings"))
+        self._storage_header.setText(t("storage_settings"))
+
+        for layout_, key, widget in (
+            (self._measurement_layout, "sample_rate_hz", self._sample_rate_spin),
+            (self._storage_layout, "measurement_name", self._name_edit),
+            (self._storage_layout, "storage_format", self._storage_format_combo),
+            (self._storage_layout, "storage_location", self._storage_path_label),
+        ):
+            label = layout_.labelForField(widget)
+            if label is not None:
+                label.setText(f"{t(key)}:")
+
+        self._live_only_checkbox.setText(t("live_only"))
+        self._storage_button.setText(t("choose_storage_location"))
+        if not self._storage_path_is_set:
+            self._storage_path_label.setText(t("no_storage_location"))
+        self._set_start_button_text()
+        self._status_label.setText(t(self._status_reason_key))
+        self._populate_storage_format_combo(self._storage_format_combo.currentData())
+
+        self._naming_row_label.setText(f"{t('naming_scheme')}:")
+        self._naming_number_checkbox.setText(t("naming_number_suffix"))
+        self._naming_digits_label.setText(f"{t('naming_digits')}:")
+        self._naming_date_checkbox.setText(t("naming_include_date"))
+        self._naming_time_checkbox.setText(t("naming_include_time"))
+
+        self._channel_table.retranslate_ui()
+
+    def get_naming_scheme(self) -> NamingScheme:
+        """Gibt das aktuell in der UI eingestellte Namensschema zurück.
+
+        Wird von `gui/main_window.py` beim Messstart verwendet, um aus dem
+        Messnamen den tatsächlichen Datei-/Messnamen aufzubauen.
+        """
+        return NamingScheme(
+            use_number_suffix=self._naming_number_checkbox.isChecked(),
+            number_suffix_digits=self._naming_digits_spin.value(),
+            include_date=self._naming_date_checkbox.isChecked(),
+            include_time=self._naming_time_checkbox.isChecked(),
+        )
+
+    def _populate_storage_format_combo(self, selected_value: str) -> None:
+        """Befüllt die Speicherformat-Combobox mit übersetzten Labels.
+
+        Der technische Wert (z. B. "parquet") wird als `userData` je
+        Eintrag hinterlegt und bleibt damit unabhängig von der
+        UI-Sprache abrufbar (siehe `build_current_config`/
+        `get_current_measurement_parameters`).
+        """
+        self._storage_format_combo.blockSignals(True)
+        self._storage_format_combo.clear()
+        for storage_format in StorageFormat:
+            self._storage_format_combo.addItem(
+                t(_STORAGE_FORMAT_LABEL_KEYS[storage_format]), storage_format.value
+            )
+        index = self._storage_format_combo.findData(selected_value)
+        self._storage_format_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._storage_format_combo.blockSignals(False)
+
     def set_discovered_devices(self, devices: list[DeviceInfo]) -> None:
-        """Zeigt das Ergebnis einer Geräteerkennung an."""
+        """Zeigt das Ergebnis einer Geräteerkennung an.
+
+        Reicht ALLE erkannten Geräte (nicht nur ein in der Liste
+        ausgewähltes) an die Kanaltabelle weiter - welche Hardwarekanäle
+        wählbar sind und welches Modul zu welchem Kanal gehört, ist durch
+        die tatsächlich angeschlossene Hardware vorgegeben (siehe
+        `gui/widgets/channel_table.py::set_available_devices`).
+        """
         self._device_list.clear()
         devices_with_channels = [d for d in devices if d.num_channels > 0]
         self._discovered_devices = devices_with_channels
+        self._channel_table.set_available_devices(devices_with_channels)
         if not devices_with_channels:
-            self._device_list.addItem(
-                "Keine Geräte gefunden (Treiber installiert? Hardware angeschlossen?)"
-            )
+            self._device_list.addTopLevelItem(QTreeWidgetItem([t("no_devices_found")]))
             return
         for device in devices_with_channels:
             module_info = f" [{device.module_type.value}]" if device.module_type else ""
-            self._device_list.addItem(
-                f"{device.device_name} - {device.product_type}{module_info} "
-                f"({device.num_channels} Kanäle)"
+            device_item = QTreeWidgetItem(
+                [
+                    f"{device.device_name} - {device.product_type}{module_info} "
+                    f"({t('device_channel_count', count=device.num_channels)})"
+                ]
             )
-        # Wähle erstes Gerät und trigger die Kanal-Liste
-        self._device_list.setCurrentRow(0)
-        self._on_device_selected(0)
+            channels = device.physical_channels or [
+                f"{device.device_name}/ai{i}" for i in range(device.num_channels)
+            ]
+            for channel in channels:
+                device_item.addChild(QTreeWidgetItem([channel]))
+            self._device_list.addTopLevelItem(device_item)
+        self._device_list.expandAll()
 
     def set_start_enabled(self, enabled: bool, reason: str = "") -> None:
-        """Aktiviert/deaktiviert den Start-Button (z. B. während eine Messung läuft)."""
+        """Aktiviert/deaktiviert den Start-Button (z. B. während eine Messung läuft).
+
+        `reason` ist ein i18n-Key (kein fertiger Text), damit der Grund
+        einen Sprachwechsel übersteht (siehe `retranslate_ui`).
+        """
         self._start_button.setEnabled(enabled)
-        self._status_label.setText(reason)
+        self._status_reason_key = reason
+        self._status_label.setText(t(reason))
 
     def set_storage_path(self, path: str | None) -> None:
-        self._storage_path_label.setText(path or "Kein Speicherort gewählt")
+        self._storage_path_is_set = bool(path)
+        self._storage_path_label.setText(path or t("no_storage_location"))
 
     def show_error(self, message: str) -> None:
         """Zeigt eine Fehlermeldung an (z. B. ungültige Konfiguration)."""
-        QMessageBox.warning(self, "Fehler", message)
+        QMessageBox.warning(self, t("error"), message)
 
     def get_current_measurement_parameters(self) -> tuple[str, float, str, bool]:
         """Gibt die aktuell im UI eingestellten Messparameter zurück.
@@ -194,26 +373,41 @@ class SetupView(QWidget):
             (measurement_name, sample_rate_hz, storage_format, live_only)
         """
         return (
-            self._name_edit.text().strip() or "messung_001",
+            self._name_edit.text().strip() or "Messung",
             self._sample_rate_spin.value(),
-            self._storage_format_combo.currentText(),
+            self._storage_format_combo.currentData(),
             self._live_only_checkbox.isChecked(),
         )
 
-    # ------------------------------------------------------------------ #
-    # Interna
-    # ------------------------------------------------------------------ #
+    def build_current_config(self) -> MeasurementConfig | None:
+        """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.
 
-    def _on_start_clicked(self) -> None:
+        Wird sowohl von `_on_start_clicked` als auch von
+        `gui/main_window.py` für "Konfiguration speichern" verwendet.
+        Zeigt bei unvollständigen Eingaben eine Fehlermeldung und gibt
+        None zurück (kein aktiver Kanal, kein Name, aktiver Kanal ohne
+        zugewiesenen Hardwarekanal).
+        """
         channels = self._channel_table.get_channels()
         if not any(ch.enabled for ch in channels):
-            self.show_error("Bitte mindestens einen aktiven Kanal konfigurieren.")
-            return
+            self.show_error(t("error_no_active_channels"))
+            return None
+
+        # Ohne diese Prüfung würde ein aktivierter, aber noch nicht
+        # zugewiesener Kanal (hardware_channel == "") erst tief in der
+        # Hardware-Schicht als kryptischer "ungültiger Kanalname"-Fehler
+        # auftauchen (nidaqmx lehnt eine leere Kanalzeichenkette ab) -
+        # hier lässt sich die eigentliche Ursache klar benennen.
+        unassigned = [ch for ch in channels if ch.enabled and not ch.hardware_channel.strip()]
+        if unassigned:
+            names = ", ".join(ch.display_name for ch in unassigned)
+            self.show_error(t("error_channel_missing_hw_channel", names=names))
+            return None
 
         name = self._name_edit.text().strip()
         if not name:
-            self.show_error("Bitte einen Namen für die Messung angeben.")
-            return
+            self.show_error(t("error_no_name"))
+            return None
 
         sample_rate = self._sample_rate_spin.value()
         ring_buffer_size = self._calculate_dynamic_buffer_size(
@@ -221,16 +415,87 @@ class SetupView(QWidget):
         )
         samples_per_read = self._calculate_samples_per_read(sample_rate)
 
-        config = MeasurementConfig(
+        return MeasurementConfig(
             name=name,
             sample_rate_hz=sample_rate,
             channels=channels,
-            storage_format=StorageFormat(self._storage_format_combo.currentText()),
+            storage_format=StorageFormat(self._storage_format_combo.currentData()),
             samples_per_read=samples_per_read,
             ring_buffer_size=ring_buffer_size,
             save_to_disk=not self._live_only_checkbox.isChecked(),
         )
+
+    def apply_config(self, config: MeasurementConfig) -> None:
+        """Überträgt eine geladene Konfiguration in die UI-Felder.
+
+        Wird von `gui/main_window.py` nach "Konfiguration laden" aufgerufen.
+        `samples_per_read`/`ring_buffer_size` werden bewusst NICHT
+        übernommen: Sie sind keine editierbaren UI-Felder und werden beim
+        Start immer frisch aus Abtastrate/Kanalanzahl/verfügbarem RAM neu
+        berechnet (siehe `build_current_config`/`_calculate_dynamic_buffer_size`) -
+        identisch zum Verhalten bei manuell eingegebener Konfiguration.
+        """
+        self._name_edit.setText(config.name)
+        self._sample_rate_spin.setValue(config.sample_rate_hz)
+        self._populate_storage_format_combo(config.storage_format.value)
+        self._live_only_checkbox.setChecked(not config.save_to_disk)
+        self._channel_table.set_channels(config.channels)
+
+    # ------------------------------------------------------------------ #
+    # Interna
+    # ------------------------------------------------------------------ #
+
+    def _on_naming_scheme_changed(self) -> None:
+        """Persistiert das Namensschema sofort bei jeder Änderung."""
+        self._naming_digits_spin.setEnabled(self._naming_number_checkbox.isChecked())
+        scheme = self.get_naming_scheme()
+        self._configuration_manager.update_naming_scheme(
+            use_number_suffix=scheme.use_number_suffix,
+            number_suffix_digits=scheme.number_suffix_digits,
+            include_date=scheme.include_date,
+            include_time=scheme.include_time,
+        )
+
+    def _on_start_clicked(self) -> None:
+        config = self.build_current_config()
+        if config is None:
+            return
         self.start_measurement_requested.emit(config)
+
+    def _retheme_start_button_icon(self) -> None:
+        # Fester Hintergrund (Dunkelgruen, siehe Stylesheet oben) unabhaengig
+        # vom Theme - das Icon braucht daher IMMER Weiss statt der sonst
+        # theme-abhaengigen nav_icon_color() (waere im Hell-Modus schwarz
+        # und auf dem dunkelgruenen Grund kaum zu erkennen).
+        self._start_button.setIcon(
+            QIcon(draw_play_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
+        )
+
+    def _set_start_button_text(self) -> None:
+        # Fuehrende Leerzeichen vergroessern den Abstand zwischen Icon und Text.
+        self._start_button.setText(f"  {t('start_measurement')}")
+
+    def _apply_section_header_emphasis(self) -> None:
+        """Hebt nur Abschnitts-Labels hervor und bleibt vollständig theme-sicher."""
+        header_font = QFont(self.font())
+        if header_font.pointSize() > 0:
+            header_font.setPointSize(header_font.pointSize() + 2)
+        header_font.setBold(True)
+
+        for header in (
+            self._device_header,
+            self._channel_header,
+            self._measurement_header,
+            self._storage_header,
+        ):
+            header.setFont(header_font)
+            margins = header.contentsMargins()
+            header.setContentsMargins(
+                margins.left(),
+                8,
+                margins.right(),
+                4,
+            )
 
     def _calculate_samples_per_read(self, sample_rate_hz: float) -> int:
         """Berechnet eine adaptive Blockgroesse pro DAQ-Read.
@@ -270,17 +535,3 @@ class SetupView(QWidget):
             logger.debug("Fehler bei dynamischer RAM-Berechnung, nutze Fallback")
             return int(sample_rate_hz * self._default_ring_buffer_seconds)
 
-    def _on_device_selected(self, row: int) -> None:
-        """Handler, der beim Wechsel der Geräteauswahl die verfügbaren
-        Hardware-Kanäle an die ChannelTableWidget übergibt.
-        """
-        if row < 0 or row >= len(self._discovered_devices):
-            self._channel_table.set_available_hw_channels([])
-            return
-        device = self._discovered_devices[row]
-        if getattr(device, "physical_channels", None):
-            hw_list = device.physical_channels
-        else:
-            # Fallback: generiere kanalnamen anhand der Anzahl
-            hw_list = [f"{device.device_name}/ai{i}" for i in range(device.num_channels)]
-        self._channel_table.set_available_hw_channels(hw_list)

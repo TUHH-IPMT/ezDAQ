@@ -30,7 +30,8 @@ import logging
 
 import numpy as np
 import pyqtgraph as pg
-from PyQt6.QtCore import QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, QTimer, pyqtSignal, Qt
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QGridLayout,
     QGroupBox,
@@ -46,6 +47,15 @@ from core.controller import MeasurementController
 from core.measurement import apply_scaling
 from data.exporter import StorageWriter
 from data.models import Channel
+from gui.i18n import connect_language_changed, get_language, t
+from gui.theme import (
+    connect_theme_changed,
+    curve_color,
+    draw_play_icon,
+    draw_stop_icon,
+    style_plot_container,
+    style_plot_item,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,11 +80,15 @@ class LiveView(QWidget):
     """Zeigt Messdaten einer laufenden Messung in Echtzeit an.
 
     Signals:
+        start_requested: Der Nutzer hat auf "Messung starten" geklickt.
+            `gui/main_window.py` startet die Messung dann mit der aktuell
+            konfigurierten Setup-Konfiguration.
         stop_requested: Der Nutzer hat auf "Messung stoppen" geklickt.
             `gui/main_window.py` ist dafür zuständig, die Messung über
             den `MeasurementController` tatsächlich zu stoppen.
     """
 
+    start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
 
     def __init__(self, controller: MeasurementController, parent: QWidget | None = None) -> None:
@@ -99,6 +113,7 @@ class LiveView(QWidget):
 
         # Stat-Panel Labels (werden in _rebuild_plots initialisiert)
         self._stat_labels: dict[str, QLabel] = {}
+        self._stat_header_labels: list[QLabel] = []
 
         # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen").
         self._storage_writer: StorageWriter | None = None
@@ -112,35 +127,58 @@ class LiveView(QWidget):
         self._storage_timer.timeout.connect(self._on_storage_timer_tick)
 
         self._build_ui()
+        style_plot_container(self._plot_widget)
+        connect_language_changed(self.retranslate_ui)
+        connect_theme_changed(self.retheme_plots)
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(9, 0, 9, 9)
 
         info_row = QHBoxLayout()
-        self._duration_label = QLabel("Dauer: -")
-        self._sample_rate_label = QLabel("Abtastrate: -")
-        self._stop_button = QPushButton("Messung stoppen")
+        info_row.setContentsMargins(0, 0, 0, 8)
+        info_row.setSpacing(10)
+        self._duration_label = QLabel(t("duration_value", value="-"))
+        self._sample_rate_label = QLabel(t("sample_rate_value", value="-"))
+
+        self._start_button = QPushButton()
+        self._set_start_button_text()
+        self._start_button.setIconSize(QSize(18, 18))
+        self._start_button.setStyleSheet(
+            "QPushButton { background-color: #1f7a36; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
+            "QPushButton:hover { background-color: #1a662e; }"
+            "QPushButton:pressed { background-color: #145125; }"
+        )
+        self._start_button.clicked.connect(self.start_requested.emit)
+
+        self._stop_button = QPushButton()
+        self._set_stop_button_text()
+        self._stop_button.setIconSize(QSize(18, 18))
         self._stop_button.setStyleSheet(
-            "QPushButton { background-color: #dc3545; color: white; border: none; padding: 6px 16px; border-radius: 4px; }"
+            "QPushButton { background-color: #dc3545; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
             "QPushButton:hover { background-color: #c82333; }"
             "QPushButton:pressed { background-color: #bd2130; }"
         )
         self._stop_button.clicked.connect(self.stop_requested.emit)
-        info_row.addWidget(self._duration_label)
-        info_row.addWidget(self._sample_rate_label)
+
+        self._retheme_action_button_icons()
+
+        info_row.addWidget(self._duration_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_row.addWidget(self._sample_rate_label, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addStretch(1)
-        info_row.addWidget(self._stop_button)
+        info_row.addWidget(self._start_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_row.addWidget(self._stop_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(info_row)
 
         layout.addWidget(self._plot_widget, stretch=1)
 
         # Stat-Panel für Min/Max/RMS
-        self._stat_group = QGroupBox("Statistiken (aktuelle 10 s)")
+        self._stat_group = QGroupBox(t("statistics"))
         self._stat_layout = QGridLayout(self._stat_group)
         layout.addWidget(self._stat_group)
 
         # Pufferauslastung des Storage Writers (Schreib-Rückstand ggü. DAQ-Thread).
-        self._storage_group = QGroupBox("Speicherpuffer (Schreib-Rückstand)")
+        self._storage_group = QGroupBox(t("storage_buffer_group"))
         storage_layout = QHBoxLayout(self._storage_group)
         self._storage_progress = QProgressBar()
         self._storage_progress.setRange(0, 100)
@@ -202,6 +240,54 @@ class LiveView(QWidget):
             self._reader_id = None
         logger.info("Live View gestoppt")
 
+    def retranslate_ui(self) -> None:
+        """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
+        self._set_start_button_text()
+        self._set_stop_button_text()
+        self._stat_group.setTitle(t("statistics"))
+        self._storage_group.setTitle(t("storage_buffer_group"))
+
+        header_keys = ("channel", "min", "max", "rms")
+        for header_label, key in zip(self._stat_header_labels, header_keys):
+            header_label.setText(f"<b>{t(key)}</b>")
+
+        for plot_item in self._plot_items:
+            plot_item.setLabel("bottom", t("axis_time"), units="s")
+
+        # Laufende Dauer/Abtastrate korrigieren sich beim nächsten Timer-
+        # Tick von selbst - nur der Leerlauf-Platzhalter würde sonst
+        # dauerhaft in der alten Sprache hängen bleiben.
+        if self._reader_id is None:
+            self._duration_label.setText(t("duration_value", value="-"))
+            self._sample_rate_label.setText(t("sample_rate_value", value="-"))
+
+    def retheme_plots(self) -> None:
+        """Färbt Plot-Hintergrund/-Achsen/-Kurven nach einem Theme-Wechsel um.
+
+        PyQtGraph-Widgets folgen der `QApplication`-Palette nicht
+        automatisch (siehe `gui/theme.py`) - bereits vorhandene Plots
+        müssen daher explizit nachgefärbt werden.
+        """
+        style_plot_container(self._plot_widget)
+        self._retheme_action_button_icons()
+        new_curve_color = curve_color()
+        for plot_item, curve in zip(self._plot_items, self._curves):
+            style_plot_item(plot_item)
+            curve.setPen(pg.mkPen(color=new_curve_color, width=1.5))
+
+    def _retheme_action_button_icons(self) -> None:
+        self._start_button.setIcon(QIcon(draw_play_icon(20, y_offset=0.6)))
+        self._stop_button.setIcon(QIcon(draw_stop_icon(20, y_offset=0.6)))
+
+    def _set_start_button_text(self) -> None:
+        self._start_button.setText(f"  {t('start_measurement')}")
+
+    def _set_stop_button_text(self) -> None:
+        self._stop_button.setText(f"  {t('stop_measurement')}")
+
+    def set_start_enabled(self, enabled: bool) -> None:
+        self._start_button.setEnabled(enabled)
+
     # ------------------------------------------------------------------ #
     # Interna
     # ------------------------------------------------------------------ #
@@ -217,10 +303,11 @@ class LiveView(QWidget):
             unit_suffix = f" [{channel.unit}]" if channel.unit else ""
             plot_item = self._plot_widget.addPlot(title=f"{channel.display_name}{unit_suffix}")
             plot_item.showGrid(x=True, y=True, alpha=0.3)
-            plot_item.setLabel("bottom", "Zeit", units="s")
+            plot_item.setLabel("bottom", t("axis_time"), units="s")
+            style_plot_item(plot_item)
             if previous_plot_item is not None:
                 plot_item.setXLink(previous_plot_item)
-            curve = plot_item.plot(pen=pg.mkPen(width=1.5))
+            curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
             curve.setDownsampling(auto=True, method="mean")
             curve.setClipToView(True)
 
@@ -238,10 +325,14 @@ class LiveView(QWidget):
         self._stat_labels = {}
 
         # Kopfzeile
-        self._stat_layout.addWidget(QLabel("<b>Kanal</b>"), 0, 0)
-        self._stat_layout.addWidget(QLabel("<b>Min</b>"), 0, 1)
-        self._stat_layout.addWidget(QLabel("<b>Max</b>"), 0, 2)
-        self._stat_layout.addWidget(QLabel("<b>RMS</b>"), 0, 3)
+        self._stat_header_labels = [
+            QLabel(f"<b>{t('channel')}</b>"),
+            QLabel(f"<b>{t('min')}</b>"),
+            QLabel(f"<b>{t('max')}</b>"),
+            QLabel(f"<b>{t('rms')}</b>"),
+        ]
+        for col, header_label in enumerate(self._stat_header_labels):
+            self._stat_layout.addWidget(header_label, 0, col)
 
         # Reihe pro Kanal
         for row, channel in enumerate(self._channels, start=1):
@@ -298,10 +389,19 @@ class LiveView(QWidget):
         percent = (pending / capacity * 100.0) if capacity > 0 else 0.0
 
         self._storage_progress.setValue(int(round(min(100.0, percent))))
-        self._storage_detail_label.setText(
-            f"Datei: {_format_bytes(file_bytes)} — Rückstand: "
-            f"{pending:,} / {capacity:,} Samples ({percent:.1f} %)".replace(",", ".")
+        detail_text = t(
+            "storage_detail",
+            file_size=_format_bytes(file_bytes),
+            pending=f"{pending:,}",
+            capacity=f"{capacity:,}",
+            percent=f"{percent:.1f}",
         )
+        if get_language() == "de":
+            # Deutsches Zahlenformat: Tausenderpunkt statt -komma
+            # (nur die :,-formatierten Ganzzahlen betroffen, nicht die
+            # bereits mit Punkt formatierten Kommazahlen).
+            detail_text = detail_text.replace(",", ".")
+        self._storage_detail_label.setText(detail_text)
         if percent >= _STORAGE_CRITICAL_PERCENT:
             color = "#dc3545"  # rot
         elif percent >= _STORAGE_WARN_PERCENT:
@@ -316,8 +416,12 @@ class LiveView(QWidget):
 
         session = self._controller.current_session
         if session is not None and session.start_time is not None:
-            self._duration_label.setText(f"Dauer: {session.duration_seconds:.1f} s")
-        self._sample_rate_label.setText(f"Abtastrate: {self._sample_rate_hz:.1f} Hz")
+            self._duration_label.setText(
+                t("duration_value", value=f"{session.duration_seconds:.1f} s")
+            )
+        self._sample_rate_label.setText(
+            t("sample_rate_value", value=f"{self._sample_rate_hz:.1f} Hz")
+        )
 
         max_display_samples = int(self._sample_rate_hz * self._display_window_seconds)
         raw = self._controller.read_live_data(self._reader_id, max_samples=max_display_samples)

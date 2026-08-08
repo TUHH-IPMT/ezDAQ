@@ -80,6 +80,13 @@ class AppSettings:
             (Wert von ``data.models.StorageFormat``, z. B. "parquet").
         last_measurement_name: Zuletzt verwendeter Messname.
         last_live_only: Letzte Auswahl fuer "Nur Live anzeigen".
+        language: Zuletzt gewählte UI-Sprache ("de"/"en").
+        theme: Zuletzt gewähltes Farbschema ("light"/"dark").
+        name_use_number_suffix: Ob beim Messstart automatisch ein
+            Nummernsuffix an den Messnamen angehängt wird.
+        name_number_suffix_digits: Stellenzahl des Nummernsuffix (z. B. 3 -> "_001").
+        name_include_date: Ob das aktuelle Datum in den Messnamen einfließt.
+        name_include_time: Ob die aktuelle Uhrzeit in den Messnamen einfließt.
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -88,8 +95,14 @@ class AppSettings:
     last_device_name: Optional[str] = None
     default_sample_rate_hz: float = 1000.0
     default_storage_format: str = "parquet"
-    last_measurement_name: str = "messung_001"
+    last_measurement_name: str = "Messung"
     last_live_only: bool = False
+    language: str = "de"
+    theme: str = "light"
+    name_use_number_suffix: bool = True
+    name_number_suffix_digits: int = 3
+    name_include_date: bool = False
+    name_include_time: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Serialisiert die Einstellungen in ein JSON-kompatibles Dictionary."""
@@ -118,6 +131,12 @@ class AppSettings:
             last_device_name=data.get("last_device_name"),
             default_sample_rate_hz=data.get("default_sample_rate_hz", 1000.0),
             default_storage_format=data.get("default_storage_format", "parquet"),
-            last_measurement_name=data.get("last_measurement_name", "messung_001"),
+            last_measurement_name=data.get("last_measurement_name", "Messung"),
             last_live_only=data.get("last_live_only", False),
+            language=data.get("language", "de"),
+            theme=data.get("theme", "light"),
+            name_use_number_suffix=data.get("name_use_number_suffix", True),
+            name_number_suffix_digits=data.get("name_number_suffix_digits", 3),
+            name_include_date=data.get("name_include_date", False),
+            name_include_time=data.get("name_include_time", False),
         )

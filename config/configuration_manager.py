@@ -23,7 +23,7 @@ from config.settings import (
     CONFIG_FILE_NAME,
     get_config_directory,
 )
-from data.models import Channel
+from data.models import Channel, MeasurementConfig
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +136,30 @@ class ConfigurationManager:
         self._settings.last_device_name = device_name
         self.save_settings()
 
+    def update_language(self, language: str) -> None:
+        """Merkt sich die zuletzt gewählte UI-Sprache."""
+        self._settings.language = language
+        self.save_settings()
+
+    def update_theme(self, theme: str) -> None:
+        """Merkt sich das zuletzt gewählte Farbschema."""
+        self._settings.theme = theme
+        self.save_settings()
+
+    def update_naming_scheme(
+        self,
+        use_number_suffix: bool,
+        number_suffix_digits: int,
+        include_date: bool,
+        include_time: bool,
+    ) -> None:
+        """Merkt sich das zuletzt gewählte Namensschema für neue Messungen."""
+        self._settings.name_use_number_suffix = use_number_suffix
+        self._settings.name_number_suffix_digits = number_suffix_digits
+        self._settings.name_include_date = include_date
+        self._settings.name_include_time = include_time
+        self.save_settings()
+
     def update_last_measurement_parameters(
         self,
         measurement_name: str,
@@ -203,3 +227,45 @@ class ConfigurationManager:
                 exc,
             )
             return []
+
+    # ------------------------------------------------------------------ #
+    # Gespeicherte Messkonfigurationen
+    # ------------------------------------------------------------------ #
+
+    def save_measurement_config(self, config: MeasurementConfig, file_path: Path) -> None:
+        """Speichert eine Messkonfiguration unter einem vom Nutzer gewählten Pfad.
+
+        Der Speicherort wird bewusst vom Aufrufer (GUI, per Dateidialog)
+        vorgegeben statt intern verwaltet zu werden - Konfigurationen sind
+        damit normale Dateien, die der Nutzer frei ablegen, umbenennen,
+        teilen oder löschen kann.
+
+        Raises:
+            OSError: falls die Datei nicht geschrieben werden kann. Der
+                Fehler wird bewusst NICHT verschluckt, damit ein expliziter
+                "Speichern"-Klick in der GUI eine sichtbare Fehlermeldung
+                auslösen kann.
+        """
+        with file_path.open("w", encoding="utf-8") as f:
+            json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
+        logger.debug("Messkonfiguration '%s' gespeichert: %s", config.name, file_path)
+
+    def load_measurement_config(self, file_path: Path) -> Optional[MeasurementConfig]:
+        """Lädt eine zuvor gespeicherte Messkonfiguration von einem Dateipfad.
+
+        Returns:
+            Die geladene Konfiguration, oder None falls die Datei nicht
+            existiert oder nicht lesbar ist.
+        """
+        if not file_path.exists():
+            logger.warning("Messkonfigurationsdatei nicht gefunden: %s", file_path)
+            return None
+        try:
+            with file_path.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return MeasurementConfig.from_dict(data)
+        except (json.JSONDecodeError, OSError, KeyError, ValueError) as exc:
+            logger.warning(
+                "Messkonfiguration konnte nicht geladen werden (%s): %s", file_path, exc
+            )
+            return None

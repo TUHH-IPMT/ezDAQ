@@ -1,19 +1,395 @@
 """
 gui/theme.py
 
-Theme-Hilfsfunktionen fuer die Anwendung.
+Einfaches Hell/Dunkel-Theming für die gesamte Anwendung.
 
-Dark-Mode wurde entfernt; es wird ausschliesslich das Standard-Theme
-der Plattform verwendet.
+Verwendung (siehe `gui/i18n.py` für dasselbe Grundmuster):
+    from gui.theme import init_theme, set_theme, connect_theme_changed
+
+    init_theme(app)          # einmalig beim App-Start, nach QApplication(...)
+    set_theme("dark")        # oder "light" - wirkt sofort auf alle Qt-Widgets
+
+Live-Umschaltung:
+    Qt-Standardwidgets (Buttons, Labels, Menüs, ...) folgen automatisch der
+    `QApplication`-`QPalette` - dafür reicht `set_theme()`. PyQtGraph-Plots
+    (Live View, Analyse) folgen der Palette NICHT automatisch; Ansichten mit
+    Plots registrieren sich über `connect_theme_changed(self.retheme_plots)`
+    und färben ihre bereits vorhandenen Plot-Widgets über
+    `style_plot_container()`/`style_plot_item()` selbst nach.
 """
+
 from __future__ import annotations
 
-from PyQt6.QtWidgets import QApplication
+import math
+from typing import Callable, Optional
+
+import pyqtgraph as pg
+from PyQt6.QtCore import QPointF, QRectF, Qt
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
+
+_current_theme = "light"
+
+_PLOT_COLORS = {
+    "light": {"background": "w", "foreground": "k", "curve": "#1565c0"},
+    "dark": {"background": "#232323", "foreground": "#e0e0e0", "curve": "#64b5f6"},
+}
 
 
-def apply_theme() -> None:
-    """Setzt das globale Stylesheet auf das Standard-Theme der Plattform."""
+def _build_light_palette() -> QPalette:
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(245, 245, 245))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Text, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    # 3D-Schattierungsrollen (Light/Midlight/Dark/Mid/Shadow) - werden von
+    # QPalette NICHT automatisch aus Button/Window abgeleitet, wenn man
+    # (wie hier) einzelne Rollen statt des Ein-Farb-Konstruktors setzt.
+    # Ohne sie fallen QSS-Referenzen wie "palette(light)"/"palette(dark)"
+    # (siehe Navigationskacheln in gui/main_window.py) auf Qts
+    # themenunabhängige Standardgrautöne zurück statt auf dieses Theme.
+    palette.setColor(QPalette.ColorRole.Light, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Midlight, QColor(247, 247, 247))
+    palette.setColor(QPalette.ColorRole.Dark, QColor(160, 160, 160))
+    palette.setColor(QPalette.ColorRole.Mid, QColor(200, 200, 200))
+    palette.setColor(QPalette.ColorRole.Shadow, QColor(105, 105, 105))
+    palette.setColor(QPalette.ColorRole.Link, QColor(0, 102, 204))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(51, 153, 255))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(150, 150, 150))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(150, 150, 150))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(150, 150, 150))
+    return palette
+
+
+def _build_dark_palette() -> QPalette:
+    palette = QPalette()
+    palette.setColor(QPalette.ColorRole.Window, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Base, QColor(35, 35, 35))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(255, 255, 220))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorRole.Text, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
+    palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
+    # Siehe Kommentar in _build_light_palette() - dieselben Rollen fehlten
+    # hier ebenfalls.
+    palette.setColor(QPalette.ColorRole.Light, QColor(90, 90, 90))
+    palette.setColor(QPalette.ColorRole.Midlight, QColor(70, 70, 70))
+    palette.setColor(QPalette.ColorRole.Dark, QColor(20, 20, 20))
+    palette.setColor(QPalette.ColorRole.Mid, QColor(40, 40, 40))
+    palette.setColor(QPalette.ColorRole.Shadow, QColor(10, 10, 10))
+    palette.setColor(QPalette.ColorRole.Link, QColor(93, 173, 226))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor(0, 0, 0))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(127, 127, 127))
+    palette.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.WindowText, QColor(127, 127, 127))
+    return palette
+
+
+_PALETTES = {"light": _build_light_palette, "dark": _build_dark_palette}
+
+
+def init_theme(app) -> None:
+    """Muss einmalig beim App-Start aufgerufen werden (nach `QApplication(...)`,
+    vor der ersten Fenster-Erzeugung).
+
+    Setzt den `Fusion`-Stil, damit Light/Dark-Paletten auf allen Plattformen
+    zuverlässig greifen (der native Windows-Stil ignoriert eine eigene
+    `QPalette` für viele Widgets).
+    """
+    app.setStyle("Fusion")
+    app.setPalette(_PALETTES[_current_theme]())
+    pg.setConfigOption("background", _PLOT_COLORS[_current_theme]["background"])
+    pg.setConfigOption("foreground", _PLOT_COLORS[_current_theme]["foreground"])
+
+
+def get_theme() -> str:
+    """Gibt das aktuelle Theme zurück ("light" oder "dark")."""
+    return _current_theme
+
+
+def curve_color() -> str:
+    """Standard-Kurvenfarbe für neue Plots im aktuellen Theme."""
+    return _PLOT_COLORS[_current_theme]["curve"]
+
+
+def style_plot_container(widget) -> None:
+    """Setzt den Hintergrund eines PyQtGraph-Containers (`PlotWidget` oder
+    `GraphicsLayoutWidget`) auf die aktuelle Theme-Hintergrundfarbe."""
+    widget.setBackground(_PLOT_COLORS[_current_theme]["background"])
+
+
+def style_plot_item(plot_item) -> None:
+    """Färbt Achsen eines einzelnen PyQtGraph-`PlotItem` im aktuellen Theme.
+
+    Nötig, weil bereits erzeugte `PlotItem`s die globalen
+    `pg.setConfigOption(...)`-Werte NICHT rückwirkend übernehmen - nur neu
+    erzeugte Plots tun das automatisch.
+    """
+    foreground = _PLOT_COLORS[_current_theme]["foreground"]
+    for axis_name in ("left", "bottom", "right", "top"):
+        axis = plot_item.getAxis(axis_name)
+        if axis is not None:
+            axis.setPen(foreground)
+            axis.setTextPen(foreground)
+
+
+# ---------------------------------------------------------------------- #
+# Einfache, selbst gezeichnete Navigations-Icons
+# ---------------------------------------------------------------------- #
+#
+# `QStyle.standardIcon(...)` wäre die naheliegende Alternative, liefert
+# für die hier gebrauchten Symbole aber FEST eingefärbte Pixmaps, die der
+# Palette nicht folgen - ein Theme-Wechsel würde die Icon-Farbe nicht
+# ändern. Diese Icons werden stattdessen mit der aktuellen
+# `WindowText`-Farbe gezeichnet und bei jedem Theme-Wechsel neu erzeugt.
+
+
+def nav_icon_color() -> QColor:
+    """Aktuelle Vordergrundfarbe für Navigations-Icons (folgt der Palette)."""
+    from PyQt6.QtWidgets import QApplication
+
     app = QApplication.instance()
-    if app is None:
+    if app is not None:
+        return app.palette().color(QPalette.ColorRole.WindowText)
+    return QColor(0, 0, 0)
+
+
+def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    return pixmap, painter
+
+
+def draw_gear_icon(size: int = 36) -> QPixmap:
+    """Zahnrad-Symbol (Setup/Konfiguration).
+
+    Blockige, rechteckige Zähne statt dünner Speichen - dünne Linien vom
+    Kreis nach außen sehen bei kleiner Größe eher wie eine Sonne aus.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+    center = size / 2
+    body_radius = size * 0.30
+    hole_radius = size * 0.13
+    tooth_len = size * 0.11
+    tooth_width = size * 0.15
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+
+    # Zähne: kleine Rechtecke, radial um den Mittelpunkt verteilt.
+    for i in range(8):
+        painter.save()
+        painter.translate(center, center)
+        painter.rotate(i * 45)
+        painter.drawRect(QRectF(body_radius, -tooth_width / 2, tooth_len, tooth_width))
+        painter.restore()
+
+    # Zahnkranz-Körper.
+    painter.drawEllipse(QPointF(center, center), body_radius, body_radius)
+
+    # Mittelloch ausstanzen, damit ein echter Ring entsteht.
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+    painter.drawEllipse(QPointF(center, center), hole_radius, hole_radius)
+
+    painter.end()
+    return pixmap
+
+
+def draw_play_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
+    """Play-Dreieck (Live View).
+
+    `y_offset` erlaubt eine kleine vertikale Feinausrichtung für Buttons.
+    `color` überschreibt die sonst theme-abhängige `nav_icon_color()` -
+    nötig für Buttons mit fest codiertem (nicht theme-abhängigem)
+    Hintergrund, z. B. den grünen Start-Button in `gui/setup_view.py`,
+    wo Schwarz (Hell-Modus-Vordergrundfarbe) auf Dunkelgrün kaum sichtbar wäre.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color if color is not None else nav_icon_color())
+    m = size * 0.24
+    y = float(y_offset)
+    triangle = QPolygonF(
+        [
+            QPointF(m, m * 0.7 + y),
+            QPointF(m, size - m * 0.7 + y),
+            QPointF(size - m * 0.75, size / 2 + y),
+        ]
+    )
+    painter.drawPolygon(triangle)
+    painter.end()
+    return pixmap
+
+
+def draw_magnifier_icon(size: int = 36) -> QPixmap:
+    """Lupe mit einem schematischen Zeitgraphen im Inneren (Analyse).
+
+    Der Graph ist auf das Lupenglas geclippt (liegt also wirklich "in" der
+    Lupe, nicht nur daneben). Der Griff verläuft exakt radial vom
+    Kreisrand nach außen (45°-Richtung von der Lupenmitte), statt versetzt
+    tangential anzusetzen.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+
+    lens_center = QPointF(size * 0.44, size * 0.44)
+    lens_radius = size * 0.32
+
+    # Schematischer Zeitgraph (Zickzack-Linie), auf das Lupenglas geclippt.
+    inner_radius = lens_radius * 0.82
+    clip_path = QPainterPath()
+    clip_path.addEllipse(lens_center, inner_radius, inner_radius)
+    painter.save()
+    painter.setClipPath(clip_path)
+    graph_pen = QPen(color)
+    graph_pen.setWidthF(size * 0.045)
+    graph_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    graph_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(graph_pen)
+    r = inner_radius * 0.95
+    cx, cy = lens_center.x(), lens_center.y()
+    graph_points = [
+        QPointF(cx - r, cy + r * 0.35),
+        QPointF(cx - r * 0.45, cy - r * 0.55),
+        QPointF(cx - r * 0.05, cy + r * 0.45),
+        QPointF(cx + r * 0.45, cy - r * 0.65),
+        QPointF(cx + r, cy + r * 0.05),
+    ]
+    for p1, p2 in zip(graph_points, graph_points[1:]):
+        painter.drawLine(p1, p2)
+    painter.restore()
+
+    # Lupenrand.
+    lens_pen = QPen(color)
+    lens_pen.setWidthF(size * 0.09)
+    lens_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(lens_pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawEllipse(lens_center, lens_radius, lens_radius)
+
+    # Griff: startet exakt auf dem Kreisrand und läuft radial (45°) weiter
+    # nach außen - dieselbe Richtung wie die Linie von der Lupenmitte zum
+    # Startpunkt, also kein Versatz/Tangente.
+    angle = math.radians(45)
+    direction = QPointF(math.cos(angle), math.sin(angle))
+    handle_start = QPointF(
+        lens_center.x() + lens_radius * direction.x(),
+        lens_center.y() + lens_radius * direction.y(),
+    )
+    handle_length = size * 0.26
+    handle_end = QPointF(
+        handle_start.x() + handle_length * direction.x(),
+        handle_start.y() + handle_length * direction.y(),
+    )
+    painter.drawLine(handle_start, handle_end)
+
+    painter.end()
+    return pixmap
+
+
+def draw_plus_icon(size: int = 16) -> QPixmap:
+    """Plus-Symbol für Aktionsbuttons (z. B. Kanal hinzufügen)."""
+    pixmap, painter = _new_icon_pixmap(size)
+    pen = QPen(nav_icon_color())
+    pen.setWidthF(max(1.8, size * 0.14))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    c = size / 2
+    m = size * 0.24
+    painter.drawLine(QPointF(c, m), QPointF(c, size - m))
+    painter.drawLine(QPointF(m, c), QPointF(size - m, c))
+    painter.end()
+    return pixmap
+
+
+def draw_minus_icon(size: int = 16) -> QPixmap:
+    """Minus-Symbol für Aktionsbuttons (z. B. Kanal entfernen)."""
+    pixmap, painter = _new_icon_pixmap(size)
+    pen = QPen(nav_icon_color())
+    pen.setWidthF(max(1.8, size * 0.14))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    c = size / 2
+    m = size * 0.24
+    painter.drawLine(QPointF(m, c), QPointF(size - m, c))
+    painter.end()
+    return pixmap
+
+
+def draw_stop_icon(size: int = 16, y_offset: float = 0.0) -> QPixmap:
+    """Quadratisches Stop-Symbol für Abbruch-/Stop-Aktionen."""
+    pixmap, painter = _new_icon_pixmap(size)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(nav_icon_color())
+    m = size * 0.23
+    side = size - 2 * m
+    painter.drawRect(QRectF(m, m + y_offset, side, side))
+    painter.end()
+    return pixmap
+
+
+def set_theme(theme: str) -> None:
+    """Setzt das Theme auf "light" oder "dark" und wendet es sofort an.
+
+    Aktualisiert die `QApplication`-Palette (wirkt automatisch auf alle
+    Standard-Qt-Widgets) und die globalen PyQtGraph-Farboptionen (wirkt auf
+    ab jetzt neu erzeugte Plots) - und benachrichtigt registrierte Ansichten
+    über `connect_theme_changed`, damit sie ihre bereits vorhandenen Plots
+    selbst nachfärben.
+    """
+    global _current_theme
+    if theme not in _PALETTES or theme == _current_theme:
         return
-    app.setStyleSheet("")
+    _current_theme = theme
+
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        app.setPalette(_PALETTES[theme]())
+
+    pg.setConfigOption("background", _PLOT_COLORS[theme]["background"])
+    pg.setConfigOption("foreground", _PLOT_COLORS[theme]["foreground"])
+
+    _get_signals().theme_changed.emit(theme)
+
+
+# ---------------------------------------------------------------------- #
+# Live-Umschalt-Signal
+# ---------------------------------------------------------------------- #
+#
+# Lazy konstruiert aus demselben Grund wie in `gui/i18n.py`: dieses Modul
+# kann importiert werden, bevor `QApplication` existiert.
+
+_signals: Optional["_ThemeSignals"] = None
+
+
+def _get_signals() -> "_ThemeSignals":
+    global _signals
+    if _signals is None:
+        from PyQt6.QtCore import QObject, pyqtSignal
+
+        class _ThemeSignals(QObject):
+            theme_changed = pyqtSignal(str)
+
+        _signals = _ThemeSignals()
+    return _signals
+
+
+def connect_theme_changed(slot: Callable[[], None]) -> None:
+    """Registriert `slot` (typischerweise `view.retheme_plots`), der bei
+    jedem Theme-Wechsel aufgerufen wird."""
+    _get_signals().theme_changed.connect(slot)
