@@ -99,7 +99,9 @@ class MainWindow(QMainWindow):
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
 
         self.setWindowTitle(t("window_title"))
-        icon_path = get_resource_path("icon.png")
+        # .ico statt .png (siehe main.py) - mehrere Aufloesungen fuer
+        # Titelleiste/Taskleiste statt einer einzelnen 256px-Groesse.
+        icon_path = get_resource_path("icon.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
         self._restore_window_geometry()
@@ -336,6 +338,15 @@ class MainWindow(QMainWindow):
         current_theme_action.setChecked(True)
         self._theme_action_group.triggered.connect(self._on_theme_action_triggered)
 
+        self._settings_menu.addSeparator()
+        self._y_autoscale_action = self._settings_menu.addAction(t("menu_y_autoscale"))
+        self._y_autoscale_action.setCheckable(True)
+        self._y_autoscale_action.setChecked(True)
+        self._y_autoscale_action.toggled.connect(self._live_view.set_y_autoscale)
+
+        self._y_range_action = self._settings_menu.addAction(f"{t('menu_y_range')}...")
+        self._y_range_action.triggered.connect(self._on_open_y_range_dialog)
+
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
         self._about_action = self._help_menu.addAction(t("menu_about"))
         self._about_action.triggered.connect(self._on_about)
@@ -355,6 +366,19 @@ class MainWindow(QMainWindow):
         new_theme = action.data()
         set_theme(new_theme)
         self._configuration_manager.update_theme(new_theme)
+
+    def _on_open_y_range_dialog(self) -> None:
+        """Öffnet den Y-Achsen-Bereich-Dialog mit den im Setup konfigurierten
+        Kanälen (siehe `SetupView.get_configured_channels()`).
+
+        Bewusst NICHT `self._live_view.open_y_range_dialog()` ohne
+        Argument: die Live View kennt ihre Kanäle erst, sobald eine
+        Messung tatsächlich läuft (`start_display()`) - der Bereich soll
+        aber schon vorher, direkt nach dem Konfigurieren im Setup,
+        einstellbar sein.
+        """
+        channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
+        self._live_view.open_y_range_dialog(channels)
 
     def _build_status_bar(self) -> None:
         self._status_label = QLabel(t("ready"))
@@ -380,6 +404,8 @@ class MainWindow(QMainWindow):
         self._theme_menu.setTitle(t("menu_theme"))
         self._theme_light_action.setText(t("theme_light"))
         self._theme_dark_action.setText(t("theme_dark"))
+        self._y_autoscale_action.setText(t("menu_y_autoscale"))
+        self._y_range_action.setText(f"{t('menu_y_range')}...")
 
         self._help_menu.setTitle(f"&{t('menu_help')}")
         self._about_action.setText(t("menu_about"))
@@ -476,7 +502,14 @@ class MainWindow(QMainWindow):
     def _on_discover_hardware(self) -> None:
         devices = self._controller.discover_hardware()
         self._setup_view.set_discovered_devices(devices)
-        self._status_label.setText(f"{len(devices)} {t('devices_found')}")
+        # Nur Geräte MIT Kanälen zählen (dieselbe Filterung wie
+        # `SetupView.set_discovered_devices`) - `System.local().devices`
+        # liefert sonst auch reine Chassis-Einträge ohne eigene Kanäle
+        # (z. B. "cDAQ9185-0217ED5E" zusätzlich zu dessen Modulen
+        # "...Mod1"/"...Mod2") mit, was die Anzahl gegenüber der tatsächlich
+        # nutzbaren Hardware künstlich aufbläht.
+        usable_devices = [d for d in devices if d.num_channels > 0]
+        self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
 
     def _on_start_measurement(self, config: MeasurementConfig) -> None:
         requested_measurement_name = config.name
@@ -631,9 +664,23 @@ class MainWindow(QMainWindow):
         ):
             self._finalize_measurement(session, device_infos)
 
+        # Status IMMER aktualisieren, nicht nur wenn tatsächlich gespeichert
+        # wurde (siehe `_finalize_measurement`) - sonst bliebe die
+        # Statusleiste bei "Nur Live anzeigen" (kein Speichern) dauerhaft
+        # auf "Messung läuft" stehen, obwohl die Messung längst gestoppt ist.
+        if session is not None:
+            self._status_label.setText(
+                t(
+                    "measurement_completed_named",
+                    name=session.config.name,
+                    duration=f"{session.duration_seconds:.1f}",
+                )
+            )
+        else:
+            self._status_label.setText(t("ready"))
+
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
-        self._set_nav_index(_VIEW_SETUP)
 
     def _finalize_measurement(
         self, session: MeasurementSession, device_infos: list[DeviceInfo]
@@ -644,13 +691,6 @@ class MainWindow(QMainWindow):
             metadata = build_measurement_metadata(session, device_infos)
             metadata_path = self._storage_path / f"{session.config.name}_info.json"
             save_measurement_metadata(metadata_path, metadata)
-            self._status_label.setText(
-                t(
-                    "measurement_completed_named",
-                    name=session.config.name,
-                    duration=f"{session.duration_seconds:.1f}",
-                )
-            )
         except Exception:
             logger.exception("Metadaten konnten nicht gespeichert werden")
 
@@ -665,6 +705,7 @@ class MainWindow(QMainWindow):
         self._controller.stop_measurement()
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
+        self._status_label.setText(t("ready"))
         QMessageBox.critical(
             self,
             t("measurement_error"),

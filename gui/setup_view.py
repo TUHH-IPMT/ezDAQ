@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -34,6 +35,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QCheckBox,
+    QScrollArea,
     QSpinBox,
     QTreeWidget,
     QTreeWidgetItem,
@@ -42,7 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.configuration_manager import ConfigurationManager
-from data.models import DeviceInfo, MeasurementConfig, StorageFormat
+from data.models import Channel, DeviceInfo, MeasurementConfig, StorageFormat
 from gui.i18n import connect_language_changed, t
 from gui.theme import connect_theme_changed, draw_play_icon
 from gui.widgets.channel_table import ChannelTableWidget
@@ -103,7 +105,24 @@ class SetupView(QWidget):
         self._storage_path_is_set = False
         self._status_reason_key = ""
 
-        layout = QVBoxLayout(self)
+        # Die gesamte Ansicht steckt in einem QScrollArea: bei vielen
+        # Abschnitten (Geräte, Kanäle, Messeinstellungen, Speicher) reicht
+        # die Fensterhöhe oft nicht für alle Abschnitte gleichzeitig - ohne
+        # Scroll-Bereich würde Qt stattdessen ALLE Abschnitte gleichmäßig
+        # zusammenquetschen (insbesondere die Kanaltabelle bis auf eine
+        # einzelne, kaum nutzbare Zeile). Mit Scroll-Bereich behalten alle
+        # Abschnitte ihre bevorzugte/Mindestgröße, überschüssiger Inhalt
+        # wird gescrollt statt gequetscht.
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        outer_layout.addWidget(scroll_area)
+
+        content = QWidget()
+        scroll_area.setWidget(content)
+        layout = QVBoxLayout(content)
 
         # --- Geräteerkennung ---
         self._device_header = QLabel(t("connected_devices"))
@@ -117,6 +136,9 @@ class SetupView(QWidget):
         # `gui/widgets/channel_table.py::HardwareChannelPickerDialog`).
         self._device_list = QTreeWidget()
         self._device_list.setHeaderHidden(True)
+        # Mindesthöhe für ein paar sichtbare Zeilen, ohne dass eine leere
+        # Liste (vor der ersten Geräteerkennung) unnötig viel Platz belegt.
+        self._device_list.setMinimumHeight(120)
         device_layout.addWidget(self._discover_button)
         device_layout.addWidget(self._device_list)
         layout.addWidget(self._device_group)
@@ -156,7 +178,13 @@ class SetupView(QWidget):
 
         # Interne Performance-Parameter werden automatisch festgelegt,
         # damit der Nutzer hier nicht mit technischen Details belastet wird.
-        # Ziel: kleinere Read-Bloecke fuer fluessigere Live-Updates.
+        # Ziel: kleinere Read-Bloecke fuer fluessigere Live-Updates. NICHT
+        # weiter als 25ms verkleinern: ein Test mit 10ms fuehrte bei hoher
+        # Abtastrate zu "The application is not able to keep up with the
+        # hardware acquisition" (Pufferueberlauf/Datenverlust) - der reine
+        # Python/ctypes-Aufrufoverhead pro `device.read()` dominiert dann
+        # gegenueber dem eigentlichen Datentransfer und der DAQ-Thread
+        # selbst kommt nicht mehr hinterher.
         self._target_read_block_ms = 25.0
         self._min_samples_per_read = 50
         self._max_samples_per_read = 2000
@@ -346,7 +374,10 @@ class SetupView(QWidget):
             for channel in channels:
                 device_item.addChild(QTreeWidgetItem([channel]))
             self._device_list.addTopLevelItem(device_item)
-        self._device_list.expandAll()
+        # Standardmäßig eingeklappt (nur Gerätenamen sichtbar) - spart bei
+        # mehreren Modulen mit jeweils vielen Kanälen deutlich Platz. Der
+        # Nutzer klappt ein Gerät bei Bedarf einzeln auf.
+        self._device_list.collapseAll()
 
     def set_start_enabled(self, enabled: bool, reason: str = "") -> None:
         """Aktiviert/deaktiviert den Start-Button (z. B. während eine Messung läuft).
@@ -378,6 +409,17 @@ class SetupView(QWidget):
             self._storage_format_combo.currentData(),
             self._live_only_checkbox.isChecked(),
         )
+
+    def get_configured_channels(self) -> list[Channel]:
+        """Gibt die aktuell in der Kanaltabelle konfigurierten Kanäle zurück.
+
+        Anders als `build_current_config()`: keine Validierung, keine
+        Fehlermeldung, funktioniert auch OHNE laufende Messung. Wird z. B.
+        von `gui/main_window.py` für den Y-Achsen-Bereich-Dialog genutzt,
+        der schon vor dem Messstart nutzbar sein soll (die Live View kennt
+        ihre Kanäle sonst erst, sobald eine Messung tatsächlich läuft).
+        """
+        return self._channel_table.get_channels()
 
     def build_current_config(self) -> MeasurementConfig | None:
         """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.

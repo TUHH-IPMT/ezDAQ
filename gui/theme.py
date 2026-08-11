@@ -341,6 +341,21 @@ def draw_stop_icon(size: int = 16, y_offset: float = 0.0) -> QPixmap:
     return pixmap
 
 
+def draw_ellipsis_icon(size: int = 16) -> QPixmap:
+    """Drei-Punkte-Symbol ("…") als Hinweis, dass ein Button ein eigenes
+    Auswahlfenster öffnet statt einer Direktaktion (z. B. Hardwarekanal-/
+    Signaltyp-Auswahl in `gui/widgets/channel_table.py`)."""
+    pixmap, painter = _new_icon_pixmap(size)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(nav_icon_color())
+    dot_radius = max(1.0, size * 0.09)
+    center_y = size / 2
+    for i in (0.22, 0.5, 0.78):
+        painter.drawEllipse(QPointF(size * i, center_y), dot_radius, dot_radius)
+    painter.end()
+    return pixmap
+
+
 def set_theme(theme: str) -> None:
     """Setzt das Theme auf "light" oder "dark" und wendet es sofort an.
 

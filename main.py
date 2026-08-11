@@ -36,6 +36,14 @@ def _set_windows_app_user_model_id() -> None:
 
     Ohne explizite ID gruppiert Windows Python-Programme in der Taskbar
     häufig als "python.exe" und zeigt das Standard-Python-Icon.
+
+    Der Bezeichner-Suffix ("v2") ist bewusst da: Windows cached das
+    Taskleisten-Icon persistent pro AppUserModelID (auf Disk, übersteht
+    auch einen Explorer-Neustart). Wurde während der Entwicklung schon
+    einmal ohne (oder mit falschem) Icon unter derselben ID gestartet,
+    bleibt das generische Icon sonst dauerhaft hängen, selbst wenn der
+    Code jetzt korrekt ein eigenes Icon setzt. Ein neuer ID-String
+    erzwingt einen frischen Cache-Eintrag.
     """
     if os.name != "nt":
         return
@@ -43,7 +51,7 @@ def _set_windows_app_user_model_id() -> None:
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "DAQSoftware.App"
+            "DAQSoftware.App.v2"
         )
     except Exception:
         logging.getLogger(__name__).debug(
@@ -73,7 +81,11 @@ def main() -> int:
     from gui.theme import init_theme
     init_theme(app)
 
-    icon_path = get_resource_path("icon.png")
+    # .ico statt .png: enthaelt mehrere Aufloesungen (16-256px), die
+    # Windows fuer Titelleiste/Taskleiste/Alt-Tab jeweils passend waehlt.
+    # Eine einzelne 256px-PNG fuehrt auf manchen Windows-Systemen dazu,
+    # dass das Taskleisten-Icon gar nicht angezeigt wird.
+    icon_path = get_resource_path("icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     else:

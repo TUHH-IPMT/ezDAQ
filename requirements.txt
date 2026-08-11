@@ -7,6 +7,14 @@ pandas>=2.2.0
 pyarrow>=15.0.0
 psutil>=5.9.0
 
+# PyOpenGL: GPU-beschleunigtes Rendering fuer die Live-View-Plots
+# (pg.setConfigOptions(useOpenGL=True), siehe gui/live_view.py). Ohne
+# GPU-Beschleunigung rendert PyQtGraph per Software-QPainter, was auf
+# diesem Zielsystem den Qt-Event-Loop so stark blockierte, dass der
+# eigentlich auf ~33ms konfigurierte Live-Plot-Timer im Schnitt erst
+# alle ~90-130ms feuerte (siehe Diagnose in der Commit-Historie).
+PyOpenGL>=3.1.0
+
 # Optional: Polars kann bei sehr großen Analyse-Datensätzen als
 # performantere Alternative zu Pandas eingebunden werden. Aktuell nutzt
 # die Anwendung Pandas (in data/exporter.py und data/loader.py); Polars

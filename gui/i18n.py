@@ -79,14 +79,15 @@ _translations = {
         "duration": "Dauer",
         "sample_rate": "Abtastrate",
         "stop_measurement": "Messung stoppen",
-        "statistics": "Statistiken (aktuelle 10 s)",
-        "channel": "Kanal",
         "min": "Min",
         "max": "Max",
-        "rms": "RMS",
         "storage_buffer_group": "Speicherpuffer (Schreib-Rückstand)",
         "duration_value": "Dauer: {value}",
         "sample_rate_value": "Abtastrate: {value}",
+        "menu_y_autoscale": "Automatische Skalierung (Y-Achse)",
+        "menu_y_range": "Y-Achsen-Bereich festlegen",
+        "y_range_dialog_title": "Y-Achsen-Bereich",
+        "y_range_no_channels": "Keine Kanäle in der Live-Anzeige.",
         "axis_time": "Zeit",
         "storage_detail": "Datei: {file_size} — Rückstand: {pending} / {capacity} Samples ({percent} %)",
 
@@ -148,6 +149,8 @@ _translations = {
             "Es sind bereits alle erkannten Hardwarekanäle einer Zeile "
             "zugeordnet - es kann kein weiterer Kanal hinzugefügt werden."
         ),
+        "choose_signal_type_button": "Signaltyp wählen...",
+        "choose_signal_type_title": "Signaltyp wählen",
 
         # Settings
         "settings": "Einstellungen",
@@ -255,14 +258,15 @@ _translations = {
         "duration": "Duration",
         "sample_rate": "Sample Rate",
         "stop_measurement": "Stop Measurement",
-        "statistics": "Statistics (last 10 s)",
-        "channel": "Channel",
         "min": "Min",
         "max": "Max",
-        "rms": "RMS",
         "storage_buffer_group": "Storage Buffer (Write Backlog)",
         "duration_value": "Duration: {value}",
         "sample_rate_value": "Sample Rate: {value}",
+        "menu_y_autoscale": "Auto-Scale (Y Axis)",
+        "menu_y_range": "Set Y-Axis Range",
+        "y_range_dialog_title": "Y-Axis Range",
+        "y_range_no_channels": "No channels in the live view.",
         "axis_time": "Time",
         "storage_detail": "File: {file_size} — Backlog: {pending} / {capacity} Samples ({percent} %)",
 
@@ -324,6 +328,8 @@ _translations = {
             "All detected hardware channels are already assigned to a row - "
             "no further channel can be added."
         ),
+        "choose_signal_type_button": "Choose signal type...",
+        "choose_signal_type_title": "Choose Signal Type",
 
         # Settings
         "settings": "Settings",
