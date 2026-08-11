@@ -185,6 +185,11 @@ class MeasurementController:
                         shared_task=shared_task,
                     )
                     configured_devices.append(device)
+                if shared_task is not None:
+                    # Timing des gemeinsamen Tasks erst konfigurieren, nachdem
+                    # ALLE Geräte ihre Kanäle hinzugefügt haben (siehe
+                    # NIDAQSharedTask.finalize()).
+                    shared_task.finalize()
             except AcquisitionError:
                 self._close_devices(configured_devices)
                 raise
