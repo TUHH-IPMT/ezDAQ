@@ -132,19 +132,25 @@ class NIDAQSharedTask:
         self._channel_count = 0
         self._configured = False
         self._started = False
+        self._sample_rate_hz = 0.0
+        self._samples_per_read = 0
 
     def configure(self, sample_rate_hz: float, samples_per_read: int) -> None:
+        """Erzeugt den zugrunde liegenden Task.
+
+        Das Sample-Clock-Timing wird bewusst NICHT hier konfiguriert:
+        `cfg_samp_clk_timing()` schlägt mit "no devices in the task" fehl,
+        solange der Task noch keine Kanäle enthält. Kanäle werden erst
+        danach über `add_channel()` (einmal pro Gerät) hinzugefügt; das
+        Timing wird abschließend über `finalize()` konfiguriert, sobald
+        alle Geräte ihre Kanäle hinzugefügt haben.
+        """
         if not NIDAQMX_AVAILABLE:
             raise AcquisitionError("nidaqmx ist nicht installiert oder der NI-DAQmx-Treiber ist auf diesem System nicht verfügbar.")
 
         self._task = nidaqmx.Task()
-        self._task.timing.cfg_samp_clk_timing(
-            rate=sample_rate_hz,
-            sample_mode=AcquisitionType.CONTINUOUS,
-            samps_per_chan=samples_per_read,
-            source="OnboardClock",
-        )
-        self._reader = AnalogMultiChannelReader(self._task.in_stream)
+        self._sample_rate_hz = sample_rate_hz
+        self._samples_per_read = samples_per_read
         self._configured = True
 
     def add_channel(self, channel: Channel, channel_type: str) -> None:
@@ -162,6 +168,28 @@ class NIDAQSharedTask:
                 name_to_assign_to_channel=channel.display_name,
             )
         self._channel_count += 1
+
+    def finalize(self) -> None:
+        """Konfiguriert das Sample-Clock-Timing, nachdem alle Geräte ihre
+        Kanäle über `add_channel()` hinzugefügt haben. Muss genau einmal
+        aufgerufen werden, bevor der Task gestartet wird."""
+        if self._task is None:
+            raise AcquisitionError("Shared task ist nicht konfiguriert.")
+        if self._channel_count == 0:
+            raise AcquisitionError("Shared task hat keine Kanäle.")
+
+        try:
+            self._task.timing.cfg_samp_clk_timing(
+                rate=self._sample_rate_hz,
+                sample_mode=AcquisitionType.CONTINUOUS,
+                samps_per_chan=self._samples_per_read,
+                source="OnboardClock",
+            )
+            self._reader = AnalogMultiChannelReader(self._task.in_stream)
+        except DaqmxError as exc:
+            raise AcquisitionError(
+                f"Timing-Konfiguration des gemeinsamen Tasks fehlgeschlagen: {exc}"
+            ) from exc
 
     def start(self) -> None:
         if self._task is None:

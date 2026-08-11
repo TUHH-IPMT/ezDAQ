@@ -111,8 +111,9 @@ class ChannelTableWidget(QWidget):
     # ------------------------------------------------------------------ #
 
     def _on_add_clicked(self) -> None:
+        default_hw_channel = self._available_hw_channels[0] if self._available_hw_channels else ""
         default_channel = Channel(
-            hardware_channel="cDAQ1Mod1/ai0",
+            hardware_channel=default_hw_channel,
             display_name=f"Kanal {self._table.rowCount() + 1}",
         )
         self._add_row(default_channel)
