@@ -33,7 +33,7 @@ from typing import Optional
 
 import numpy as np
 
-from data.models import Channel, DeviceInfo, ModuleType, SignalType
+from data.models import Channel, DeviceInfo, ModuleType
 from hardware.base_device import AcquisitionError, BaseDevice
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,8 @@ class NIDAQSharedTask:
         Das Sample-Clock-Timing wird bewusst NICHT hier konfiguriert:
         `cfg_samp_clk_timing()` schlägt mit "no devices in the task" fehl,
         solange der Task noch keine Kanäle enthält. Kanäle werden erst
-        danach über `add_channel()` (einmal pro Gerät) hinzugefügt; das
+        danach von `NIDAQDevice.configure()` (einmal pro Gerät, über
+        `_add_channel_to_task()`) direkt zu `self._task` hinzugefügt; das
         Timing wird abschließend über `finalize()` konfiguriert, sobald
         alle Geräte ihre Kanäle hinzugefügt haben.
         """
@@ -153,26 +154,10 @@ class NIDAQSharedTask:
         self._samples_per_read = samples_per_read
         self._configured = True
 
-    def add_channel(self, channel: Channel, channel_type: str) -> None:
-        if self._task is None:
-            raise AcquisitionError("Shared task ist nicht konfiguriert.")
-
-        if channel_type == "voltage":
-            self._task.ai_channels.add_ai_voltage_chan(
-                physical_channel=channel.hardware_channel,
-                name_to_assign_to_channel=channel.display_name,
-            )
-        else:
-            self._task.ai_channels.add_ai_accel_chan(
-                physical_channel=channel.hardware_channel,
-                name_to_assign_to_channel=channel.display_name,
-            )
-        self._channel_count += 1
-
     def finalize(self) -> None:
         """Konfiguriert das Sample-Clock-Timing, nachdem alle Geräte ihre
-        Kanäle über `add_channel()` hinzugefügt haben. Muss genau einmal
-        aufgerufen werden, bevor der Task gestartet wird."""
+        Kanäle hinzugefügt haben. Muss genau einmal aufgerufen werden,
+        bevor der Task gestartet wird."""
         if self._task is None:
             raise AcquisitionError("Shared task ist nicht konfiguriert.")
         if self._channel_count == 0:
@@ -275,12 +260,17 @@ class NIDAQDevice(BaseDevice):
                     self._shared_task.configure(sample_rate_hz, samples_per_read)
                 self._channel_offset = self._shared_task._channel_count
                 for channel in self.active_channels:
-                    self._shared_task.add_channel(
-                        channel,
-                        "voltage"
-                        if channel.signal_type == SignalType.VOLTAGE
-                        else "accel",
-                    )
+                    # Bewusst dieselbe modulspezifische Methode wie im
+                    # Standalone-Task-Pfad verwenden (siehe unten), damit
+                    # Sensitivität, Messbereich, Anregungsstrom etc. auch
+                    # im gemeinsamen Task korrekt gesetzt werden. Ein
+                    # separates NIDAQSharedTask.add_channel() mit nur
+                    # physical_channel/name würde für IEPE-Kanäle auf
+                    # nidaqmx-Defaults zurückfallen (z. B. sensitivity=1000
+                    # mV/g statt des konfigurierten Sensorwerts) und so
+                    # falsche Messwerte liefern.
+                    self._add_channel_to_task(self._shared_task._task, channel)
+                    self._shared_task._channel_count += 1
                 self._is_configured = True
                 logger.info(
                     "%s konfiguriert als Teil eines gemeinsamen Tasks: %d Kanäle",
