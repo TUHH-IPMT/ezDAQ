@@ -84,10 +84,17 @@ _translations = {
         "storage_buffer_group": "Speicherpuffer (Schreib-Rückstand)",
         "duration_value": "Dauer: {value}",
         "sample_rate_value": "Abtastrate: {value}",
-        "menu_y_autoscale": "Automatische Skalierung (Y-Achse)",
-        "menu_y_range": "Y-Achsen-Bereich festlegen",
-        "y_range_dialog_title": "Y-Achsen-Bereich",
-        "y_range_no_channels": "Keine Kanäle in der Live-Anzeige.",
+        "menu_channel_display": "Kanal-Darstellung festlegen",
+        "channel_display_dialog_title": "Kanal-Darstellung",
+        "channel_display_no_channels": "Keine Kanäle konfiguriert.",
+        "plot_color": "Kurvenfarbe",
+        "plot_background": "Hintergrund",
+        "autoscale_checkbox": "Autoskalierung",
+        "autoscale_checkbox_tooltip": (
+            "Nutzt den festgelegten Bereich, solange die Messwerte darin "
+            "liegen - überschreiten sie ihn, schaltet die Skalierung "
+            "automatisch auf den tatsächlichen Wertebereich um."
+        ),
         "axis_time": "Zeit",
         "storage_detail": "Datei: {file_size} — Rückstand: {pending} / {capacity} Samples ({percent} %)",
 
@@ -263,10 +270,17 @@ _translations = {
         "storage_buffer_group": "Storage Buffer (Write Backlog)",
         "duration_value": "Duration: {value}",
         "sample_rate_value": "Sample Rate: {value}",
-        "menu_y_autoscale": "Auto-Scale (Y Axis)",
-        "menu_y_range": "Set Y-Axis Range",
-        "y_range_dialog_title": "Y-Axis Range",
-        "y_range_no_channels": "No channels in the live view.",
+        "menu_channel_display": "Set Channel Display",
+        "channel_display_dialog_title": "Channel Display",
+        "channel_display_no_channels": "No channels configured.",
+        "plot_color": "Curve Color",
+        "plot_background": "Background",
+        "autoscale_checkbox": "Autoscale",
+        "autoscale_checkbox_tooltip": (
+            "Uses the configured range as long as the measured values stay "
+            "within it - if they exceed it, scaling automatically switches "
+            "to the actual value range."
+        ),
         "axis_time": "Time",
         "storage_detail": "File: {file_size} — Backlog: {pending} / {capacity} Samples ({percent} %)",
 

@@ -415,11 +415,18 @@ class SetupView(QWidget):
 
         Anders als `build_current_config()`: keine Validierung, keine
         Fehlermeldung, funktioniert auch OHNE laufende Messung. Wird z. B.
-        von `gui/main_window.py` für den Y-Achsen-Bereich-Dialog genutzt,
+        von `gui/main_window.py` für den Kanal-Darstellung-Dialog genutzt,
         der schon vor dem Messstart nutzbar sein soll (die Live View kennt
         ihre Kanäle sonst erst, sobald eine Messung tatsächlich läuft).
         """
         return self._channel_table.get_channels()
+
+    def apply_channel_display_settings(self, settings: dict[str, dict]) -> None:
+        """Übernimmt vom "Kanal-Darstellung"-Dialog (siehe
+        `gui/live_view.py::ChannelDisplayDialog`) gesetzte Werte in die
+        Kanaltabelle, damit sie beim Speichern der Konfiguration erhalten
+        bleiben (siehe `ChannelTableWidget.apply_display_settings`)."""
+        self._channel_table.apply_display_settings(settings)
 
     def build_current_config(self) -> MeasurementConfig | None:
         """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.

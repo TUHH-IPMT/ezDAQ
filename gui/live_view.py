@@ -46,8 +46,10 @@ import logging
 import numpy as np
 import pyqtgraph as pg
 from PyQt6.QtCore import QSize, QTimer, pyqtSignal, Qt
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (
+    QCheckBox,
+    QColorDialog,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -72,6 +74,7 @@ from gui.theme import (
     curve_color,
     draw_play_icon,
     draw_stop_icon,
+    plot_background_color,
     style_plot_container,
     style_plot_item,
 )
@@ -107,36 +110,73 @@ def _format_bytes(num_bytes: float) -> str:
     return f"{value:.1f} TB"
 
 
-class YRangeDialog(QDialog):
-    """Dialog zum Festlegen eines festen Y-Achsen-Bereichs pro Kanal.
+class ChannelDisplayDialog(QDialog):
+    """Dialog zur Konfiguration von Kurvenfarbe, Hintergrundfarbe,
+    Y-Bereich und Autoskalierungs-Verhalten - jeweils PRO KANAL.
 
-    Wird über Optionen -> "Y-Achsen-Bereich festlegen..." geöffnet (siehe
-    `gui/main_window.py::_build_menu`). Nur relevant, solange Autoscale
-    deaktiviert ist (siehe `LiveView.set_y_autoscale`) - die hier
-    gesetzten Werte bleiben aber auch bei aktivem Autoscale gespeichert,
-    falls der Nutzer später zurückschaltet.
+    Wird über Optionen -> "Kanal-Darstellung festlegen..." geöffnet (siehe
+    `gui/main_window.py::_build_menu`). Schon vor dem Messstart nutzbar
+    (Kanäle kommen dafür aus der Setup-Konfiguration, siehe
+    `gui/main_window.py::_on_open_channel_display_dialog`).
+
+    "Autoskalierung" ist hier kein reines An/Aus: ist der Haken gesetzt,
+    wird der eingestellte feste Bereich (Min/Max) verwendet, SOLANGE die
+    tatsächlichen Messwerte darin liegen - überschreiten sie ihn, schaltet
+    die Skalierung für diesen Kanal automatisch auf den tatsächlichen
+    Wertebereich um (siehe `LiveView._apply_channel_y_range`). Ist der
+    Haken NICHT gesetzt, bleibt der feste Bereich immer aktiv, egal was
+    die Messwerte tun.
     """
 
     def __init__(
         self,
         channels: list[Channel],
-        current_ranges: dict[str, tuple[float, float]],
+        default_color: str,
+        default_background: str,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle(t("y_range_dialog_title"))
+        self.setWindowTitle(t("channel_display_dialog_title"))
 
-        layout = QFormLayout(self)
-        self._spin_pairs: dict[str, tuple[QDoubleSpinBox, QDoubleSpinBox]] = {}
+        self._colors: dict[str, str] = {}
+        self._backgrounds: dict[str, str] = {}
+        self._rows: dict[str, dict[str, QWidget]] = {}
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        layout.addLayout(form)
 
         for channel in channels:
-            default_min = channel.min_range if channel.min_range is not None else -10.0
-            default_max = channel.max_range if channel.max_range is not None else 10.0
-            current_min, current_max = current_ranges.get(
-                channel.hardware_channel, (default_min, default_max)
-            )
+            hw = channel.hardware_channel
+            hw_default_min = channel.min_range if channel.min_range is not None else -10.0
+            hw_default_max = channel.max_range if channel.max_range is not None else 10.0
+            current_min = channel.plot_y_min if channel.plot_y_min is not None else hw_default_min
+            current_max = channel.plot_y_max if channel.plot_y_max is not None else hw_default_max
+            self._colors[hw] = channel.plot_color or default_color
+            self._backgrounds[hw] = channel.plot_background or default_background
 
             row = QHBoxLayout()
+
+            color_button = QPushButton()
+            color_button.setFixedSize(24, 24)
+            color_button.setToolTip(t("plot_color"))
+            self._update_swatch(color_button, self._colors[hw])
+            color_button.clicked.connect(
+                lambda _checked, h=hw, b=color_button: self._pick_color(h, b, is_background=False)
+            )
+            row.addWidget(QLabel(f"{t('plot_color')}:"))
+            row.addWidget(color_button)
+
+            bg_button = QPushButton()
+            bg_button.setFixedSize(24, 24)
+            bg_button.setToolTip(t("plot_background"))
+            self._update_swatch(bg_button, self._backgrounds[hw])
+            bg_button.clicked.connect(
+                lambda _checked, h=hw, b=bg_button: self._pick_color(h, b, is_background=True)
+            )
+            row.addWidget(QLabel(f"{t('plot_background')}:"))
+            row.addWidget(bg_button)
+
             min_spin = QDoubleSpinBox()
             min_spin.setRange(-1e9, 1e9)
             min_spin.setDecimals(3)
@@ -150,21 +190,54 @@ class YRangeDialog(QDialog):
             row.addWidget(QLabel(f"{t('max')}:"))
             row.addWidget(max_spin)
 
-            layout.addRow(channel.display_name, row)
-            self._spin_pairs[channel.hardware_channel] = (min_spin, max_spin)
+            autoscale_check = QCheckBox(t("autoscale_checkbox"))
+            autoscale_check.setToolTip(t("autoscale_checkbox_tooltip"))
+            autoscale_check.setChecked(channel.plot_autoscale)
+            row.addWidget(autoscale_check)
+
+            form.addRow(channel.display_name, row)
+            self._rows[hw] = {
+                "min": min_spin,
+                "max": max_spin,
+                "autoscale": autoscale_check,
+            }
 
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
         ok_button.clicked.connect(self.accept)
         cancel_button.clicked.connect(self.reject)
-        layout.addRow(button_box)
+        layout.addWidget(button_box)
 
-    def ranges(self) -> dict[str, tuple[float, float]]:
-        """Gibt die eingestellten Bereiche zurück (nur bei OK gültig)."""
+    def _pick_color(self, hw_channel: str, button: QPushButton, is_background: bool) -> None:
+        store = self._backgrounds if is_background else self._colors
+        initial = QColor(store.get(hw_channel, "#ffffff"))
+        color = QColorDialog.getColor(initial, self)
+        if not color.isValid():
+            return
+        store[hw_channel] = color.name()
+        self._update_swatch(button, color.name())
+
+    @staticmethod
+    def _update_swatch(button: QPushButton, hex_color: str) -> None:
+        button.setStyleSheet(f"background-color: {hex_color}; border: 1px solid #888888;")
+
+    def results(self) -> dict[str, dict]:
+        """Gibt die eingestellten Werte pro Kanal zurück (nur bei OK gültig).
+
+        Format je Kanal passend zu `Channel.plot_*`/
+        `ChannelTableWidget.apply_display_settings` /
+        `LiveView._apply_display_settings_to_live_channels`.
+        """
         return {
-            hw_channel: (min_spin.value(), max_spin.value())
-            for hw_channel, (min_spin, max_spin) in self._spin_pairs.items()
+            hw_channel: {
+                "plot_color": self._colors[hw_channel],
+                "plot_background": self._backgrounds[hw_channel],
+                "plot_y_min": row["min"].value(),
+                "plot_y_max": row["max"].value(),
+                "plot_autoscale": row["autoscale"].isChecked(),
+            }
+            for hw_channel, row in self._rows.items()
         }
 
 
@@ -213,11 +286,22 @@ class LiveView(QWidget):
         # tatsächlichen Zyklus-Wechsel neu gesetzt, nicht bei jedem Tick.
         self._x_range_cycle_start: float | None = None
 
-        # Y-Achse: Autoscale (Default) oder fester, pro Kanal konfigurierter
-        # Bereich (siehe `set_y_autoscale`/`open_y_range_dialog`,
-        # Menüpunkte in `gui/main_window.py::_build_menu`).
-        self._y_autoscale = True
-        self._y_ranges: dict[str, tuple[float, float]] = {}
+        # Darstellung pro Kanal (Kurvenfarbe, Hintergrund, Y-Bereich,
+        # Autoskalierungs-Verhalten) lebt direkt auf den `Channel`-Objekten
+        # selbst (`plot_color`/`plot_background`/`plot_y_min`/`plot_y_max`/
+        # `plot_autoscale`, siehe `data/models.py`) - dadurch nimmt jeder
+        # `Channel` seine Darstellung automatisch mit (auch beim
+        # Speichern/Laden der Konfiguration), ohne dass die Live View
+        # eigene, separat zu pflegende Zuordnungs-Dicts bräuchte. Siehe
+        # `open_channel_display_dialog`, Menüpunkt in
+        # `gui/main_window.py::_build_menu`.
+
+        # Pro Kanal, ob die Y-Achse GERADE (dieser Tick) im Autoscale-Modus
+        # ist oder den festen Bereich nutzt - nur zur Vermeidung
+        # unnötiger `setYRange`/`enableAutoRange`-Aufrufe, wenn sich am
+        # effektiven Modus nichts geändert hat (siehe
+        # `_apply_channel_y_range`).
+        self._channel_y_auto_active: dict[str, bool] = {}
 
         self._plot_widget = pg.GraphicsLayoutWidget()
         self._plot_items: list = []
@@ -303,6 +387,27 @@ class LiveView(QWidget):
     # Öffentliche API (von main_window.py aufgerufen)
     # ------------------------------------------------------------------ #
 
+    def preview_channels(self, channels: list[Channel]) -> None:
+        """Baut die Plot-Anordnung schon anhand der im Setup konfigurierten
+        Kanäle auf, BEVOR eine Messung gestartet wird - die Live View muss
+        so nicht leer bleiben, bis tatsächlich gestartet wird.
+
+        Wirkt nur, solange keine Messung läuft (`self._reader_id is None`);
+        eine laufende Messung darf ihre eigenen, tatsächlich erfassten
+        Plots nicht durch eine Vorschau der (evtl. seitdem geänderten)
+        Setup-Konfiguration ersetzt bekommen.
+
+        Baut NUR neu auf, wenn sich die Kanalkonfiguration gegenüber der
+        zuletzt angezeigten tatsächlich geändert hat (`Channel` ist ein
+        `@dataclass`, Listenvergleich also elementweise nach Inhalt) -
+        sonst würde jeder Klick auf die Live-View-Kachel die Plots
+        unnötig neu aufbauen, selbst wenn sich im Setup nichts geändert hat.
+        """
+        if self._reader_id is not None or channels == self._channels:
+            return
+        self._channels = channels
+        self._rebuild_plots()
+
     def start_display(
         self,
         channels: list[Channel],
@@ -381,10 +486,14 @@ class LiveView(QWidget):
         """
         style_plot_container(self._plot_widget)
         self._retheme_action_button_icons()
-        new_curve_color = curve_color()
-        for plot_item, curve in zip(self._plot_items, self._curves):
+        for plot_item in self._plot_items:
             style_plot_item(plot_item)
-            curve.setPen(pg.mkPen(color=new_curve_color, width=1.5))
+        # Kurvenfarbe/Hintergrund NICHT pauschal auf den Theme-Default
+        # zurücksetzen - individuell konfigurierte Kanalfarben (siehe
+        # `open_channel_display_dialog`) sollen einen Theme-Wechsel
+        # überstehen; `_apply_channel_appearance()` wendet für Kanäle OHNE
+        # eigene Farbe ohnehin den (jetzt neuen) Theme-Default an.
+        self._apply_channel_appearance()
 
     def _retheme_action_button_icons(self) -> None:
         self._start_button.setIcon(QIcon(draw_play_icon(20, y_offset=0.6)))
@@ -399,48 +508,72 @@ class LiveView(QWidget):
     def set_start_enabled(self, enabled: bool) -> None:
         self._start_button.setEnabled(enabled)
 
-    def set_y_autoscale(self, enabled: bool) -> None:
-        """Schaltet die automatische Y-Achsen-Skalierung an/aus.
+    def open_channel_display_dialog(
+        self, channels: list[Channel] | None = None
+    ) -> dict[str, dict] | None:
+        """Öffnet den Dialog für Kurvenfarbe/Hintergrund/Y-Bereich/
+        Autoskalierung pro Kanal.
 
-        Aufgerufen vom Menüpunkt Optionen -> "Automatische Skalierung"
-        (siehe `gui/main_window.py::_build_menu`). PyQtGraph skaliert die
-        Y-Achse standardmäßig bei JEDEM neuen Datenblock neu - bei
-        verrauschten/springenden Signalen wirkt das durch die ständig
-        mitwackelnde Skala unruhig. Ausgeschaltet wird stattdessen der pro
-        Kanal konfigurierte feste Bereich verwendet (siehe
-        `open_y_range_dialog`, Default -10..10 bzw. `channel.min_range`/
-        `max_range`, falls gesetzt).
-        """
-        self._y_autoscale = enabled
-        self._apply_y_range_mode()
-
-    def open_y_range_dialog(self, channels: list[Channel] | None = None) -> None:
-        """Öffnet den Dialog zum Festlegen fester Y-Achsen-Bereiche pro Kanal.
-
-        Aufgerufen vom Menüpunkt Optionen -> "Y-Achsen-Bereich
+        Aufgerufen vom Menüpunkt Optionen -> "Kanal-Darstellung
         festlegen..." (siehe `gui/main_window.py::_build_menu`).
 
         Args:
-            channels: Kanäle, die im Dialog angeboten werden. `None`
-                (Default) verwendet die aktuell live angezeigten Kanäle
-                (`self._channels`, nur während einer laufenden Messung
-                gefüllt). `gui/main_window.py` übergibt stattdessen die
-                Kanäle aus der Setup-Konfiguration, damit sich Bereiche
-                schon VOR dem Messstart einstellen lassen - gespeichert
-                wird ohnehin pro `hardware_channel`, unabhängig davon,
-                wann der Bereich gesetzt wurde (siehe `_apply_y_range_mode`,
-                die die gespeicherten Werte beim nächsten `start_display()`
-                automatisch übernimmt).
+            channels: Kanäle, die im Dialog angeboten werden (ihre
+                aktuellen `plot_*`-Felder sind die Vorbelegung, siehe
+                `data/models.py::Channel`). `None` (Default) verwendet die
+                aktuell live angezeigten Kanäle (`self._channels`, nur
+                während einer laufenden Messung gefüllt).
+                `gui/main_window.py` übergibt stattdessen die Kanäle aus
+                der Setup-Konfiguration, damit sich die Darstellung schon
+                VOR dem Messstart einstellen lässt.
+
+        Returns:
+            Die im Dialog gesetzten Werte pro Kanal (siehe
+            `ChannelDisplayDialog.results()`), oder `None` bei Abbruch/
+            fehlenden Kanälen. `gui/main_window.py` reicht das Ergebnis an
+            `SetupView.apply_channel_display_settings()` weiter, damit die
+            Werte beim Speichern der Konfiguration erhalten bleiben - die
+            Live View selbst kennt nur ihre eigenen `self._channels`
+            (siehe `_apply_display_settings_to_live_channels`).
         """
         channels = channels if channels is not None else self._channels
         if not channels:
-            QMessageBox.information(self, t("y_range_dialog_title"), t("y_range_no_channels"))
-            return
-        dialog = YRangeDialog(channels, self._y_ranges, self)
+            QMessageBox.information(
+                self, t("channel_display_dialog_title"), t("channel_display_no_channels")
+            )
+            return None
+        dialog = ChannelDisplayDialog(channels, curve_color(), plot_background_color(), self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        settings = dialog.results()
+        self._apply_display_settings_to_live_channels(settings)
+        return settings
+
+    def _apply_display_settings_to_live_channels(self, settings: dict[str, dict]) -> None:
+        """Überträgt vom Dialog gesetzte Werte auf die AKTUELL live
+        angezeigten Kanäle (`self._channels`).
+
+        Relevant, falls der Dialog mit einer anderen Kanalliste (z. B. aus
+        dem Setup, siehe `open_channel_display_dialog`) geöffnet wurde,
+        während gerade eine Messung läuft: die laufende Anzeige soll sich
+        sofort aktualisieren, nicht erst beim nächsten Messstart.
+        """
+        if not self._channels:
             return
-        self._y_ranges.update(dialog.ranges())
-        self._apply_y_range_mode()
+        changed = False
+        for channel in self._channels:
+            values = settings.get(channel.hardware_channel)
+            if values is None:
+                continue
+            channel.plot_color = values.get("plot_color")
+            channel.plot_background = values.get("plot_background")
+            channel.plot_y_min = values.get("plot_y_min")
+            channel.plot_y_max = values.get("plot_y_max")
+            channel.plot_autoscale = values.get("plot_autoscale", True)
+            changed = True
+        if changed:
+            self._apply_channel_appearance()
+            self._apply_y_range_mode()
 
     # ------------------------------------------------------------------ #
     # Interna
@@ -451,6 +584,7 @@ class LiveView(QWidget):
         self._plot_widget.clear()
         self._plot_items = []
         self._curves = []
+        self._channel_y_auto_active = {}
 
         previous_plot_item = None
         for channel in self._channels:
@@ -477,21 +611,70 @@ class LiveView(QWidget):
             self._curves.append(curve)
             previous_plot_item = plot_item
 
+        self._apply_channel_appearance()
         self._apply_y_range_mode()
 
+    def _apply_channel_appearance(self) -> None:
+        """Wendet Kurvenfarbe und Hintergrundfarbe pro Kanal an (siehe
+        `open_channel_display_dialog`) - Theme-Default, falls für einen
+        Kanal keine eigene Farbe konfiguriert ist."""
+        for plot_item, curve, channel in zip(self._plot_items, self._curves, self._channels):
+            color = channel.plot_color or curve_color()
+            background = channel.plot_background or plot_background_color()
+            curve.setPen(pg.mkPen(color=color, width=1.5))
+            plot_item.getViewBox().setBackgroundColor(background)
+
     def _apply_y_range_mode(self) -> None:
-        """Wendet Autoscale bzw. den festen Y-Bereich auf alle Subplots an
-        (siehe `set_y_autoscale`/`open_y_range_dialog`)."""
+        """Wendet den Y-Bereich (fest, Autoscale oder Hybrid) auf alle
+        Subplots an - ohne aktuelle Messwerte (siehe `_apply_channel_y_range`),
+        z. B. direkt nach `_rebuild_plots()` oder nach Ändern der
+        Einstellungen im Dialog, bevor der nächste Tick neue Daten liefert.
+        """
         for plot_item, channel in zip(self._plot_items, self._channels):
-            if self._y_autoscale:
-                plot_item.enableAutoRange(y=True)
-                continue
-            plot_item.enableAutoRange(y=False)
-            default_min = channel.min_range if channel.min_range is not None else -10.0
-            default_max = channel.max_range if channel.max_range is not None else 10.0
-            y_min, y_max = self._y_ranges.get(
-                channel.hardware_channel, (default_min, default_max)
+            self._apply_channel_y_range(plot_item, channel, None)
+
+    def _apply_channel_y_range(
+        self, plot_item, channel: Channel, data: np.ndarray | None
+    ) -> None:
+        """Setzt die Y-Achse eines einzelnen Subplots gemäß der pro Kanal
+        konfigurierten Autoskalierung (siehe `ChannelDisplayDialog`).
+
+        Kein reines An/Aus: Ist Autoskalierung für den Kanal aktiviert
+        (Default), wird der konfigurierte feste Bereich verwendet, SOLANGE
+        `data` (die aktuell angezeigten Messwerte, `None` = noch keine)
+        innerhalb davon liegt - über-/unterschreitet auch nur ein Wert
+        diesen Bereich, übernimmt PyQtGraphs Autoscale für den Rest des
+        aktuellen Durchlaufs. Ist Autoskalierung deaktiviert, bleibt der
+        feste Bereich immer aktiv, unabhängig von `data`.
+
+        `self._channel_y_auto_active` verhindert unnötige
+        `setYRange`/`enableAutoRange`-Aufrufe, wenn sich der effektive
+        Modus gegenüber dem letzten Aufruf nicht geändert hat.
+        """
+        hw = channel.hardware_channel
+        default_min = channel.min_range if channel.min_range is not None else -10.0
+        default_max = channel.max_range if channel.max_range is not None else 10.0
+        y_min = channel.plot_y_min if channel.plot_y_min is not None else default_min
+        y_max = channel.plot_y_max if channel.plot_y_max is not None else default_max
+        autoscale = channel.plot_autoscale
+
+        if autoscale:
+            use_auto = bool(
+                data is not None
+                and data.size > 0
+                and (float(np.min(data)) < y_min or float(np.max(data)) > y_max)
             )
+        else:
+            use_auto = False
+
+        if self._channel_y_auto_active.get(hw) == use_auto:
+            return
+        self._channel_y_auto_active[hw] = use_auto
+
+        if use_auto:
+            plot_item.enableAutoRange(y=True)
+        else:
+            plot_item.enableAutoRange(y=False)
             plot_item.setYRange(y_min, y_max, padding=0)
 
     def _on_storage_timer_tick(self) -> None:
@@ -575,6 +758,12 @@ class LiveView(QWidget):
 
         for i, curve in enumerate(self._curves):
             curve.setData(times, all_values[i])
+
+        # Hybrid-Autoskalierung pro Kanal (fester Bereich, bis Messwerte
+        # ihn über-/unterschreiten - siehe `_apply_channel_y_range`) mit
+        # den JETZT tatsächlich angezeigten Werten neu bewerten.
+        for i, (plot_item, channel) in enumerate(zip(self._plot_items, self._channels)):
+            self._apply_channel_y_range(plot_item, channel, all_values[i])
 
         # X-Bereich selbst bleibt fensterbreit fest (Sweep scrollt nicht) -
         # nur bei einem tatsächlichen Zyklus-Wechsel (neuer Durchlauf

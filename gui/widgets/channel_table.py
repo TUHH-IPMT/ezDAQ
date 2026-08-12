@@ -371,6 +371,15 @@ class ChannelTableWidget(QWidget):
         self._available_hw_channels: list[str] = []
         self._hw_channel_to_module: dict[str, ModuleType] = {}
 
+        # Live-View-Darstellung (Kurvenfarbe, Hintergrund, Y-Bereich,
+        # Autoskalierung) pro Hardwarekanal - die Tabelle hat dafür keine
+        # eigenen Spalten (wird über den "Kanal-Darstellung"-Dialog in
+        # gui/live_view.py gesetzt, siehe `apply_display_settings`), muss
+        # die Werte aber beim Auslesen (`_read_row`) mit an den `Channel`
+        # zurückgeben, damit sie beim Speichern der Konfiguration erhalten
+        # bleiben.
+        self._display_settings: dict[str, dict] = {}
+
         button_row = QHBoxLayout()
         self._add_button = QPushButton(t("add_channel_button"))
         self._remove_button = QPushButton(t("remove_channel_button"))
@@ -862,6 +871,18 @@ class ChannelTableWidget(QWidget):
         self._apply_device_constraint(row)
         self._update_row_numbers()
 
+        # Live-View-Darstellung des übergebenen Kanals übernehmen (z. B.
+        # beim Laden einer gespeicherten Konfiguration) - siehe
+        # `_display_settings`/`_read_row`.
+        if channel.hardware_channel:
+            self._display_settings[channel.hardware_channel] = {
+                "plot_color": channel.plot_color,
+                "plot_background": channel.plot_background,
+                "plot_y_min": channel.plot_y_min,
+                "plot_y_max": channel.plot_y_max,
+                "plot_autoscale": channel.plot_autoscale,
+            }
+
     def _read_row(self, row: int) -> Channel:
         enabled_widget = self._table.cellWidget(row, _COL_ENABLED)
         enabled = enabled_widget.findChild(QCheckBox).isChecked()
@@ -875,6 +896,7 @@ class ChannelTableWidget(QWidget):
         scale = self._table.cellWidget(row, _COL_SCALE).value()
         offset = self._table.cellWidget(row, _COL_OFFSET).value()
         sensitivity = self._table.cellWidget(row, _COL_SENSITIVITY).value()
+        display_settings = self._display_settings.get(hardware_channel, {})
 
         return Channel(
             hardware_channel=hardware_channel,
@@ -886,7 +908,23 @@ class ChannelTableWidget(QWidget):
             module_type=module_type,
             enabled=enabled,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
+            plot_color=display_settings.get("plot_color"),
+            plot_background=display_settings.get("plot_background"),
+            plot_y_min=display_settings.get("plot_y_min"),
+            plot_y_max=display_settings.get("plot_y_max"),
+            plot_autoscale=display_settings.get("plot_autoscale", True),
         )
+
+    def apply_display_settings(self, settings: dict[str, dict]) -> None:
+        """Übernimmt vom "Kanal-Darstellung"-Dialog (siehe
+        `gui/live_view.py::ChannelDisplayDialog`) gesetzte Werte, damit sie
+        beim nächsten Auslesen der Tabelle (`_read_row`, z. B. beim
+        Speichern der Konfiguration) erhalten bleiben. `settings` ist nach
+        `hardware_channel` geschlüsselt, siehe `_add_row` für das
+        erwartete Dict-Format je Kanal.
+        """
+        for hw_channel, values in settings.items():
+            self._display_settings[hw_channel] = values
 
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))

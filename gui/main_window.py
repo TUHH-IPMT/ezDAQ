@@ -339,13 +339,10 @@ class MainWindow(QMainWindow):
         self._theme_action_group.triggered.connect(self._on_theme_action_triggered)
 
         self._settings_menu.addSeparator()
-        self._y_autoscale_action = self._settings_menu.addAction(t("menu_y_autoscale"))
-        self._y_autoscale_action.setCheckable(True)
-        self._y_autoscale_action.setChecked(True)
-        self._y_autoscale_action.toggled.connect(self._live_view.set_y_autoscale)
-
-        self._y_range_action = self._settings_menu.addAction(f"{t('menu_y_range')}...")
-        self._y_range_action.triggered.connect(self._on_open_y_range_dialog)
+        self._channel_display_action = self._settings_menu.addAction(
+            f"{t('menu_channel_display')}..."
+        )
+        self._channel_display_action.triggered.connect(self._on_open_channel_display_dialog)
 
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
         self._about_action = self._help_menu.addAction(t("menu_about"))
@@ -367,18 +364,24 @@ class MainWindow(QMainWindow):
         set_theme(new_theme)
         self._configuration_manager.update_theme(new_theme)
 
-    def _on_open_y_range_dialog(self) -> None:
-        """Öffnet den Y-Achsen-Bereich-Dialog mit den im Setup konfigurierten
+    def _on_open_channel_display_dialog(self) -> None:
+        """Öffnet den Kanal-Darstellung-Dialog mit den im Setup konfigurierten
         Kanälen (siehe `SetupView.get_configured_channels()`).
 
-        Bewusst NICHT `self._live_view.open_y_range_dialog()` ohne
+        Bewusst NICHT `self._live_view.open_channel_display_dialog()` ohne
         Argument: die Live View kennt ihre Kanäle erst, sobald eine
-        Messung tatsächlich läuft (`start_display()`) - der Bereich soll
-        aber schon vorher, direkt nach dem Konfigurieren im Setup,
+        Messung tatsächlich läuft (`start_display()`) - die Darstellung
+        soll aber schon vorher, direkt nach dem Konfigurieren im Setup,
         einstellbar sein.
         """
         channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
-        self._live_view.open_y_range_dialog(channels)
+        settings = self._live_view.open_channel_display_dialog(channels)
+        if settings is not None:
+            # Zurück ins Setup schreiben, damit die Werte beim Speichern
+            # der Konfiguration erhalten bleiben (siehe
+            # `SetupView.apply_channel_display_settings`) - die Live View
+            # kennt hier nur die übergebene Kopie, nicht die Kanaltabelle.
+            self._setup_view.apply_channel_display_settings(settings)
 
     def _build_status_bar(self) -> None:
         self._status_label = QLabel(t("ready"))
@@ -404,8 +407,7 @@ class MainWindow(QMainWindow):
         self._theme_menu.setTitle(t("menu_theme"))
         self._theme_light_action.setText(t("theme_light"))
         self._theme_dark_action.setText(t("theme_dark"))
-        self._y_autoscale_action.setText(t("menu_y_autoscale"))
-        self._y_range_action.setText(f"{t('menu_y_range')}...")
+        self._channel_display_action.setText(f"{t('menu_channel_display')}...")
 
         self._help_menu.setTitle(f"&{t('menu_help')}")
         self._about_action.setText(t("menu_about"))
@@ -477,6 +479,13 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, row: int) -> None:
         self._workspace.setCurrentIndex(min(row, _VIEW_ANALYSIS))
+        # Live View schon beim Wechsel dorthin mit den aktuell im Setup
+        # konfigurierten Kanälen "vorbelegen" (Plot-Fenster stehen dann
+        # schon bereit, statt erst nach dem Messstart) - nur ohne laufende
+        # Messung, siehe `LiveView.preview_channels`.
+        if row == _VIEW_LIVE and not self._controller.is_running:
+            channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
+            self._live_view.preview_channels(channels)
 
     # ------------------------------------------------------------------ #
     # Speicherort

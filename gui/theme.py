@@ -122,6 +122,15 @@ def curve_color() -> str:
     return _PLOT_COLORS[_current_theme]["curve"]
 
 
+def plot_background_color() -> str:
+    """Standard-Hintergrundfarbe für neue Plots im aktuellen Theme.
+
+    Fallback für Kanäle ohne individuell konfigurierte Hintergrundfarbe
+    (siehe `gui/live_view.py::ChannelDisplayDialog`).
+    """
+    return _PLOT_COLORS[_current_theme]["background"]
+
+
 def style_plot_container(widget) -> None:
     """Setzt den Hintergrund eines PyQtGraph-Containers (`PlotWidget` oder
     `GraphicsLayoutWidget`) auf die aktuelle Theme-Hintergrundfarbe."""
@@ -129,11 +138,15 @@ def style_plot_container(widget) -> None:
 
 
 def style_plot_item(plot_item) -> None:
-    """Färbt Achsen eines einzelnen PyQtGraph-`PlotItem` im aktuellen Theme.
+    """Färbt Achsen und Titel eines einzelnen PyQtGraph-`PlotItem` im
+    aktuellen Theme.
 
     Nötig, weil bereits erzeugte `PlotItem`s die globalen
     `pg.setConfigOption(...)`-Werte NICHT rückwirkend übernehmen - nur neu
-    erzeugte Plots tun das automatisch.
+    erzeugte Plots tun das automatisch. Der Titel (`addPlot(title=...)`)
+    ist davon extra betroffen: er bleibt sonst in seiner ursprünglichen
+    Farbe (z. B. Schwarz aus dem Hell-Theme) hängen, auch nachdem die
+    Achsen bereits per `axis.setTextPen(...)` umgefärbt wurden.
     """
     foreground = _PLOT_COLORS[_current_theme]["foreground"]
     for axis_name in ("left", "bottom", "right", "top"):
@@ -141,6 +154,8 @@ def style_plot_item(plot_item) -> None:
         if axis is not None:
             axis.setPen(foreground)
             axis.setTextPen(foreground)
+    if plot_item.titleLabel.text:
+        plot_item.setTitle(plot_item.titleLabel.text, color=foreground)
 
 
 # ---------------------------------------------------------------------- #

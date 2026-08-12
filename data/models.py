@@ -70,6 +70,21 @@ class Channel:
         max_range: Optionaler oberer Messbereich (z. B. +10.0 V bei NI9215).
         sensitivity_mv_per_unit: Sensorempfindlichkeit in mV/Einheit,
             relevant für IEPE-Beschleunigungssensoren (NI9234).
+        plot_color: Individuelle Kurvenfarbe in der Live View (z. B.
+            "#64b5f6"), `None` = Theme-Standardfarbe (siehe
+            `gui/live_view.py::ChannelDisplayDialog`).
+        plot_background: Individuelle Plot-Hintergrundfarbe, `None` =
+            Theme-Standardhintergrund.
+        plot_y_min: Unterer Y-Achsen-Anzeigebereich der Live View. Anders
+            als `min_range`/`max_range` (Hardware-Messbereich) rein eine
+            Darstellungseinstellung - `None` fällt auf `min_range` bzw.
+            -10.0 zurück.
+        plot_y_max: Oberer Y-Achsen-Anzeigebereich der Live View, `None`
+            fällt auf `max_range` bzw. 10.0 zurück.
+        plot_autoscale: Ob die Y-Achse bei Über-/Unterschreiten von
+            `plot_y_min`/`plot_y_max` automatisch auf den tatsächlichen
+            Wertebereich umschaltet - ist dies `False`, bleibt der feste
+            Bereich immer aktiv.
 
     Die physikalische Umrechnung erfolgt gemäß:
         physikalischer_wert = rohwert * scale + offset
@@ -86,6 +101,11 @@ class Channel:
     min_range: Optional[float] = -10.0
     max_range: Optional[float] = 10.0
     sensitivity_mv_per_unit: Optional[float] = None
+    plot_color: Optional[str] = None
+    plot_background: Optional[str] = None
+    plot_y_min: Optional[float] = None
+    plot_y_max: Optional[float] = None
+    plot_autoscale: bool = True
 
     def to_physical(self, raw_value: float) -> float:
         """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
@@ -105,6 +125,11 @@ class Channel:
             "min_range": self.min_range,
             "max_range": self.max_range,
             "sensitivity_mv_per_unit": self.sensitivity_mv_per_unit,
+            "plot_color": self.plot_color,
+            "plot_background": self.plot_background,
+            "plot_y_min": self.plot_y_min,
+            "plot_y_max": self.plot_y_max,
+            "plot_autoscale": self.plot_autoscale,
         }
 
     @classmethod
@@ -122,6 +147,11 @@ class Channel:
             min_range=data.get("min_range", -10.0),
             max_range=data.get("max_range", 10.0),
             sensitivity_mv_per_unit=data.get("sensitivity_mv_per_unit"),
+            plot_color=data.get("plot_color"),
+            plot_background=data.get("plot_background"),
+            plot_y_min=data.get("plot_y_min"),
+            plot_y_max=data.get("plot_y_max"),
+            plot_autoscale=data.get("plot_autoscale", True),
         )
 
 
