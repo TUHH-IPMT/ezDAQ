@@ -1,7 +1,7 @@
 """
 main.py
 
-Einstiegspunkt der DAQSoftware-Anwendung.
+Einstiegspunkt der ezDAQ-Anwendung.
 
 Initialisiert Logging, den ConfigurationManager und den
 MeasurementController und startet die Qt-GUI (Hauptfenster).
@@ -37,7 +37,7 @@ def _set_windows_app_user_model_id() -> None:
     Ohne explizite ID gruppiert Windows Python-Programme in der Taskbar
     häufig als "python.exe" und zeigt das Standard-Python-Icon.
 
-    Der Bezeichner-Suffix ("v3") ist bewusst da: Windows cached das
+    Der Bezeichner-Suffix ("v1") ist bewusst da: Windows cached das
     Taskleisten-Icon persistent pro AppUserModelID (auf Disk, übersteht
     auch einen Explorer-Neustart). Wurde während der Entwicklung schon
     einmal ohne (oder mit falschem) Icon unter derselben ID gestartet,
@@ -45,10 +45,10 @@ def _set_windows_app_user_model_id() -> None:
     Code jetzt korrekt ein eigenes Icon setzt. Ein neuer ID-String
     erzwingt einen frischen Cache-Eintrag.
 
-    Historie: "v2" wurde ebenfalls schon mit einem inkonsistenten
-    Icon-Zustand gestartet (Taskleiste zeigte beim Start kurz kein/das
-    falsche Icon, bevor die laufende App es per WM_SETICON überschrieb) -
-    "v3" erzwingt daher erneut einen frischen Cache-Eintrag.
+    Historie: Unter dem früheren Namen "DAQSoftware" war die Zählung
+    bereits bei "v3" angekommen (die Vorgänger-IDs waren jeweils mit
+    inkonsistentem Icon-Zustand gestartet worden). Mit der Umbenennung
+    auf "ezDAQ" beginnt ein eigener ID-Namensraum, daher wieder "v1".
     """
     if os.name != "nt":
         return
@@ -56,7 +56,7 @@ def _set_windows_app_user_model_id() -> None:
         import ctypes
 
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "DAQSoftware.App.v3"
+            "ezDAQ.App.v1"
         )
     except Exception:
         logging.getLogger(__name__).debug(
@@ -67,7 +67,7 @@ def _set_windows_app_user_model_id() -> None:
 def main() -> int:
     configure_logging()
     logger = logging.getLogger(__name__)
-    logger.info("DAQSoftware wird gestartet ...")
+    logger.info("ezDAQ wird gestartet ...")
     _set_windows_app_user_model_id()
 
     # Importe bewusst innerhalb von main(), damit ein reiner Import von
@@ -81,7 +81,7 @@ def main() -> int:
     from gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
-    app.setApplicationName("DAQSoftware")
+    app.setApplicationName("ezDAQ")
 
     from gui.theme import init_theme
     init_theme(app)
@@ -110,7 +110,7 @@ def main() -> int:
     window.show()
 
     exit_code = app.exec()
-    logger.info("DAQSoftware wurde beendet.")
+    logger.info("ezDAQ wurde beendet.")
     return exit_code
 
 

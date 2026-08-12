@@ -260,10 +260,10 @@ _translations = {
         ),
 
         # Über
-        "window_title": "DAQSoftware - Messdatenerfassung und Analyse",
-        "about_title": "Über DAQSoftware",
+        "window_title": "ezDAQ - Easy Data Acquisition",
+        "about_title": "Über ezDAQ",
         "about_body": (
-            "DAQSoftware\n"
+            "ezDAQ - Easy Data Acquisition\n"
             "Version 1.0\n\n"
             "Anwendung zur Messdatenerfassung, Visualisierung und Analyse "
             "mit NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
@@ -506,10 +506,10 @@ _translations = {
         ),
 
         # About
-        "window_title": "DAQSoftware - Data Acquisition and Analysis",
-        "about_title": "About DAQSoftware",
+        "window_title": "ezDAQ - Easy Data Acquisition",
+        "about_title": "About ezDAQ",
         "about_body": (
-            "DAQSoftware\n"
+            "ezDAQ - Easy Data Acquisition\n"
             "Version 1.0\n\n"
             "Application for data acquisition, visualization, and analysis "
             "with NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"

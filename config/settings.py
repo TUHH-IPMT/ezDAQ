@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-APP_NAME = "DAQSoftware"
+APP_NAME = "ezDAQ"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
@@ -43,9 +43,9 @@ def get_resource_path(*parts: str) -> Path:
 def get_config_directory() -> Path:
     """Liefert das plattformspezifische Verzeichnis für Konfigurationsdateien.
 
-    Unter Windows wird ``%APPDATA%/DAQSoftware`` verwendet, da dies der
+    Unter Windows wird ``%APPDATA%/ezDAQ`` verwendet, da dies der
     Standardort für benutzerbezogene Anwendungsdaten ist. Auf anderen
-    Plattformen (Entwicklungs-/Testumgebung) wird ``~/.config/DAQSoftware``
+    Plattformen (Entwicklungs-/Testumgebung) wird ``~/.config/ezDAQ``
     als Fallback genutzt, damit main.py auch dort lauffähig bleibt.
     """
     appdata = os.environ.get("APPDATA")

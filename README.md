@@ -1,4 +1,4 @@
-# DAQSoftware
+# ezDAQ - Easy Data Acquisition
 
 Windows-Desktopanwendung zur Datenerfassung und Analyse von Messdaten mit
 NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213).
@@ -100,7 +100,7 @@ Verzeichnisse:
 ## Verpacken als portable Windows-Anwendung (PyInstaller)
 
     pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name DAQSoftware ^
+    pyinstaller --noconfirm --windowed --name ezDAQ ^
         --icon resources\icon.ico --add-data "resources;resources" main.py
 
 `--icon` setzt das Icon der erzeugten `.exe` (Explorer/Taskbar), `--add-data`
