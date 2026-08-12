@@ -122,6 +122,52 @@ _translations = {
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
         "analysis_category_files": "Dateien und Kanäle",
+        "analysis_category_spectral": "Spektralanalyse",
+        "analysis_category_filter": "Filter",
+        "analysis_fft_button": "FFT",
+        "analysis_fft_tooltip": "Frequenzspektrum eines Kanals berechnen",
+        "analysis_lowpass_button": "Tiefpass",
+        "analysis_lowpass_tooltip": "Tiefpassfilter auf einen Kanal anwenden",
+        "analysis_highpass_button": "Hochpass",
+        "analysis_highpass_tooltip": "Hochpassfilter auf einen Kanal anwenden",
+        "analysis_smoothing_button": "Glättung",
+        "analysis_smoothing_tooltip": "Gleitenden Mittelwert auf einen Kanal anwenden",
+        "analysis_function_dialog_title_fft": "FFT - Kanal auswählen",
+        "analysis_function_dialog_title_lowpass": "Tiefpassfilter - Kanal auswählen",
+        "analysis_function_dialog_title_highpass": "Hochpassfilter - Kanal auswählen",
+        "analysis_function_dialog_title_smoothing": "Glättungsfilter - Kanal auswählen",
+        "analysis_select_channel": "Kanal:",
+        "analysis_cutoff_frequency": "Grenzfrequenz (Hz):",
+        "analysis_window_size": "Fenstergröße (Samples):",
+        "analysis_run_button": "Ausführen",
+        "analysis_no_channels_available": "Es sind keine Kanäle zum Analysieren geladen. Bitte zuerst eine Messdatei laden.",
+        "analysis_no_channels_title": "Keine Kanäle geladen",
+        "analysis_error_title": "Analysefehler",
+        "analysis_error_body": "Die Analyse konnte nicht durchgeführt werden:\n{error}",
+        "analysis_no_sample_rate_body": (
+            "Für diesen Kanal konnte keine Abtastrate ermittelt werden "
+            "(weder aus den Metadaten noch aus dem Zeitverlauf)."
+        ),
+        "analysis_fft_result_suffix": "FFT",
+        "analysis_lowpass_result_suffix": "Tiefpass",
+        "analysis_highpass_result_suffix": "Hochpass",
+        "analysis_smoothing_result_suffix": "Geglättet",
+        "axis_frequency": "Frequenz",
+        "save_as_action": "Speichern als...",
+        "save_as_csv_action": "Als CSV speichern...",
+        "save_as_parquet_action": "Als Parquet speichern...",
+        "remove_result_action": "Analyseergebnis entfernen",
+        "remove_channel_action": "Kanal aus Analyse löschen",
+        "confirm_delete_title": "Löschen bestätigen",
+        "delete_action": "Löschen",
+        "confirm_remove_file_body": "Soll die Datei '{name}' wirklich aus der Analyse entfernt werden?",
+        "confirm_remove_channel_body": "Soll der Kanal '{name}' wirklich entfernt werden?",
+        "save_result_csv_filter": "CSV-Datei (*.csv)",
+        "save_result_parquet_filter": "Parquet-Datei (*.parquet)",
+        "save_result_dialog_title": "Analyseergebnis speichern",
+        "save_result_success": "Analyseergebnis gespeichert: {filename}",
+        "save_result_error_title": "Fehler beim Speichern",
+        "save_result_error_body": "Das Analyseergebnis konnte nicht gespeichert werden:\n{error}",
 
         # Channel Table
         "col_number": "Nr.",
@@ -130,19 +176,31 @@ _translations = {
         "col_display_name": "Anzeigename",
         "col_unit": "Einheit",
         "col_signal_type": "Signaltyp",
-        "col_scale": "Skalierungsfaktor",
-        "col_offset": "Offsetwert",
-        "col_sensitivity": "Sensitivität\n(mV/g, IEPE)",
+        "col_parameters": "Einstellungen",
         "signal_type_voltage": "Spannung",
         "signal_type_iepe": "IEPE-Beschleunigung",
+        "signal_type_thermocouple": "Thermoelement",
         "add_channel_button": "Kanal hinzufügen",
         "remove_channel_button": "Ausgewählten Kanal entfernen",
         "default_channel_name": "Kanal {index}",
-        "scale_disabled_tooltip": (
-            "Bei IEPE-Sensoren übernimmt die Sensitivität die physikalische "
-            "Skalierung; die Skalierung bleibt bei 1."
+        "choose_parameters_button": "Einstellungen",
+        "parameters_dialog_title": "Kanaleinstellungen",
+        "param_scale_label": "Skalierungsfaktor:",
+        "param_offset_label": "Offsetwert:",
+        "param_sensitivity_label": "Sensitivität (mV/g):",
+        "param_thermocouple_type_label": "Thermoelement-Typ:",
+        "two_point_cal_button": "2-Punkt-Kalibrierung...",
+        "two_point_cal_dialog_title": "2-Punkt-Kalibrierung",
+        "two_point_cal_hint": (
+            "Zwei bekannte Referenzpunkte eingeben (z. B. Eispunkt 0 °C und "
+            "Siedepunkt 100 °C) - Skalierung und Offset werden daraus "
+            "automatisch berechnet."
         ),
-        "sensitivity_disabled_tooltip": "Nur für IEPE-Sensoren relevant.",
+        "cal_point1_measured_label": "Punkt 1 - gemessener Wert:",
+        "cal_point1_reference_label": "Punkt 1 - bekannter Sollwert:",
+        "cal_point2_measured_label": "Punkt 2 - gemessener Wert:",
+        "cal_point2_reference_label": "Punkt 2 - bekannter Sollwert:",
+        "cal_identical_points_error": "Die beiden gemessenen Werte dürfen nicht identisch sein.",
         "choose_hw_channel_button": "Kanal zuweisen...",
         "choose_hw_channel_title": "Hardwarekanal wählen",
         "hw_channel_picker_no_devices": (
@@ -206,7 +264,7 @@ _translations = {
             "DAQSoftware\n"
             "Version 1.0\n\n"
             "Anwendung zur Messdatenerfassung, Visualisierung und Analyse "
-            "mit NI cDAQ (NI 9215 / NI 9234).\n\n"
+            "mit NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "© 2026 IPMT\n\n"
             "Verwendete Open-Source-Komponenten:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."
@@ -308,6 +366,52 @@ _translations = {
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
         "analysis_category_files": "Files and Channels",
+        "analysis_category_spectral": "Spectral Analysis",
+        "analysis_category_filter": "Filter",
+        "analysis_fft_button": "FFT",
+        "analysis_fft_tooltip": "Compute the frequency spectrum of a channel",
+        "analysis_lowpass_button": "Lowpass",
+        "analysis_lowpass_tooltip": "Apply a lowpass filter to a channel",
+        "analysis_highpass_button": "Highpass",
+        "analysis_highpass_tooltip": "Apply a highpass filter to a channel",
+        "analysis_smoothing_button": "Smoothing",
+        "analysis_smoothing_tooltip": "Apply a moving average to a channel",
+        "analysis_function_dialog_title_fft": "FFT - Select Channel",
+        "analysis_function_dialog_title_lowpass": "Lowpass Filter - Select Channel",
+        "analysis_function_dialog_title_highpass": "Highpass Filter - Select Channel",
+        "analysis_function_dialog_title_smoothing": "Smoothing Filter - Select Channel",
+        "analysis_select_channel": "Channel:",
+        "analysis_cutoff_frequency": "Cutoff Frequency (Hz):",
+        "analysis_window_size": "Window Size (Samples):",
+        "analysis_run_button": "Run",
+        "analysis_no_channels_available": "No channels are loaded to analyze. Please load a measurement file first.",
+        "analysis_no_channels_title": "No Channels Loaded",
+        "analysis_error_title": "Analysis Error",
+        "analysis_error_body": "The analysis could not be performed:\n{error}",
+        "analysis_no_sample_rate_body": (
+            "Could not determine a sample rate for this channel "
+            "(neither from the metadata nor from the time series)."
+        ),
+        "analysis_fft_result_suffix": "FFT",
+        "analysis_lowpass_result_suffix": "Lowpass",
+        "analysis_highpass_result_suffix": "Highpass",
+        "analysis_smoothing_result_suffix": "Smoothed",
+        "axis_frequency": "Frequency",
+        "save_as_action": "Save as...",
+        "save_as_csv_action": "Save as CSV...",
+        "save_as_parquet_action": "Save as Parquet...",
+        "remove_result_action": "Remove Analysis Result",
+        "remove_channel_action": "Remove Channel from Analysis",
+        "confirm_delete_title": "Confirm Deletion",
+        "delete_action": "Delete",
+        "confirm_remove_file_body": "Do you really want to remove the file '{name}' from the analysis?",
+        "confirm_remove_channel_body": "Do you really want to remove the channel '{name}'?",
+        "save_result_csv_filter": "CSV File (*.csv)",
+        "save_result_parquet_filter": "Parquet File (*.parquet)",
+        "save_result_dialog_title": "Save Analysis Result",
+        "save_result_success": "Analysis result saved: {filename}",
+        "save_result_error_title": "Error Saving Result",
+        "save_result_error_body": "The analysis result could not be saved:\n{error}",
 
         # Channel Table
         "col_number": "No.",
@@ -316,19 +420,31 @@ _translations = {
         "col_display_name": "Display Name",
         "col_unit": "Unit",
         "col_signal_type": "Signal Type",
-        "col_scale": "Scale Factor",
-        "col_offset": "Offset Value",
-        "col_sensitivity": "Sensitivity\n(mV/g, IEPE)",
+        "col_parameters": "Settings",
         "signal_type_voltage": "Voltage",
         "signal_type_iepe": "IEPE Acceleration",
+        "signal_type_thermocouple": "Thermocouple",
         "add_channel_button": "Add Channel",
         "remove_channel_button": "Remove Selected Channel",
         "default_channel_name": "Channel {index}",
-        "scale_disabled_tooltip": (
-            "For IEPE sensors, sensitivity handles the physical scaling; "
-            "scale stays at 1."
+        "choose_parameters_button": "Settings",
+        "parameters_dialog_title": "Channel Settings",
+        "param_scale_label": "Scale Factor:",
+        "param_offset_label": "Offset Value:",
+        "param_sensitivity_label": "Sensitivity (mV/g):",
+        "param_thermocouple_type_label": "Thermocouple Type:",
+        "two_point_cal_button": "2-Point Calibration...",
+        "two_point_cal_dialog_title": "2-Point Calibration",
+        "two_point_cal_hint": (
+            "Enter two known reference points (e.g. ice point 0 °C and "
+            "boiling point 100 °C) - scale and offset are calculated "
+            "automatically from them."
         ),
-        "sensitivity_disabled_tooltip": "Only relevant for IEPE sensors.",
+        "cal_point1_measured_label": "Point 1 - measured value:",
+        "cal_point1_reference_label": "Point 1 - known reference:",
+        "cal_point2_measured_label": "Point 2 - measured value:",
+        "cal_point2_reference_label": "Point 2 - known reference:",
+        "cal_identical_points_error": "The two measured values must not be identical.",
         "choose_hw_channel_button": "Assign channel...",
         "choose_hw_channel_title": "Choose Hardware Channel",
         "hw_channel_picker_no_devices": (
@@ -392,7 +508,7 @@ _translations = {
             "DAQSoftware\n"
             "Version 1.0\n\n"
             "Application for data acquisition, visualization, and analysis "
-            "with NI cDAQ (NI 9215 / NI 9234).\n\n"
+            "with NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "© 2026 IPMT\n\n"
             "Open-source components used:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."

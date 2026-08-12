@@ -1,53 +1,90 @@
 """
 analysis/basic_analysis.py
 
-Vorbereitete Architektur für zukünftige Analysefunktionen.
+Analysefunktionen für die Analyse-Ansicht (siehe `gui/analysis_view.py`).
 
-In Version 1 der Analyse-Ansicht (siehe `gui/analysis_view.py`) werden
-gemäß Vorgabe AUSDRÜCKLICH NOCH KEINE Analysefunktionen implementiert
-(kein FFT, keine Filter, kein RMS, keine Statistik, keine automatischen
-Reports). Dieses Modul definiert lediglich die Funktionssignaturen und
-die einheitliche Datenübergabe (`pandas.DataFrame` mit Spalte "time_s"
-und einer Spalte je Kanal, siehe `data/loader.py::LoadedMeasurement`),
-damit spätere Implementierungen sich nahtlos einfügen, ohne dass
-`gui/analysis_view.py` strukturell angepasst werden muss.
+Alle Funktionen erhalten ein `pandas.DataFrame` mit Spalte "time_s" und
+einer Spalte je Kanal (siehe `data/loader.py::LoadedMeasurement`) und
+geben Rohdaten (numpy-Arrays) zurück - das Verpacken als neuer
+Ergebniskanal (inkl. `Channel`-Metadaten, x-Achse etc.) übernimmt
+`gui/analysis_view.py`, damit dieses Modul unabhängig von der GUI bleibt
+und einzeln testbar ist.
 
-Geplante Erweiterungen (nicht implementiert):
-    * compute_fft(...): Frequenzspektrum eines Kanals.
-    * apply_filter(...): Tief-/Hoch-/Bandpassfilter auf einen Kanal.
-    * compute_rms(...): Effektivwert über ein Zeitfenster.
-    * compute_statistics(...): Min/Max/Mittelwert/Standardabweichung.
-    * generate_report(...): Automatisierter PDF-/HTML-Report je Messung.
+Aktuell implementiert:
+    * compute_fft(...): Amplitudenspektrum eines Kanals (numpy.fft.rfft).
+    * apply_filter(...): Butterworth-Tief-/Hochpass (scipy.signal).
+    * apply_smoothing(...): Gleitender Mittelwert.
+
+Noch nicht implementiert (spätere Version):
+    * compute_rms(...), compute_statistics(...), generate_report(...).
 """
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 
-def compute_fft(data: pd.DataFrame, channel_name: str, sample_rate_hz: float):
-    """Berechnet das Frequenzspektrum eines Kanals (NICHT IMPLEMENTIERT).
+def compute_fft(
+    data: pd.DataFrame, channel_name: str, sample_rate_hz: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Berechnet das (einseitige) Amplitudenspektrum eines Kanals.
 
-    Vorgesehene Signatur für eine spätere Implementierung, z. B. via
-    `numpy.fft.rfft`. Absichtlich noch nicht umgesetzt (siehe Vorgabe,
-    Analyse-Ansicht Version 1).
+    Returns:
+        Tupel `(frequenz_hz, amplitude)` gleicher Länge.
     """
-    raise NotImplementedError(
-        "FFT-Analyse ist für eine spätere Version vorgesehen, aber noch nicht implementiert."
-    )
+    values = data[channel_name].to_numpy(dtype=float)
+    n = len(values)
+    if n < 2:
+        raise ValueError("Für eine FFT werden mindestens 2 Messwerte benötigt.")
+
+    values = values - np.mean(values)
+    spectrum = np.fft.rfft(values)
+    freq_hz = np.fft.rfftfreq(n, d=1.0 / sample_rate_hz)
+
+    amplitude = np.abs(spectrum) / n * 2.0
+    if len(amplitude) > 0:
+        amplitude[0] /= 2.0  # DC-Anteil wird durch die *2-Normierung nicht verdoppelt
+
+    return freq_hz, amplitude
 
 
 def apply_filter(
-    data: pd.DataFrame, channel_name: str, sample_rate_hz: float, cutoff_hz: float, kind: str = "lowpass"
-):
-    """Wendet einen Filter auf einen Kanal an (NICHT IMPLEMENTIERT).
+    data: pd.DataFrame,
+    channel_name: str,
+    sample_rate_hz: float,
+    cutoff_hz: float,
+    kind: str = "lowpass",
+) -> np.ndarray:
+    """Wendet einen Butterworth-Tief-/Hochpassfilter auf einen Kanal an.
 
-    Vorgesehen für z. B. `scipy.signal`-basierte Tief-/Hoch-/
-    Bandpassfilter. Absichtlich noch nicht umgesetzt.
+    Nullphasige Filterung via `scipy.signal.filtfilt`, damit das Ergebnis
+    zeitlich nicht gegenüber dem Originalsignal verschoben ist.
     """
-    raise NotImplementedError(
-        "Filterfunktionen sind für eine spätere Version vorgesehen, aber noch nicht implementiert."
-    )
+    from scipy.signal import butter, filtfilt
+
+    if kind not in ("lowpass", "highpass"):
+        raise ValueError(f"Unbekannte Filterart: '{kind}' (erwartet 'lowpass' oder 'highpass').")
+
+    values = data[channel_name].to_numpy(dtype=float)
+    nyquist_hz = sample_rate_hz / 2.0
+    normalized_cutoff = min(max(cutoff_hz / nyquist_hz, 1e-6), 0.999)
+
+    b, a = butter(4, normalized_cutoff, btype=kind)
+    padlen = 3 * max(len(a), len(b))
+    if len(values) <= padlen:
+        raise ValueError("Zu wenige Messwerte für die gewählte Filterordnung.")
+
+    return filtfilt(b, a, values)
+
+
+def apply_smoothing(data: pd.DataFrame, channel_name: str, window_size: int) -> np.ndarray:
+    """Glättet einen Kanal mittels gleitendem Mittelwert (zentriertes Fenster)."""
+    if window_size < 2:
+        raise ValueError("Die Fenstergröße muss mindestens 2 betragen.")
+
+    series = data[channel_name]
+    return series.rolling(window=window_size, center=True, min_periods=1).mean().to_numpy()
 
 
 def compute_rms(data: pd.DataFrame, channel_name: str) -> float:

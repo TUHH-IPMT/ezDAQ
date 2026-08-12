@@ -35,17 +35,23 @@ class LoadedMeasurement:
             Metadaten-Datei gefunden/angegeben wurde).
         metadata: Rohes Metadaten-Dictionary (leer, falls keine Metadaten geladen wurden).
         source_path: Pfad der geladenen Messdatendatei.
+        x_column: Name der x-Achsen-Spalte in `data`. Für reguläre
+            Messdateien immer "time_s"; Analyseergebnisse mit anderer
+            x-Achse (z. B. FFT-Ergebnisse mit "frequency_hz", siehe
+            `gui/analysis_view.py`) verwenden einen synthetischen
+            `LoadedMeasurement` mit abweichendem `x_column`.
     """
 
     data: pd.DataFrame
     channels: list[Channel]
     metadata: dict
     source_path: Path
+    x_column: str = "time_s"
 
     @property
     def channel_names(self) -> list[str]:
-        """Namen der Datenspalten ohne die Zeitspalte "time_s"."""
-        return [c for c in self.data.columns if c != "time_s"]
+        """Namen der Datenspalten ohne die x-Achsen-Spalte."""
+        return [c for c in self.data.columns if c != self.x_column]
 
 
 def load_measurement_file(

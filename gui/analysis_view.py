@@ -1,17 +1,21 @@
 """
 gui/analysis_view.py
 
-Analyse-Ansicht (Version 1).
+Analyse-Ansicht.
 
 Funktionen (siehe Vorgabe):
     * Drag & Drop von Messdateien (.parquet, .csv)
     * Metadaten laden (falls vorhanden)
     * Kanäle auswählen
     * Plot anzeigen, Zoom/Pan (nativ durch PyQtGraph)
+    * Analysefunktionen (FFT, Tief-/Hochpass, Glättung, siehe
+      `analysis/basic_analysis.py`) - Ergebnisse werden als neuer Kanal
+      unter der Quelldatei im Dateibrowser abgelegt und können per
+      Rechtsklick als CSV/Parquet gespeichert werden.
 
-Noch NICHT implementiert (siehe Vorgabe): FFT, Filter, RMS, Statistik,
-automatische Reports. Die Architektur ist jedoch darauf vorbereitet -
-siehe `analysis/basic_analysis.py` für die vorgesehenen Erweiterungspunkte.
+Noch NICHT implementiert (siehe Vorgabe): RMS, Statistik, automatische
+Reports. Die Architektur ist jedoch darauf vorbereitet - siehe
+`analysis/basic_analysis.py` für die vorgesehenen Erweiterungspunkte.
 """
 
 from __future__ import annotations
@@ -19,15 +23,20 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from PyQt6.QtGui import QFont
 
+import numpy as np
+import pandas as pd
 import pyqtgraph as pg
-from PyQt6.QtCore import QEvent, pyqtSignal, Qt
-from PyQt6.QtGui import QDrag, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import QEvent, QSize, pyqtSignal, Qt
+from PyQt6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QFont, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
     QFileDialog,
+    QFormLayout,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -37,13 +46,25 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSizePolicy,
+    QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from analysis.basic_analysis import apply_filter, apply_smoothing, compute_fft
 from data.loader import LoadedMeasurement, LoaderError, infer_metadata_path, load_measurement_file
+from data.models import Channel
 from gui.i18n import connect_language_changed, t
-from gui.theme import connect_theme_changed, style_plot_container, style_plot_item
+from gui.theme import (
+    connect_theme_changed,
+    draw_fft_icon,
+    draw_highpass_icon,
+    draw_lowpass_icon,
+    draw_smoothing_icon,
+    style_plot_container,
+    style_plot_item,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +72,27 @@ _SUPPORTED_SUFFIXES = {".parquet", ".csv"}
 _DRAG_PREFIX = "daq.channel/"
 _ROLE_FILE_PATH = int(Qt.ItemDataRole.UserRole)
 _ROLE_CHANNEL_NAME = int(Qt.ItemDataRole.UserRole) + 1
+_ROLE_MEASUREMENT = int(Qt.ItemDataRole.UserRole) + 2
+_ROLE_IS_RESULT = int(Qt.ItemDataRole.UserRole) + 3
+_FREQUENCY_X_COLUMN = "frequency_hz"
+
+# (kind, icon_fn, label_i18n_key, tooltip_i18n_key) - gemeinsam für den
+# Button-Aufbau in AnalysisView.__init__ und das Neuzeichnen der Icons in
+# retheme_plots() nach einem Theme-Wechsel.
+_FUNCTION_SPECS = [
+    ("fft", draw_fft_icon, "analysis_fft_button", "analysis_fft_tooltip"),
+    ("lowpass", draw_lowpass_icon, "analysis_lowpass_button", "analysis_lowpass_tooltip"),
+    ("highpass", draw_highpass_icon, "analysis_highpass_button", "analysis_highpass_tooltip"),
+    ("smoothing", draw_smoothing_icon, "analysis_smoothing_button", "analysis_smoothing_tooltip"),
+]
+_FUNCTION_SPECS_BY_KIND = {spec[0]: spec for spec in _FUNCTION_SPECS}
+
+# Gruppierung der Analysefunktions-Buttons im Toolkasten: Spektralanalyse
+# (FFT) getrennt von Filtern (Tief-/Hochpass UND Glättung).
+_FUNCTION_CATEGORIES = [
+    ("analysis_category_spectral", ["fft"]),
+    ("analysis_category_filter", ["lowpass", "highpass", "smoothing"]),
+]
 _LAYOUT_SPECS = {
     "single": [(0, 0, 0, 1, 1)],
     "split": [(0, 0, 0, 1, 1), (1, 1, 0, 1, 1)],
@@ -62,6 +104,14 @@ _LAYOUT_SPECS = {
 
 class ChannelTreeWidget(QTreeWidget):
     """Tree mit explizitem Drag-Payload für Kanal-Zuordnung auf Plot-Ziele."""
+
+    delete_key_pressed = pyqtSignal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        if event.key() == Qt.Key.Key_Delete:
+            self.delete_key_pressed.emit()
+            return
+        super().keyPressEvent(event)
 
     def startDrag(self, supportedActions) -> None:  # noqa: N802 (Qt API)
         item = self.currentItem()
@@ -161,6 +211,102 @@ class AssignablePlotWidget(pg.PlotWidget):
         return super().eventFilter(watched, event)
 
 
+class _AnalysisFunctionDialog(QDialog):
+    """Dialog zur Kanal- und Parameterauswahl für eine Analysefunktion.
+
+    Die Kanalauswahl erfolgt über eine nach Datei gruppierte Baumansicht
+    (wie der Dateibrowser rechts in der Analyse-Ansicht, siehe
+    `ChannelTreeWidget`) statt einer flachen Dropdown-Liste - bei mehreren
+    geladenen Dateien mit jeweils mehreren Kanälen ist das übersichtlicher
+    und zeigt auf einen Blick, zu welcher Datei ein Kanal gehört.
+
+    Wird beim Klick auf einen der Analysefunktions-Buttons geöffnet
+    (siehe `AnalysisView._on_analysis_function_clicked`).
+    """
+
+    def __init__(
+        self,
+        kind: str,
+        channel_groups: list[tuple[str, str, list[tuple[str, str]]]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._kind = kind
+        self.setWindowTitle(t(f"analysis_function_dialog_title_{kind}"))
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel(t("analysis_select_channel")))
+
+        self._tree = QTreeWidget()
+        self._tree.setHeaderHidden(True)
+        self._tree.itemSelectionChanged.connect(self._update_ok_enabled)
+        self._tree.itemDoubleClicked.connect(self._on_item_double_clicked)
+        for file_label, file_path_str, channels in channel_groups:
+            file_item = QTreeWidgetItem([file_label])
+            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            for channel_label, channel_name in channels:
+                channel_item = QTreeWidgetItem([channel_label])
+                channel_item.setData(0, Qt.ItemDataRole.UserRole, (file_path_str, channel_name))
+                file_item.addChild(channel_item)
+            self._tree.addTopLevelItem(file_item)
+        self._tree.expandAll()
+        layout.addWidget(self._tree, stretch=1)
+
+        form = QFormLayout()
+        self._cutoff_spin: QDoubleSpinBox | None = None
+        self._window_spin: QSpinBox | None = None
+        if kind in ("lowpass", "highpass"):
+            self._cutoff_spin = QDoubleSpinBox()
+            self._cutoff_spin.setRange(0.01, 1_000_000.0)
+            self._cutoff_spin.setDecimals(2)
+            self._cutoff_spin.setValue(10.0)
+            self._cutoff_spin.setSuffix(" Hz")
+            form.addRow(t("analysis_cutoff_frequency"), self._cutoff_spin)
+        elif kind == "smoothing":
+            self._window_spin = QSpinBox()
+            self._window_spin.setRange(2, 1_000_000)
+            self._window_spin.setValue(10)
+            form.addRow(t("analysis_window_size"), self._window_spin)
+        if form.rowCount() > 0:
+            layout.addLayout(form)
+
+        self._button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        self._ok_button = self._button_box.button(QDialogButtonBox.StandardButton.Ok)
+        self._ok_button.setText(t("analysis_run_button"))
+        self._button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(t("cancel"))
+        self._ok_button.setEnabled(False)
+        self._button_box.accepted.connect(self.accept)
+        self._button_box.rejected.connect(self.reject)
+        layout.addWidget(self._button_box)
+
+        self.resize(360, 320)
+
+    def _update_ok_enabled(self) -> None:
+        items = self._tree.selectedItems()
+        has_leaf = bool(items) and items[0].data(0, Qt.ItemDataRole.UserRole) is not None
+        self._ok_button.setEnabled(has_leaf)
+
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        if item.data(0, Qt.ItemDataRole.UserRole) is not None:
+            self._tree.setCurrentItem(item)
+            self.accept()
+
+    def selected_channel(self) -> tuple[str, str] | None:
+        items = self._tree.selectedItems()
+        if not items:
+            return None
+        return items[0].data(0, Qt.ItemDataRole.UserRole)
+
+    def cutoff_hz(self) -> float:
+        return self._cutoff_spin.value() if self._cutoff_spin is not None else 0.0
+
+    def window_size(self) -> int:
+        return self._window_spin.value() if self._window_spin is not None else 0
+
+
 class AnalysisView(QWidget):
     """Ansicht zum Laden und Untersuchen abgeschlossener Messungen."""
 
@@ -172,6 +318,9 @@ class AnalysisView(QWidget):
         self._curves: list = []
         self._loaded_measurements: list[tuple[Path, LoadedMeasurement]] = []
         self._channel_assignments: dict[tuple[str, str], int] = {}
+        self._plot_x_columns: dict[int, str] = {}
+        self._function_buttons: dict[str, QToolButton] = {}
+        self._function_category_labels: dict[str, QLabel] = {}
 
         layout = QVBoxLayout(self)
 
@@ -197,6 +346,33 @@ class AnalysisView(QWidget):
         controls_row.addWidget(self._layout_label)
         controls_row.addWidget(self._layout_combo, stretch=1)
         left_layout.addLayout(controls_row)
+
+        for category_key, kinds in _FUNCTION_CATEGORIES:
+            category_label = QLabel(t(category_key))
+            left_layout.addWidget(category_label)
+            self._function_category_labels[category_key] = category_label
+
+            functions_grid = QGridLayout()
+            functions_grid.setSpacing(6)
+            functions_grid.setContentsMargins(0, 0, 0, 0)
+            for idx, kind in enumerate(kinds):
+                _kind, icon_fn, label_key, tooltip_key = _FUNCTION_SPECS_BY_KIND[kind]
+                button = QToolButton()
+                button.setIcon(QIcon(icon_fn(32)))
+                button.setIconSize(QSize(32, 32))
+                button.setFixedSize(56, 56)
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setToolTip(f"{t(label_key)} — {t(tooltip_key)}")
+                button.setCursor(Qt.CursorShape.PointingHandCursor)
+                button.clicked.connect(lambda checked=False, k=kind: self._on_analysis_function_clicked(k))
+                functions_grid.addWidget(button, idx // 2, idx % 2)
+                self._function_buttons[kind] = button
+            functions_row = QHBoxLayout()
+            functions_row.setContentsMargins(0, 0, 0, 0)
+            functions_row.addLayout(functions_grid)
+            functions_row.addStretch(1)
+            left_layout.addLayout(functions_row)
+
         left_layout.addStretch(1)
 
         content_row.addWidget(left_panel)
@@ -255,6 +431,7 @@ class AnalysisView(QWidget):
         # Kontextmenü für Top-Level-Dateien (rechtsklick)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+        self._tree.delete_key_pressed.connect(self._on_delete_key_pressed)
         self._files_label = QLabel(t("loaded_files_channels"))
         right_layout.addWidget(self._files_label)
         right_layout.addWidget(self._tree, stretch=1)
@@ -268,6 +445,8 @@ class AnalysisView(QWidget):
             category_font.setPointSize(category_font.pointSize() + 1)
         category_font.setBold(True)
         self._layout_category_label.setFont(category_font)
+        for category_label in self._function_category_labels.values():
+            category_label.setFont(category_font)
         self._files_category_label.setFont(category_font)
 
         self._populate_layout_combo()
@@ -285,6 +464,14 @@ class AnalysisView(QWidget):
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())
 
+        # Analysefunktions-Icons folgen der WindowText-Farbe (siehe
+        # gui/theme.py::nav_icon_color) und müssen daher nach einem
+        # Theme-Wechsel neu gezeichnet werden.
+        for kind, icon_fn, _label_key, _tooltip_key in _FUNCTION_SPECS:
+            button = self._function_buttons.get(kind)
+            if button is not None:
+                button.setIcon(QIcon(icon_fn(32)))
+
         # Eigenes Stylesheet (`color: palette(foreground)`) auf einem
         # QLabel wird von Qt nach einem Palettenwechsel nicht automatisch
         # neu ausgewertet - ohne explizites Repolish bleibt der Text in der
@@ -299,15 +486,30 @@ class AnalysisView(QWidget):
         """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
         self._browse_button.setText(t("browse_file_button"))
         self._layout_category_label.setText(t("analysis_category_layout"))
+        for category_key, category_label in self._function_category_labels.items():
+            category_label.setText(t(category_key))
         self._files_category_label.setText(t("analysis_category_files"))
         self._files_drop_hint.setText(t("drag_drop_files"))
         self._files_label.setText(t("loaded_files_channels"))
         self._layout_label.setText(t("analysis_layout"))
         self._populate_layout_combo()
         self._tree.setHeaderLabels([t("tree_header_name")])
-        for plot_widget in self._plot_widgets:
-            plot_widget.setLabel("bottom", t("axis_time"), units="s")
+        for kind, _icon_fn, label_key, tooltip_key in _FUNCTION_SPECS:
+            button = self._function_buttons.get(kind)
+            if button is not None:
+                button.setToolTip(f"{t(label_key)} — {t(tooltip_key)}")
+        self._refresh_plot_axis_labels()
         self._update_files_label_count()
+
+    def _refresh_plot_axis_labels(self) -> None:
+        """Setzt die x-Achsen-Beschriftung je Plot passend zu den dort
+        aktuell dargestellten Kanälen (Zeit- oder Frequenzachse, siehe
+        `_update_plot`)."""
+        for plot_index, plot_widget in enumerate(self._plot_widgets):
+            if self._plot_x_columns.get(plot_index) == _FREQUENCY_X_COLUMN:
+                plot_widget.setLabel("bottom", t("axis_frequency"), units="Hz")
+            else:
+                plot_widget.setLabel("bottom", t("axis_time"), units="s")
 
     def _update_files_label_count(self) -> None:
         """Aktualisiert die Datei/Kanal-Überschrift inkl. Anzahl geladener Dateien."""
@@ -348,21 +550,111 @@ class AnalysisView(QWidget):
             self._load_file(Path(filename))
 
     def _on_tree_context_menu(self, point) -> None:
-        """Zeigt ein Kontextmenü zum Entfernen der Datei unter dem angeklickten Tree-Item."""
+        """Zeigt ein Kontextmenü zum Entfernen der Datei bzw. eines einzelnen
+        Kanals - für Analyseergebnis-Kanäle zusätzlich zum Speichern des
+        Ergebnisses."""
         item = self._tree.itemAt(point)
         if item is None:
             return
-        # finde Top-Level-Item (Datei)
-        top = item
-        while top.parent() is not None:
-            top = top.parent()
 
         menu = QMenu(self)
-        remove_action = menu.addAction(t("remove_file_action"))
-        remove_action.triggered.connect(lambda: self._remove_file_item(top))
+        if item.parent() is None:
+            # Top-Level-Item (Datei/Messung)
+            remove_action = menu.addAction(t("remove_file_action"))
+            remove_action.triggered.connect(lambda: self._remove_file_item(item))
+        else:
+            is_result = bool(item.data(0, _ROLE_IS_RESULT))
+            if is_result:
+                save_csv_action = menu.addAction(t("save_as_csv_action"))
+                save_csv_action.triggered.connect(lambda: self._save_result_channel(item, "csv"))
+                save_parquet_action = menu.addAction(t("save_as_parquet_action"))
+                save_parquet_action.triggered.connect(lambda: self._save_result_channel(item, "parquet"))
+                menu.addSeparator()
+            remove_action = menu.addAction(
+                t("remove_result_action") if is_result else t("remove_channel_action")
+            )
+            remove_action.triggered.connect(lambda: self._remove_channel_item(item))
         menu.exec(self._tree.viewport().mapToGlobal(point))
 
+    def _on_delete_key_pressed(self) -> None:
+        """Löscht den aktuell ausgewählten Kanal bzw. die ausgewählte Messung
+        aus dem Dateibrowser (Entfernen-Taste, siehe `ChannelTreeWidget`)."""
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        if item.parent() is None:
+            self._remove_file_item(item)
+        else:
+            self._remove_channel_item(item)
+
+    def _confirm_delete(self, body: str) -> bool:
+        """Fragt vor einer Lösch-Aktion (Datei/Kanal, per Kontextmenü oder
+        Entfernen-Taste) explizit nach Bestätigung."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(t("confirm_delete_title"))
+        box.setText(body)
+        delete_button = box.addButton(t("delete_action"), QMessageBox.ButtonRole.YesRole)
+        box.addButton(t("cancel"), QMessageBox.ButtonRole.NoRole)
+        box.setDefaultButton(delete_button)
+        box.exec()
+        return box.clickedButton() is delete_button
+
+    def _remove_channel_item(self, item: QTreeWidgetItem) -> None:
+        """Entfernt einen einzelnen Kanal (regulär oder Analyseergebnis) aus
+        dem Baum, ohne die gesamte Quelldatei zu entfernen."""
+        if not self._confirm_delete(t("confirm_remove_channel_body", name=item.text(0))):
+            return
+        file_item = item.parent()
+        if file_item is None:
+            return
+        file_path_str = str(file_item.data(0, Qt.ItemDataRole.UserRole) or "")
+        channel_name = str(item.data(0, _ROLE_CHANNEL_NAME) or "")
+        self._channel_assignments.pop((file_path_str, channel_name), None)
+        file_item.removeChild(item)
+        self._update_plot()
+
+    def _save_result_channel(self, item: QTreeWidgetItem, fmt: str) -> None:
+        """Speichert einen Analyseergebnis-Kanal als eigenständige CSV-/Parquet-Datei."""
+        measurement = item.data(0, _ROLE_MEASUREMENT)
+        if measurement is None:
+            return
+        channel_name = str(item.data(0, _ROLE_CHANNEL_NAME) or item.text(0))
+
+        if fmt == "csv":
+            file_filter = t("save_result_csv_filter")
+            suffix = ".csv"
+        else:
+            file_filter = t("save_result_parquet_filter")
+            suffix = ".parquet"
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self, t("save_result_dialog_title"), f"{channel_name}{suffix}", file_filter
+        )
+        if not filename:
+            return
+        path = Path(filename)
+        if path.suffix.lower() != suffix:
+            path = path.with_suffix(suffix)
+
+        try:
+            if fmt == "csv":
+                measurement.data.to_csv(path, index=False)
+            else:
+                measurement.data.to_parquet(path)
+        except Exception as exc:
+            QMessageBox.critical(
+                self, t("save_result_error_title"), t("save_result_error_body", error=str(exc))
+            )
+            return
+
+        QMessageBox.information(
+            self, t("save_result_dialog_title"), t("save_result_success", filename=path.name)
+        )
+
     def _remove_file_item(self, top: QTreeWidgetItem) -> None:
+        if not self._confirm_delete(t("confirm_remove_file_body", name=top.text(0))):
+            return
         file_path_str = top.data(0, Qt.ItemDataRole.UserRole)
         # Entferne Eintrag aus geladenen Messungen
         self._loaded_measurements = [pair for pair in self._loaded_measurements if str(pair[0]) != str(file_path_str) and pair[0].name != str(file_path_str)]
@@ -416,6 +708,7 @@ class AnalysisView(QWidget):
                 ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
                 ch_item.setCheckState(0, Qt.CheckState.Unchecked)
                 ch_item.setData(0, Qt.ItemDataRole.UserRole, ch)
+                ch_item.setData(0, _ROLE_MEASUREMENT, measurement)
                 column_name = self._resolve_column_name(measurement, ch_item)
                 if column_name is not None:
                     ch_item.setData(0, _ROLE_CHANNEL_NAME, column_name)
@@ -428,12 +721,11 @@ class AnalysisView(QWidget):
                 ch_item = QTreeWidgetItem(file_item, [name])
                 ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
                 ch_item.setCheckState(0, Qt.CheckState.Unchecked)
-                # Create a lightweight Channel placeholder
-                from data.models import Channel
-
+                # Leichtgewichtiger Channel-Platzhalter (keine Metadaten vorhanden)
                 placeholder = Channel(hardware_channel=name, display_name=name)
                 ch_item.setData(0, Qt.ItemDataRole.UserRole, placeholder)
                 ch_item.setData(0, _ROLE_CHANNEL_NAME, name)
+                ch_item.setData(0, _ROLE_MEASUREMENT, measurement)
 
         self._tree.expandItem(file_item)
         self._update_files_label_count()
@@ -451,10 +743,13 @@ class AnalysisView(QWidget):
         for plot_widget in self._plot_widgets:
             plot_widget.clear()
         self._curves = []
+        self._plot_x_columns = {}
         if not self._loaded_measurements:
+            self._refresh_plot_axis_labels()
             return
         active_indices = self._active_plot_indices()
         if not active_indices:
+            self._refresh_plot_axis_labels()
             return
 
         # Iterate over tree: top-level items are files
@@ -463,15 +758,12 @@ class AnalysisView(QWidget):
             file_path_str = file_item.data(0, Qt.ItemDataRole.UserRole)
             if not file_path_str:
                 continue
-            # Find measurement in loaded list
+            # Find measurement in loaded list (Fallback für Kanäle ohne
+            # eigene _ROLE_MEASUREMENT-Zuweisung)
             matched = [m for p, m in self._loaded_measurements if str(p) == file_path_str or p.name == file_path_str]
             if not matched:
                 continue
-            meas = matched[0]
-            data = meas.data
-            if "time_s" not in data.columns:
-                continue
-            time_s = data["time_s"].to_numpy()
+            default_measurement = matched[0]
 
             # If file unchecked, skip
             if file_item.checkState(0) != Qt.CheckState.Checked:
@@ -482,6 +774,18 @@ class AnalysisView(QWidget):
                 ch_item = file_item.child(ch_i)
                 if ch_item.checkState(0) != Qt.CheckState.Checked:
                     continue
+
+                # Jeder Kanal trägt einen Verweis auf sein eigenes
+                # LoadedMeasurement (siehe _load_file/_add_result_channel) -
+                # bei Analyseergebnissen (z. B. FFT) weicht dieses vom
+                # Messungs-DataFrame der Quelldatei ab (andere x-Achse).
+                meas = ch_item.data(0, _ROLE_MEASUREMENT) or default_measurement
+                data = meas.data
+                x_column = meas.x_column if meas.x_column in data.columns else None
+                if x_column is None:
+                    continue
+                x_values = data[x_column].to_numpy()
+
                 data_obj = ch_item.data(0, Qt.ItemDataRole.UserRole)
                 display_label = ch_item.text(0)
                 chan_name = None
@@ -507,16 +811,209 @@ class AnalysisView(QWidget):
                 plot_index = self._channel_assignments.get(assignment_key, 0)
                 if plot_index not in active_indices:
                     plot_index = active_indices[0]
-                plot_widget = self._plot_widgets[min(plot_index, len(self._plot_widgets) - 1)]
+                plot_index = min(plot_index, len(self._plot_widgets) - 1)
+                plot_widget = self._plot_widgets[plot_index]
+                self._plot_x_columns.setdefault(plot_index, x_column)
 
                 color = pg.intColor(file_idx * 8 + ch_i, hues=max(self._tree.topLevelItemCount() * 8, 1))
                 curve = plot_widget.plot(
-                    time_s,
+                    x_values,
                     data[chan_name].to_numpy(),
                     pen=pg.mkPen(color=color, width=1.2),
                     name=f"{file_item.text(0)} - {display_label}",
                 )
                 self._curves.append(curve)
+
+        self._refresh_plot_axis_labels()
+
+    # ------------------------------------------------------------------ #
+    # Analysefunktionen (FFT, Tief-/Hochpass, Glättung)
+    # ------------------------------------------------------------------ #
+
+    def _on_analysis_function_clicked(self, kind: str) -> None:
+        """Öffnet den Kanal-/Parameter-Dialog für eine Analysefunktion und
+        legt das Ergebnis als neuen Kanal unter der Quelldatei ab."""
+        channel_options = self._collect_channel_options()
+        if not channel_options:
+            QMessageBox.information(
+                self, t("analysis_no_channels_title"), t("analysis_no_channels_available")
+            )
+            return
+
+        dialog = _AnalysisFunctionDialog(kind, channel_options, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selection = dialog.selected_channel()
+        if selection is None:
+            return
+        file_path_str, channel_name = selection
+
+        file_item, ch_item = self._find_channel_item(file_path_str, channel_name)
+        if file_item is None or ch_item is None:
+            return
+        measurement = ch_item.data(0, _ROLE_MEASUREMENT)
+        if measurement is None:
+            return
+
+        try:
+            if kind == "fft":
+                sample_rate_hz = self._resolve_sample_rate(measurement)
+                if sample_rate_hz is None:
+                    QMessageBox.warning(
+                        self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
+                    )
+                    return
+                freq_hz, amplitude = compute_fft(measurement.data, channel_name, sample_rate_hz)
+                self._finish_result(
+                    file_item, channel_name, t("analysis_fft_result_suffix"),
+                    _FREQUENCY_X_COLUMN, freq_hz, amplitude,
+                )
+            elif kind in ("lowpass", "highpass"):
+                sample_rate_hz = self._resolve_sample_rate(measurement)
+                if sample_rate_hz is None:
+                    QMessageBox.warning(
+                        self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
+                    )
+                    return
+                filtered = apply_filter(
+                    measurement.data, channel_name, sample_rate_hz, dialog.cutoff_hz(), kind=kind
+                )
+                suffix_key = (
+                    "analysis_lowpass_result_suffix" if kind == "lowpass"
+                    else "analysis_highpass_result_suffix"
+                )
+                x_column = measurement.x_column
+                self._finish_result(
+                    file_item, channel_name, t(suffix_key), x_column,
+                    measurement.data[x_column].to_numpy(), filtered,
+                )
+            elif kind == "smoothing":
+                smoothed = apply_smoothing(measurement.data, channel_name, dialog.window_size())
+                x_column = measurement.x_column
+                self._finish_result(
+                    file_item, channel_name, t("analysis_smoothing_result_suffix"), x_column,
+                    measurement.data[x_column].to_numpy(), smoothed,
+                )
+        except Exception as exc:
+            logger.warning("Analysefunktion '%s' fehlgeschlagen: %s", kind, exc)
+            QMessageBox.critical(
+                self, t("analysis_error_title"), t("analysis_error_body", error=str(exc))
+            )
+
+    def _collect_channel_options(self) -> list[tuple[str, str, list[tuple[str, str]]]]:
+        """Alle aktuell im Baum vorhandenen Dateien mit ihren Kanälen
+        (regulär und Analyseergebnisse), gruppiert nach Datei - als
+        `(Dateiname, Dateipfad, [(Kanal-Anzeigename, Kanalname), ...])`
+        für die Baumauswahl im Analysefunktions-Dialog (siehe
+        `_AnalysisFunctionDialog`). Dateien ohne auswählbare Kanäle werden
+        ausgelassen, statt als leere Gruppe angezeigt zu werden."""
+        groups: list[tuple[str, str, list[tuple[str, str]]]] = []
+        for file_idx in range(self._tree.topLevelItemCount()):
+            file_item = self._tree.topLevelItem(file_idx)
+            file_path_str = str(file_item.data(0, Qt.ItemDataRole.UserRole) or "")
+            if not file_path_str:
+                continue
+            channels: list[tuple[str, str]] = []
+            for ch_i in range(file_item.childCount()):
+                ch_item = file_item.child(ch_i)
+                channel_name = ch_item.data(0, _ROLE_CHANNEL_NAME)
+                if not channel_name:
+                    continue
+                channels.append((ch_item.text(0), str(channel_name)))
+            if channels:
+                groups.append((file_item.text(0), file_path_str, channels))
+        return groups
+
+    def _find_channel_item(
+        self, file_path_str: str, channel_name: str
+    ) -> tuple[QTreeWidgetItem | None, QTreeWidgetItem | None]:
+        for file_idx in range(self._tree.topLevelItemCount()):
+            file_item = self._tree.topLevelItem(file_idx)
+            if str(file_item.data(0, Qt.ItemDataRole.UserRole) or "") != file_path_str:
+                continue
+            for ch_i in range(file_item.childCount()):
+                ch_item = file_item.child(ch_i)
+                if str(ch_item.data(0, _ROLE_CHANNEL_NAME) or "") == channel_name:
+                    return file_item, ch_item
+        return None, None
+
+    @staticmethod
+    def _resolve_sample_rate(measurement: LoadedMeasurement) -> float | None:
+        """Ermittelt die Abtastrate eines Kanals: bevorzugt aus den
+        Metadaten (`sample_rate_hz`), sonst geschätzt aus dem Median-Abstand
+        der x-Achsen-Werte (z. B. bei Dateien ohne Metadaten-JSON)."""
+        sample_rate = measurement.metadata.get("sample_rate_hz") if measurement.metadata else None
+        if sample_rate:
+            try:
+                return float(sample_rate)
+            except (TypeError, ValueError):
+                pass
+
+        x_column = measurement.x_column
+        if x_column in measurement.data.columns and len(measurement.data) > 1:
+            x_values = measurement.data[x_column].to_numpy(dtype=float)
+            diffs = np.diff(x_values)
+            diffs = diffs[diffs > 0]
+            if len(diffs) > 0:
+                return float(1.0 / np.median(diffs))
+        return None
+
+    @staticmethod
+    def _make_unique_result_name(file_item: QTreeWidgetItem, channel_name: str, suffix: str) -> str:
+        base = f"{channel_name}_{suffix}"
+        existing = {
+            str(file_item.child(ch_i).data(0, _ROLE_CHANNEL_NAME) or "")
+            for ch_i in range(file_item.childCount())
+        }
+        candidate = base
+        counter = 2
+        while candidate in existing:
+            candidate = f"{base}_{counter}"
+            counter += 1
+        return candidate
+
+    def _finish_result(
+        self,
+        file_item: QTreeWidgetItem,
+        channel_name: str,
+        suffix: str,
+        x_column: str,
+        x_values: np.ndarray,
+        values: np.ndarray,
+    ) -> None:
+        result_name = self._make_unique_result_name(file_item, channel_name, suffix)
+        df = pd.DataFrame({x_column: x_values, result_name: values})
+        result_measurement = LoadedMeasurement(
+            data=df,
+            channels=[Channel(hardware_channel=result_name, display_name=result_name)],
+            metadata={},
+            source_path=Path(f"{file_item.text(0)} / {result_name}"),
+            x_column=x_column,
+        )
+        self._add_result_channel(file_item, result_measurement, result_name)
+
+    def _add_result_channel(
+        self, file_item: QTreeWidgetItem, result_measurement: LoadedMeasurement, result_name: str
+    ) -> None:
+        ch_item = QTreeWidgetItem(file_item, [result_name])
+        ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
+        ch_item.setData(0, Qt.ItemDataRole.UserRole, result_measurement.channels[0])
+        ch_item.setData(0, _ROLE_CHANNEL_NAME, result_name)
+        ch_item.setData(0, _ROLE_MEASUREMENT, result_measurement)
+        ch_item.setData(0, _ROLE_IS_RESULT, True)
+
+        file_path_str = str(file_item.data(0, Qt.ItemDataRole.UserRole) or "")
+        active_indices = self._active_plot_indices()
+        if active_indices and file_path_str:
+            self._channel_assignments.setdefault((file_path_str, result_name), active_indices[0])
+
+        self._tree.blockSignals(True)
+        ch_item.setCheckState(0, Qt.CheckState.Checked)
+        file_item.setCheckState(0, Qt.CheckState.Checked)
+        self._tree.blockSignals(False)
+        self._tree.expandItem(file_item)
+
+        self._update_plot()
 
     def _populate_layout_combo(self) -> None:
         current = self._layout_combo.currentData()

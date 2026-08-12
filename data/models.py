@@ -31,6 +31,8 @@ class ModuleType(str, Enum):
 
     NI9215 = "NI9215"
     NI9234 = "NI9234"
+    NI9210 = "NI9210"
+    NI9213 = "NI9213"
 
 
 class SignalType(str, Enum):
@@ -43,6 +45,31 @@ class SignalType(str, Enum):
 
     VOLTAGE = "voltage"
     IEPE_ACCELERATION = "iepe_acceleration"
+    THERMOCOUPLE = "thermocouple"
+
+
+# Von der Anwendung angebotene Thermoelement-Typen (NI9210/NI9213, siehe
+# `hardware/ni9210.py`). Werte entsprechen direkt den Mitgliedsnamen von
+# `nidaqmx.constants.ThermocoupleType` (z. B. `ThermocoupleType["K"]"),
+# damit hier keine zusätzliche Übersetzungstabelle gepflegt werden muss.
+# Die selteneren Typen A/C (Wolfram-Rhenium) sind bewusst nicht enthalten.
+THERMOCOUPLE_TYPES = ["K", "J", "T", "E", "N", "R", "S", "B"]
+
+# Praxisnahe Messbereiche je Thermoelement-Typ in °C (grobe Richtwerte
+# gemäß IEC 60584 für den Regelmessbereich), verwendet als min_val/max_val
+# für `add_ai_thrmcpl_chan` (siehe `hardware/ni9210.py`). Kein exaktes
+# Kalibrierlabor-Datenblatt - für die unterstützte Anwendung (Temperatur-
+# Überwachung, keine metrologische Präzisionsmessung) ausreichend.
+THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
+    "K": (-200.0, 1372.0),
+    "J": (-210.0, 1200.0),
+    "T": (-200.0, 400.0),
+    "E": (-200.0, 1000.0),
+    "N": (-200.0, 1300.0),
+    "R": (-50.0, 1768.0),
+    "S": (-50.0, 1768.0),
+    "B": (250.0, 1820.0),
+}
 
 
 class StorageFormat(str, Enum):
@@ -70,6 +97,19 @@ class Channel:
         max_range: Optionaler oberer Messbereich (z. B. +10.0 V bei NI9215).
         sensitivity_mv_per_unit: Sensorempfindlichkeit in mV/Einheit,
             relevant für IEPE-Beschleunigungssensoren (NI9234).
+        thermocouple_type: Thermoelement-Typ (z. B. "K", "J", "T", ...),
+            relevant für Thermoelement-Kanäle (NI9210/NI9213), siehe
+            `THERMOCOUPLE_TYPES`.
+        cal_point1_measured / cal_point1_reference: Erster Referenzpunkt
+            einer optionalen 2-Punkt-Kalibrierung (gemessener Rohwert vs.
+            bekannter Sollwert, z. B. Eispunkt 0 °C bei einem
+            Thermoelement) - `None`, solange nicht kalibriert. Werden
+            zusammen mit `cal_point2_*` nur zur Nachvollziehbarkeit
+            gespeichert; `scale`/`offset` bleiben die tatsächlich
+            angewendeten Werte (siehe
+            `gui/widgets/channel_table.py::TwoPointCalibrationDialog`).
+        cal_point2_measured / cal_point2_reference: Zweiter Referenzpunkt
+            der 2-Punkt-Kalibrierung, z. B. Siedepunkt 100 °C.
         plot_color: Individuelle Kurvenfarbe in der Live View (z. B.
             "#64b5f6"), `None` = Theme-Standardfarbe (siehe
             `gui/live_view.py::ChannelDisplayDialog`).
@@ -101,6 +141,11 @@ class Channel:
     min_range: Optional[float] = -10.0
     max_range: Optional[float] = 10.0
     sensitivity_mv_per_unit: Optional[float] = None
+    thermocouple_type: str = "K"
+    cal_point1_measured: Optional[float] = None
+    cal_point1_reference: Optional[float] = None
+    cal_point2_measured: Optional[float] = None
+    cal_point2_reference: Optional[float] = None
     plot_color: Optional[str] = None
     plot_background: Optional[str] = None
     plot_y_min: Optional[float] = None
@@ -125,6 +170,11 @@ class Channel:
             "min_range": self.min_range,
             "max_range": self.max_range,
             "sensitivity_mv_per_unit": self.sensitivity_mv_per_unit,
+            "thermocouple_type": self.thermocouple_type,
+            "cal_point1_measured": self.cal_point1_measured,
+            "cal_point1_reference": self.cal_point1_reference,
+            "cal_point2_measured": self.cal_point2_measured,
+            "cal_point2_reference": self.cal_point2_reference,
             "plot_color": self.plot_color,
             "plot_background": self.plot_background,
             "plot_y_min": self.plot_y_min,
@@ -147,6 +197,11 @@ class Channel:
             min_range=data.get("min_range", -10.0),
             max_range=data.get("max_range", 10.0),
             sensitivity_mv_per_unit=data.get("sensitivity_mv_per_unit"),
+            thermocouple_type=data.get("thermocouple_type", "K"),
+            cal_point1_measured=data.get("cal_point1_measured"),
+            cal_point1_reference=data.get("cal_point1_reference"),
+            cal_point2_measured=data.get("cal_point2_measured"),
+            cal_point2_reference=data.get("cal_point2_reference"),
             plot_color=data.get("plot_color"),
             plot_background=data.get("plot_background"),
             plot_y_min=data.get("plot_y_min"),

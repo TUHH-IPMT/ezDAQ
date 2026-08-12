@@ -180,7 +180,24 @@ def nav_icon_color() -> QColor:
 
 
 def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
-    pixmap = QPixmap(size, size)
+    """Erzeugt eine leere Pixmap für ein selbst gezeichnetes Icon.
+
+    Wird in Geräte-Pixeln (nicht logischen Pixeln) angelegt und mit dem
+    aktuellen `devicePixelRatio()` markiert - sonst erscheinen die Icons bei
+    Windows-Skalierung >100% (hier: 250%) sichtbar verpixelt, weil Qt die
+    sonst zu kleine Pixmap beim Zeichnen hochskaliert. Zeichencode in den
+    draw_*_icon()-Funktionen bleibt unverändert (nutzt weiterhin `size` in
+    logischen Einheiten) - QPainter skaliert automatisch anhand des
+    devicePixelRatio der Ziel-Pixmap.
+    """
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    dpr = app.devicePixelRatio() if app is not None else 1.0
+    physical_size = max(1, round(size * dpr))
+
+    pixmap = QPixmap(physical_size, physical_size)
+    pixmap.setDevicePixelRatio(dpr)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -367,6 +384,114 @@ def draw_ellipsis_icon(size: int = 16) -> QPixmap:
     center_y = size / 2
     for i in (0.22, 0.5, 0.78):
         painter.drawEllipse(QPointF(size * i, center_y), dot_radius, dot_radius)
+    painter.end()
+    return pixmap
+
+
+def draw_fft_icon(size: int = 36) -> QPixmap:
+    """Spektrum-Symbol (Balken unterschiedlicher Höhe) für die FFT-Analyse."""
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+
+    base_y = size * 0.82
+    heights = [0.30, 0.55, 0.78, 0.45, 0.62, 0.22]
+    bar_width = size * 0.10
+    gap = size * 0.04
+    total_width = len(heights) * bar_width + (len(heights) - 1) * gap
+    x = (size - total_width) / 2
+    for h in heights:
+        bar_height = size * h
+        painter.drawRect(QRectF(x, base_y - bar_height, bar_width, bar_height))
+        x += bar_width + gap
+
+    painter.end()
+    return pixmap
+
+
+def _draw_filter_response_icon(size: int, rising: bool) -> QPixmap:
+    """Gemeinsame Basis für Tief-/Hochpass-Icons: schematischer
+    Amplitudengang (Kurve, die auf einer Seite abfällt/ansteigt)."""
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+
+    axis_pen = QPen(color)
+    axis_pen.setWidthF(size * 0.045)
+    axis_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(axis_pen)
+    m = size * 0.16
+    painter.drawLine(QPointF(m, size - m), QPointF(size - m, size - m))
+    painter.drawLine(QPointF(m, size - m), QPointF(m, m))
+
+    curve_pen = QPen(color)
+    curve_pen.setWidthF(size * 0.09)
+    curve_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    curve_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(curve_pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    high = size * 0.28
+    low = size - m
+    mid_x = size * 0.55
+    path = QPainterPath()
+    if rising:
+        path.moveTo(m, low)
+        path.lineTo(mid_x * 0.75, low)
+        path.cubicTo(mid_x, low, mid_x * 1.05, high, size - m * 1.3, high)
+    else:
+        path.moveTo(m, high)
+        path.lineTo(mid_x * 0.75, high)
+        path.cubicTo(mid_x, high, mid_x * 1.05, low, size - m * 1.3, low)
+    painter.drawPath(path)
+
+    painter.end()
+    return pixmap
+
+
+def draw_lowpass_icon(size: int = 36) -> QPixmap:
+    """Amplitudengang-Symbol für Tiefpassfilter (fällt nach rechts ab)."""
+    return _draw_filter_response_icon(size, rising=False)
+
+
+def draw_highpass_icon(size: int = 36) -> QPixmap:
+    """Amplitudengang-Symbol für Hochpassfilter (steigt nach rechts an)."""
+    return _draw_filter_response_icon(size, rising=True)
+
+
+def draw_smoothing_icon(size: int = 36) -> QPixmap:
+    """Symbol für den Glättungsfilter: verrauschte Linie über einer
+    geglätteten Kurve."""
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+
+    smooth_pen = QPen(color)
+    smooth_pen.setWidthF(size * 0.09)
+    smooth_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    smooth_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(smooth_pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    m = size * 0.16
+    y_mid = size * 0.6
+    smooth_path = QPainterPath()
+    smooth_path.moveTo(m, y_mid + size * 0.12)
+    smooth_path.cubicTo(size * 0.35, y_mid - size * 0.22, size * 0.65, y_mid + size * 0.22, size - m, y_mid - size * 0.12)
+    painter.drawPath(smooth_path)
+
+    noisy_pen = QPen(color)
+    noisy_pen.setWidthF(size * 0.035)
+    noisy_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    noisy_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(noisy_pen)
+    y0 = size * 0.28
+    jags = [0.30, 0.18, 0.36, 0.12, 0.32, 0.20, 0.34]
+    step = (size - 2 * m) / (len(jags) - 1)
+    noisy_path = QPainterPath()
+    noisy_path.moveTo(m, y0 + size * jags[0])
+    for i, j in enumerate(jags[1:], start=1):
+        noisy_path.lineTo(m + step * i, y0 + size * j)
+    painter.drawPath(noisy_path)
+
     painter.end()
     return pixmap
 

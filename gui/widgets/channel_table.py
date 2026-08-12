@@ -13,12 +13,14 @@ from __future__ import annotations
 import re
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -33,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from data.models import Channel, DeviceInfo, ModuleType, SignalType
+from data.models import THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
     connect_theme_changed,
@@ -49,9 +51,7 @@ _COLUMN_KEYS = [
     "col_display_name",
     "col_unit",
     "col_signal_type",
-    "col_scale",
-    "col_offset",
-    "col_sensitivity",
+    "col_parameters",
 ]
 
 # Erkennt den Modul-Teil eines Geräte-/Kanalnamens, z. B. "Mod2" in
@@ -69,6 +69,8 @@ _MODULE_SUFFIX_PATTERN = re.compile(r"Mod\d+")
 _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
     ModuleType.NI9215: [SignalType.VOLTAGE],
     ModuleType.NI9234: [SignalType.VOLTAGE, SignalType.IEPE_ACCELERATION],
+    ModuleType.NI9210: [SignalType.THERMOCOUPLE],
+    ModuleType.NI9213: [SignalType.THERMOCOUPLE],
 }
 
 # Übersetzte Anzeige-Labels für den Signaltyp-Auswahldialog/-Button. Der
@@ -79,6 +81,7 @@ _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
 _SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.VOLTAGE: "signal_type_voltage",
     SignalType.IEPE_ACCELERATION: "signal_type_iepe",
+    SignalType.THERMOCOUPLE: "signal_type_thermocouple",
 }
 
 _COL_NUMBER = 0
@@ -87,9 +90,7 @@ _COL_HW_CHANNEL = 2
 _COL_NAME = 3
 _COL_UNIT = 4
 _COL_SIGNAL = 5
-_COL_SCALE = 6
-_COL_OFFSET = 7
-_COL_SENSITIVITY = 8
+_COL_PARAMETERS = 6
 
 _ROLE_CHANNEL_VALUE = int(Qt.ItemDataRole.UserRole)
 
@@ -271,6 +272,246 @@ class SignalTypePickerDialog(QDialog):
         self.accept()
 
 
+class TwoPointCalibrationDialog(QDialog):
+    """Dialog zur 2-Punkt-Kalibrierung eines Kanals.
+
+    Berechnet Skalierung und Offset aus zwei bekannten Referenzpunkten
+    (gemessener Rohwert vs. bekannter Sollwert) - z. B. bei einem
+    Thermoelement Eispunkt (0 °C) und Siedepunkt (100 °C). Die beiden
+    Punkte werden mit dem Kanal gespeichert (siehe
+    `data/models.py::Channel.cal_point1_measured` usw.), damit die
+    Kalibrierung später nachvollzogen oder ein einzelner Punkt neu
+    gesetzt werden kann, ohne beide Punkte neu eingeben zu müssen -
+    `scale`/`offset` bleiben trotzdem die tatsächlich angewendeten Werte,
+    die Punkte selbst haben keinen direkten Effekt auf die Messung.
+
+    Rechnung (lineare Zwei-Punkt-Form):
+        scale  = (referenz2 - referenz1) / (gemessen2 - gemessen1)
+        offset = referenz1 - scale * gemessen1
+    """
+
+    def __init__(
+        self,
+        point1_measured: float | None,
+        point1_reference: float | None,
+        point2_measured: float | None,
+        point2_reference: float | None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(t("two_point_cal_dialog_title"))
+        self._result_scale = 1.0
+        self._result_offset = 0.0
+        self._point1_measured = point1_measured
+        self._point1_reference = point1_reference
+        self._point2_measured = point2_measured
+        self._point2_reference = point2_reference
+
+        layout = QVBoxLayout(self)
+
+        hint = QLabel(t("two_point_cal_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+
+        self._point1_measured_spin = QDoubleSpinBox()
+        self._point1_measured_spin.setRange(-1e9, 1e9)
+        self._point1_measured_spin.setDecimals(4)
+        self._point1_measured_spin.setValue(point1_measured if point1_measured is not None else 0.0)
+        form.addRow(t("cal_point1_measured_label"), self._point1_measured_spin)
+
+        self._point1_reference_spin = QDoubleSpinBox()
+        self._point1_reference_spin.setRange(-1e9, 1e9)
+        self._point1_reference_spin.setDecimals(4)
+        self._point1_reference_spin.setValue(point1_reference if point1_reference is not None else 0.0)
+        form.addRow(t("cal_point1_reference_label"), self._point1_reference_spin)
+
+        self._point2_measured_spin = QDoubleSpinBox()
+        self._point2_measured_spin.setRange(-1e9, 1e9)
+        self._point2_measured_spin.setDecimals(4)
+        self._point2_measured_spin.setValue(point2_measured if point2_measured is not None else 1.0)
+        form.addRow(t("cal_point2_measured_label"), self._point2_measured_spin)
+
+        self._point2_reference_spin = QDoubleSpinBox()
+        self._point2_reference_spin.setRange(-1e9, 1e9)
+        self._point2_reference_spin.setDecimals(4)
+        self._point2_reference_spin.setValue(point2_reference if point2_reference is not None else 1.0)
+        form.addRow(t("cal_point2_reference_label"), self._point2_reference_spin)
+
+        layout.addLayout(form)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.button(QDialogButtonBox.StandardButton.Ok).setText(t("ok"))
+        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(t("cancel"))
+        button_box.accepted.connect(self._on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.resize(340, 220)
+
+    def _on_accept(self) -> None:
+        m1 = self._point1_measured_spin.value()
+        r1 = self._point1_reference_spin.value()
+        m2 = self._point2_measured_spin.value()
+        r2 = self._point2_reference_spin.value()
+        if m1 == m2:
+            QMessageBox.warning(self, t("error"), t("cal_identical_points_error"))
+            return
+
+        self._result_scale = (r2 - r1) / (m2 - m1)
+        self._result_offset = r1 - self._result_scale * m1
+        self._point1_measured, self._point1_reference = m1, r1
+        self._point2_measured, self._point2_reference = m2, r2
+        self.accept()
+
+    def result_scale(self) -> float:
+        return self._result_scale
+
+    def result_offset(self) -> float:
+        return self._result_offset
+
+    def point1(self) -> tuple[float | None, float | None]:
+        return self._point1_measured, self._point1_reference
+
+    def point2(self) -> tuple[float | None, float | None]:
+        return self._point2_measured, self._point2_reference
+
+
+class ChannelParameterDialog(QDialog):
+    """Dialog zur Bearbeitung der Kanalparameter.
+
+    Skalierung und Offset sind IMMER editierbar, unabhängig vom Signaltyp:
+    auch wenn der Treiber bei IEPE/Thermoelement bereits physikalische
+    Einheiten liefert (g bzw. °C), ist eine zusätzliche lineare Umrechnung
+    sinnvoll (z. B. g -> m/s² über die Skalierung, oder °C -> °F über
+    Skalierung 1.8 + Offset 32) - beides sollte daher nicht automatisch
+    gesperrt/versteckt werden. Zusätzlich zeigt der Dialog NUR das Feld,
+    das für den aktuellen Signaltyp der Zeile hardwareseitig zwingend
+    nötig ist (Sensitivität bei IEPE, Thermoelement-Typ bei Thermoelement)
+    - bei Spannung entfällt dieses Zusatzfeld ganz.
+
+    Ersetzt die vorherigen, immer sichtbaren Spalten
+    (Skalierung/Offset/Sensitivität/Thermoelement-Typ): mit wachsender
+    Modulanzahl (aktuell NI9215/NI9234/NI9210/NI9213, siehe
+    `_MODULE_SIGNAL_TYPES`) würden das immer mehr, meist gesperrte Spalten
+    - ein neuer Modultyp mit eigenen Parametern braucht hier nur einen
+    weiteren Zweig in diesem einen Dialog statt einer neuen Tabellenspalte.
+    """
+
+    def __init__(
+        self,
+        signal_type: SignalType,
+        scale: float,
+        offset: float,
+        sensitivity: float,
+        thermocouple_type: str,
+        cal_point1_measured: float | None = None,
+        cal_point1_reference: float | None = None,
+        cal_point2_measured: float | None = None,
+        cal_point2_reference: float | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(t("parameters_dialog_title"))
+
+        self._cal_point1_measured = cal_point1_measured
+        self._cal_point1_reference = cal_point1_reference
+        self._cal_point2_measured = cal_point2_measured
+        self._cal_point2_reference = cal_point2_reference
+
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+
+        self._sensitivity_spin: QDoubleSpinBox | None = None
+        self._thermocouple_combo: QComboBox | None = None
+
+        self._scale_spin = QDoubleSpinBox()
+        self._scale_spin.setRange(-1e9, 1e9)
+        self._scale_spin.setDecimals(4)
+        self._scale_spin.setValue(scale)
+        form.addRow(t("param_scale_label"), self._scale_spin)
+
+        self._offset_spin = QDoubleSpinBox()
+        self._offset_spin.setRange(-1e9, 1e9)
+        self._offset_spin.setDecimals(4)
+        self._offset_spin.setValue(offset)
+        form.addRow(t("param_offset_label"), self._offset_spin)
+
+        if signal_type == SignalType.IEPE_ACCELERATION:
+            self._sensitivity_spin = QDoubleSpinBox()
+            self._sensitivity_spin.setRange(0.0, 1e6)
+            self._sensitivity_spin.setDecimals(4)
+            self._sensitivity_spin.setValue(sensitivity)
+            form.addRow(t("param_sensitivity_label"), self._sensitivity_spin)
+        elif signal_type == SignalType.THERMOCOUPLE:
+            self._thermocouple_combo = QComboBox()
+            self._thermocouple_combo.addItems(THERMOCOUPLE_TYPES)
+            index = self._thermocouple_combo.findText(thermocouple_type)
+            self._thermocouple_combo.setCurrentIndex(index if index >= 0 else 0)
+            form.addRow(t("param_thermocouple_type_label"), self._thermocouple_combo)
+
+        layout.addLayout(form)
+
+        # 2-Punkt-Kalibrierung: bequemer Weg, Skalierung/Offset aus zwei
+        # bekannten Referenzpunkten zu berechnen, statt sie von Hand
+        # auszurechnen (siehe `TwoPointCalibrationDialog`). Nur für
+        # Thermoelemente angeboten (typischer Anwendungsfall, z. B.
+        # Eispunkt/Siedepunkt) - bei Spannung/IEPE bleibt es aus, um die
+        # Auswahl nicht mit einer selten benötigten Option zu überladen.
+        if signal_type == SignalType.THERMOCOUPLE:
+            cal_button = QPushButton(t("two_point_cal_button"))
+            cal_button.clicked.connect(self._on_two_point_calibration_clicked)
+            layout.addWidget(cal_button)
+
+        button_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        button_box.button(QDialogButtonBox.StandardButton.Ok).setText(t("ok"))
+        button_box.button(QDialogButtonBox.StandardButton.Cancel).setText(t("cancel"))
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.resize(320, 180)
+
+    def _on_two_point_calibration_clicked(self) -> None:
+        dialog = TwoPointCalibrationDialog(
+            self._cal_point1_measured,
+            self._cal_point1_reference,
+            self._cal_point2_measured,
+            self._cal_point2_reference,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        self._scale_spin.setValue(dialog.result_scale())
+        self._offset_spin.setValue(dialog.result_offset())
+        self._cal_point1_measured, self._cal_point1_reference = dialog.point1()
+        self._cal_point2_measured, self._cal_point2_reference = dialog.point2()
+
+    def scale(self) -> float:
+        return self._scale_spin.value()
+
+    def offset(self) -> float:
+        return self._offset_spin.value()
+
+    def sensitivity(self) -> float:
+        return self._sensitivity_spin.value() if self._sensitivity_spin is not None else 0.0
+
+    def thermocouple_type(self) -> str:
+        return self._thermocouple_combo.currentText() if self._thermocouple_combo is not None else "K"
+
+    def cal_point1(self) -> tuple[float | None, float | None]:
+        return self._cal_point1_measured, self._cal_point1_reference
+
+    def cal_point2(self) -> tuple[float | None, float | None]:
+        return self._cal_point2_measured, self._cal_point2_reference
+
+
 class _PickerCell(QWidget):
     """Zellwidget für Spalten mit eigenem Auswahlfenster (Hardwarekanal,
     Signaltyp): links ein Textlabel mit dem aktuellen Wert, rechts ein
@@ -413,6 +654,9 @@ class ChannelTableWidget(QWidget):
             hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
             if hw_widget is not None and not hw_widget.property("hw_channel"):
                 self._update_hw_channel_button_text(hw_widget)
+            param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+            if param_widget is not None:
+                param_widget.setText(t("choose_parameters_button"))
             self._apply_module_signal_constraint(row)
 
     def _apply_device_constraint(self, row: int) -> None:
@@ -479,38 +723,36 @@ class ChannelTableWidget(QWidget):
         signal_widget.setEnabled(has_channel)
 
         # Signaltyp kann sich durch die Einschränkung geändert haben -
-        # Skalierung/Sensitivität entsprechend nachziehen.
-        self._update_scale_sensitivity_state(row)
+        # Sensitivität entsprechend nachziehen (siehe `_update_parameter_state`).
+        self._update_parameter_state(row)
 
-    def _update_scale_sensitivity_state(self, row: int) -> None:
-        """Sperrt/entsperrt Skalierung bzw. Sensitivität je nach Signaltyp der Zeile.
+    def _update_parameter_state(self, row: int) -> None:
+        """Setzt bei Signaltyp-Wechsel die nun irrelevante Sensitivität
+        (als Property am Parameter-Button, siehe `ChannelParameterDialog`)
+        auf ihren neutralen Wert zurück.
 
-        Bei IEPE-Beschleunigungssensoren übernimmt bereits der NI-DAQmx-
-        Treiber die physikalische Umrechnung über die Sensitivität (siehe
-        `hardware/ni9234.py`) - eine zusätzliche Skalierung würde die
-        Werte doppelt skalieren. Bei Spannungskanälen ist die Sensitivität
-        umgekehrt bedeutungslos (`hardware/ni9215.py` liest sie nie). Das
-        jeweils irrelevante Feld wird gesperrt UND auf seinen neutralen
-        Wert zurückgesetzt - ein nur optisch gesperrtes Feld würde seinen
-        Wert beim Auslesen (`_read_row`) sonst trotzdem behalten.
+        Skalierung und Offset bleiben bei JEDEM Signaltyp erhalten - auch
+        wenn der Treiber bei IEPE/Thermoelement bereits physikalische
+        Einheiten liefert (g bzw. °C), ist eine zusätzliche lineare
+        Umrechnung sinnvoll (z. B. g -> m/s², °C -> °F) und wird daher
+        nicht automatisch zurückgesetzt. Sensitivität ist dagegen NUR für
+        IEPE relevant (siehe `hardware/ni9234.py`) und wird sonst auf 0
+        zurückgesetzt - ein nur im Dialog verstecktes Feld würde seinen
+        alten Wert beim Auslesen (`_read_row`) sonst trotzdem behalten.
         """
         signal_widget = self._table.cellWidget(row, _COL_SIGNAL)
-        scale_widget = self._table.cellWidget(row, _COL_SCALE)
-        sensitivity_widget = self._table.cellWidget(row, _COL_SENSITIVITY)
-        if signal_widget is None or scale_widget is None or sensitivity_widget is None:
+        param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+        if signal_widget is None or param_widget is None:
             return
 
-        is_iepe = signal_widget.property("signal_type") == SignalType.IEPE_ACCELERATION.value
-        scale_widget.setEnabled(not is_iepe)
-        sensitivity_widget.setEnabled(is_iepe)
-        if is_iepe:
-            scale_widget.setValue(1.0)
-            scale_widget.setToolTip(t("scale_disabled_tooltip"))
-            sensitivity_widget.setToolTip("")
-        else:
-            sensitivity_widget.setValue(0.0)
-            sensitivity_widget.setToolTip(t("sensitivity_disabled_tooltip"))
-            scale_widget.setToolTip("")
+        signal_value = str(signal_widget.property("signal_type") or "")
+        try:
+            signal_type = SignalType(signal_value)
+        except ValueError:
+            return
+
+        if signal_type != SignalType.IEPE_ACCELERATION:
+            param_widget.setProperty("sensitivity", 0.0)
 
     def set_channels(self, channels: list[Channel]) -> None:
         """Befüllt die Tabelle mit den übergebenen Kanälen (ersetzt den Inhalt)."""
@@ -654,6 +896,31 @@ class ChannelTableWidget(QWidget):
         da die Symbolfarbe vom Theme abhängt."""
         button.setIcon(QIcon(draw_ellipsis_icon(14)))
         button.setIconSize(QSize(14, 14))
+
+    @staticmethod
+    def _apply_parameter_button_icon(button: QPushButton) -> None:
+        """Setzt das Drei-Punkte-Symbol für den Parameter-Button (siehe
+        `_create_parameter_widget`) mit sichtbarem Abstand zum Text.
+
+        Anders als bei den icon-only-Buttons von Hardwarekanal/Signaltyp
+        (siehe `_apply_picker_button_icon`) stehen hier Icon UND Text auf
+        demselben Button - Qt bietet für `QPushButton` aber kein
+        Stylesheet-Property für den Icon-Text-Abstand (nur `padding` um den
+        gesamten Inhalt, keinen Effekt zwischen Icon und Text). Der
+        zusätzliche Freiraum wird deshalb direkt in die Icon-Pixmap
+        eingebettet (transparenter Bereich rechts vom Symbol) - `setIconSize`
+        wird auf die volle (breitere) Pixmap-Größe gesetzt, damit Qt den
+        Freiraum tatsächlich als Teil des Icons einplant."""
+        icon_size = 14
+        gap = 8
+        base = draw_ellipsis_icon(icon_size)
+        padded = QPixmap(icon_size + gap, icon_size)
+        padded.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(padded)
+        painter.drawPixmap(0, 0, base)
+        painter.end()
+        button.setIcon(QIcon(padded))
+        button.setIconSize(QSize(icon_size + gap, icon_size))
 
     def _update_hw_channel_button_text(self, button: "_PickerCell") -> None:
         """Setzt den sichtbaren Button-Text aus den Properties zusammen.
@@ -804,7 +1071,89 @@ class ChannelTableWidget(QWidget):
 
         button.setProperty("signal_type", selected)
         self._update_signal_type_button_text(button)
-        self._update_scale_sensitivity_state(row)
+        self._update_parameter_state(row)
+
+    def _create_parameter_widget(
+        self,
+        scale: float,
+        offset: float,
+        sensitivity: float,
+        thermocouple_type: str,
+        cal_point1_measured: float | None,
+        cal_point1_reference: float | None,
+        cal_point2_measured: float | None,
+        cal_point2_reference: float | None,
+    ) -> QPushButton:
+        """Baut das Zellwidget für die Parameter-Spalte einer Zeile: ein
+        einzelner, zellfüllender Button mit fixem Text (statt Label +
+        separatem Auswahl-Button wie bei Hardwarekanal/Signaltyp, siehe
+        `_PickerCell`) - öffnet `ChannelParameterDialog`, der je nach
+        Signaltyp der Zeile nur die relevanten Felder anzeigt. Die
+        aktuellen Werte werden bewusst NICHT im Button-Text zusammengefasst
+        (einfacher, konsistenter Button statt Wertevorschau), sondern nur
+        als Properties mitgeführt.
+        """
+        button = QPushButton(t("choose_parameters_button"))
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.setProperty("scale", scale)
+        button.setProperty("offset", offset)
+        button.setProperty("sensitivity", sensitivity)
+        button.setProperty("thermocouple_type", thermocouple_type or "K")
+        button.setProperty("cal_point1_measured", cal_point1_measured)
+        button.setProperty("cal_point1_reference", cal_point1_reference)
+        button.setProperty("cal_point2_measured", cal_point2_measured)
+        button.setProperty("cal_point2_reference", cal_point2_reference)
+        button.clicked.connect(self._on_choose_parameters_clicked)
+        self._apply_parameter_button_icon(button)
+        return button
+
+    @staticmethod
+    def _property_float_or_none(widget: QWidget, name: str) -> float | None:
+        """Liest eine optionale Float-Property (z. B. Kalibrierpunkt), die
+        entweder `None` oder eine Zahl ist - `widget.property()` liefert für
+        eine mit `None` gesetzte Property wieder `None` zurück, für eine
+        Zahl den passenden Python-Typ (siehe `_create_parameter_widget`)."""
+        value = widget.property(name)
+        return None if value is None else float(value)
+
+    def _on_choose_parameters_clicked(self) -> None:
+        """Öffnet `ChannelParameterDialog` für die Zeile des klickenden Buttons."""
+        button = self.sender()
+        row = self._find_row_for_widget(_COL_PARAMETERS, button)
+        if row is None:
+            return
+
+        signal_widget = self._table.cellWidget(row, _COL_SIGNAL)
+        try:
+            signal_type = SignalType(str(signal_widget.property("signal_type") or ""))
+        except ValueError:
+            return
+
+        dialog = ChannelParameterDialog(
+            signal_type,
+            scale=float(button.property("scale") or 1.0),
+            offset=float(button.property("offset") or 0.0),
+            sensitivity=float(button.property("sensitivity") or 0.0),
+            thermocouple_type=str(button.property("thermocouple_type") or "K"),
+            cal_point1_measured=self._property_float_or_none(button, "cal_point1_measured"),
+            cal_point1_reference=self._property_float_or_none(button, "cal_point1_reference"),
+            cal_point2_measured=self._property_float_or_none(button, "cal_point2_measured"),
+            cal_point2_reference=self._property_float_or_none(button, "cal_point2_reference"),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        button.setProperty("scale", dialog.scale())
+        button.setProperty("offset", dialog.offset())
+        button.setProperty("sensitivity", dialog.sensitivity())
+        button.setProperty("thermocouple_type", dialog.thermocouple_type())
+        cal_point1_measured, cal_point1_reference = dialog.cal_point1()
+        cal_point2_measured, cal_point2_reference = dialog.cal_point2()
+        button.setProperty("cal_point1_measured", cal_point1_measured)
+        button.setProperty("cal_point1_reference", cal_point1_reference)
+        button.setProperty("cal_point2_measured", cal_point2_measured)
+        button.setProperty("cal_point2_reference", cal_point2_reference)
 
     def _find_row_for_widget(self, column: int, widget: QWidget) -> int | None:
         """Findet die Zeile eines Zellwidgets in `column` (siehe `sender()`-
@@ -859,15 +1208,24 @@ class ChannelTableWidget(QWidget):
             row, _COL_SIGNAL, self._create_signal_type_widget(initial_signal_value)
         )
 
-        self._table.setCellWidget(row, _COL_SCALE, self._double_spin(channel.scale, -1e9, 1e9))
-        self._table.setCellWidget(row, _COL_OFFSET, self._double_spin(channel.offset, -1e9, 1e9))
         sensitivity = channel.sensitivity_mv_per_unit if channel.sensitivity_mv_per_unit else 0.0
         self._table.setCellWidget(
-            row, _COL_SENSITIVITY, self._double_spin(sensitivity, 0.0, 1e6)
+            row,
+            _COL_PARAMETERS,
+            self._create_parameter_widget(
+                channel.scale,
+                channel.offset,
+                sensitivity,
+                channel.thermocouple_type,
+                channel.cal_point1_measured,
+                channel.cal_point1_reference,
+                channel.cal_point2_measured,
+                channel.cal_point2_reference,
+            ),
         )
         # Leitet - falls der Hardwarekanal einem bekannten Gerät zugeordnet
         # ist - das Modul daraus ab (siehe `_apply_device_constraint`) und
-        # zieht Signaltyp-/Skalierungs-Einschränkung entsprechend nach.
+        # zieht Signaltyp-/Parameter-Einschränkung entsprechend nach.
         self._apply_device_constraint(row)
         self._update_row_numbers()
 
@@ -893,9 +1251,15 @@ class ChannelTableWidget(QWidget):
         unit = self._table.cellWidget(row, _COL_UNIT).text().strip()
         module_type = ModuleType(self._get_module_value_from_widget(hardware_widget))
         signal_type = SignalType(self._table.cellWidget(row, _COL_SIGNAL).property("signal_type"))
-        scale = self._table.cellWidget(row, _COL_SCALE).value()
-        offset = self._table.cellWidget(row, _COL_OFFSET).value()
-        sensitivity = self._table.cellWidget(row, _COL_SENSITIVITY).value()
+        param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+        scale = float(param_widget.property("scale") or 1.0)
+        offset = float(param_widget.property("offset") or 0.0)
+        sensitivity = float(param_widget.property("sensitivity") or 0.0)
+        thermocouple_type = str(param_widget.property("thermocouple_type") or "K")
+        cal_point1_measured = self._property_float_or_none(param_widget, "cal_point1_measured")
+        cal_point1_reference = self._property_float_or_none(param_widget, "cal_point1_reference")
+        cal_point2_measured = self._property_float_or_none(param_widget, "cal_point2_measured")
+        cal_point2_reference = self._property_float_or_none(param_widget, "cal_point2_reference")
         display_settings = self._display_settings.get(hardware_channel, {})
 
         return Channel(
@@ -908,6 +1272,11 @@ class ChannelTableWidget(QWidget):
             module_type=module_type,
             enabled=enabled,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
+            thermocouple_type=thermocouple_type or "K",
+            cal_point1_measured=cal_point1_measured,
+            cal_point1_reference=cal_point1_reference,
+            cal_point2_measured=cal_point2_measured,
+            cal_point2_reference=cal_point2_reference,
             plot_color=display_settings.get("plot_color"),
             plot_background=display_settings.get("plot_background"),
             plot_y_min=display_settings.get("plot_y_min"),
@@ -929,14 +1298,18 @@ class ChannelTableWidget(QWidget):
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))
         self._remove_button.setIcon(QIcon(draw_minus_icon(16)))
-        # Drei-Punkte-Symbol der Hardwarekanal-/Signaltyp-Buttons ist
-        # theme-abhängig eingefärbt (siehe `_apply_picker_button_icon`) -
-        # bei bestehenden Zeilen nach einem Theme-Wechsel erneuern.
+        # Drei-Punkte-Symbol der Hardwarekanal-/Signaltyp-/Parameter-Buttons
+        # ist theme-abhängig eingefärbt (siehe `_apply_picker_button_icon`/
+        # `_apply_parameter_button_icon`) - bei bestehenden Zeilen nach
+        # einem Theme-Wechsel erneuern.
         for row in range(self._table.rowCount()):
             for column in (_COL_HW_CHANNEL, _COL_SIGNAL):
                 widget = self._table.cellWidget(row, column)
                 if isinstance(widget, _PickerCell):
                     self._apply_picker_button_icon(widget)
+            param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+            if isinstance(param_widget, QPushButton):
+                self._apply_parameter_button_icon(param_widget)
 
     def _update_row_numbers(self) -> None:
         for row in range(self._table.rowCount()):
@@ -985,10 +1358,3 @@ class ChannelTableWidget(QWidget):
         edit.setText(text)
         return edit
 
-    @staticmethod
-    def _double_spin(value: float, minimum: float, maximum: float) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
-        spin.setRange(minimum, maximum)
-        spin.setDecimals(4)
-        spin.setValue(value)
-        return spin
