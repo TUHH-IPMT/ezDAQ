@@ -31,6 +31,7 @@ from PyQt6.QtCore import QEvent, QSize, pyqtSignal, Qt
 from PyQt6.QtGui import QDrag, QDragEnterEvent, QDropEvent, QFont, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -53,7 +54,7 @@ from PyQt6.QtWidgets import (
 )
 
 from analysis.basic_analysis import apply_filter, apply_smoothing, compute_fft
-from data.loader import LoadedMeasurement, LoaderError, infer_metadata_path, load_measurement_file
+from data.loader import LoadedMeasurement, infer_metadata_path, load_measurement_file
 from data.models import Channel
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
@@ -65,6 +66,7 @@ from gui.theme import (
     style_plot_container,
     style_plot_item,
 )
+from gui.workers import BackgroundWorker
 
 logger = logging.getLogger(__name__)
 
@@ -321,6 +323,10 @@ class AnalysisView(QWidget):
         self._plot_x_columns: dict[int, str] = {}
         self._function_buttons: dict[str, QToolButton] = {}
         self._function_category_labels: dict[str, QLabel] = {}
+        # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
+        # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
+        # Python das QThread-Objekt vorzeitig einsammeln.
+        self._background_workers: list[BackgroundWorker] = []
 
         layout = QVBoxLayout(self)
 
@@ -549,6 +555,29 @@ class AnalysisView(QWidget):
         if filename:
             self._load_file(Path(filename))
 
+    def _set_busy(self, busy: bool) -> None:
+        """Sperrt die Bedienelemente, deren Aktionen im Hintergrund laufen
+        (Datei laden, Analysefunktionen, siehe `gui/workers.py`), und
+        zeigt einen Wartecursor - verhindert, dass mehrere solche
+        Operationen gleichzeitig gestartet werden, während der Nutzer
+        über den Fortschritt im Bilde bleibt.
+        """
+        self._browse_button.setEnabled(not busy)
+        for button in self._function_buttons.values():
+            button.setEnabled(not busy)
+        if busy:
+            QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        else:
+            QApplication.restoreOverrideCursor()
+
+    def _forget_background_worker(self, worker: BackgroundWorker) -> None:
+        """Entfernt eine abgeschlossene `BackgroundWorker`-Referenz, damit
+        `_background_workers` bei langer Programmlaufzeit nicht unbegrenzt
+        wächst."""
+        if worker in self._background_workers:
+            self._background_workers.remove(worker)
+        worker.deleteLater()
+
     def _on_tree_context_menu(self, point) -> None:
         """Zeigt ein Kontextmenü zum Entfernen der Datei bzw. eines einzelnen
         Kanals - für Analyseergebnis-Kanäle zusätzlich zum Speichern des
@@ -680,14 +709,36 @@ class AnalysisView(QWidget):
             )
             return
 
-        try:
-            metadata_path = infer_metadata_path(path)
-            measurement = load_measurement_file(path, metadata_path)
-        except LoaderError as exc:
-            QMessageBox.critical(self, t("load_error_title"), str(exc))
+        # Verhindere doppelte Einträge (billige Prüfung, bewusst noch vor
+        # dem eigentlichen - potenziell langsamen - Laden im Hintergrund).
+        if any(p == path for p, _ in self._loaded_measurements):
+            QMessageBox.information(
+                self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
+            )
             return
 
-        # Verhindere doppelte Einträge
+        # Laden selbst (pd.read_parquet/pd.read_csv) läuft im Hintergrund,
+        # da das bei großen Messdateien den GUI-Thread spürbar blockieren
+        # würde (siehe gui/workers.py::BackgroundWorker).
+        metadata_path = infer_metadata_path(path)
+        self._set_busy(True)
+        worker = BackgroundWorker(load_measurement_file, path, metadata_path)
+        worker.succeeded.connect(lambda measurement: self._on_file_loaded(path, measurement))
+        worker.failed.connect(lambda message: self._on_file_load_failed(path, message))
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_file_load_failed(self, path: Path, message: str) -> None:
+        self._set_busy(False)
+        QMessageBox.critical(self, t("load_error_title"), message)
+
+    def _on_file_loaded(self, path: Path, measurement: LoadedMeasurement) -> None:
+        self._set_busy(False)
+
+        # Zwischen Start des Hintergrund-Ladens und hier könnte dieselbe
+        # Datei bereits über einen zweiten, parallel gestarteten Ladevorgang
+        # hinzugefügt worden sein - erneut prüfen statt blind einzufügen.
         if any(p == path for p, _ in self._loaded_measurements):
             QMessageBox.information(
                 self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
@@ -855,50 +906,92 @@ class AnalysisView(QWidget):
         if measurement is None:
             return
 
-        try:
-            if kind == "fft":
-                sample_rate_hz = self._resolve_sample_rate(measurement)
-                if sample_rate_hz is None:
-                    QMessageBox.warning(
-                        self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
-                    )
-                    return
-                freq_hz, amplitude = compute_fft(measurement.data, channel_name, sample_rate_hz)
-                self._finish_result(
+        # Die eigentliche Berechnung (compute_fft/apply_filter/
+        # apply_smoothing) läuft im Hintergrund (siehe
+        # gui/workers.py::BackgroundWorker) - bei langen Messungen (z. B.
+        # 100 kHz über mehrere Minuten) kann das sonst den GUI-Thread für
+        # spürbare Zeit blockieren. Nur die schnellen Vorbereitungsschritte
+        # (Abtastrate ermitteln, x-Achse extrahieren) bleiben synchron.
+        if kind == "fft":
+            sample_rate_hz = self._resolve_sample_rate(measurement)
+            if sample_rate_hz is None:
+                QMessageBox.warning(
+                    self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
+                )
+                return
+            self._run_analysis_in_background(
+                compute_fft,
+                (measurement.data, channel_name, sample_rate_hz),
+                {},
+                lambda result: self._finish_result(
                     file_item, channel_name, t("analysis_fft_result_suffix"),
-                    _FREQUENCY_X_COLUMN, freq_hz, amplitude,
+                    _FREQUENCY_X_COLUMN, result[0], result[1],
+                ),
+            )
+        elif kind in ("lowpass", "highpass"):
+            sample_rate_hz = self._resolve_sample_rate(measurement)
+            if sample_rate_hz is None:
+                QMessageBox.warning(
+                    self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
                 )
-            elif kind in ("lowpass", "highpass"):
-                sample_rate_hz = self._resolve_sample_rate(measurement)
-                if sample_rate_hz is None:
-                    QMessageBox.warning(
-                        self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
-                    )
-                    return
-                filtered = apply_filter(
-                    measurement.data, channel_name, sample_rate_hz, dialog.cutoff_hz(), kind=kind
-                )
-                suffix_key = (
-                    "analysis_lowpass_result_suffix" if kind == "lowpass"
-                    else "analysis_highpass_result_suffix"
-                )
-                x_column = measurement.x_column
-                self._finish_result(
-                    file_item, channel_name, t(suffix_key), x_column,
-                    measurement.data[x_column].to_numpy(), filtered,
-                )
-            elif kind == "smoothing":
-                smoothed = apply_smoothing(measurement.data, channel_name, dialog.window_size())
-                x_column = measurement.x_column
-                self._finish_result(
-                    file_item, channel_name, t("analysis_smoothing_result_suffix"), x_column,
-                    measurement.data[x_column].to_numpy(), smoothed,
-                )
+                return
+            suffix_key = (
+                "analysis_lowpass_result_suffix" if kind == "lowpass"
+                else "analysis_highpass_result_suffix"
+            )
+            x_column = measurement.x_column
+            x_values = measurement.data[x_column].to_numpy()
+            self._run_analysis_in_background(
+                apply_filter,
+                (measurement.data, channel_name, sample_rate_hz, dialog.cutoff_hz()),
+                {"kind": kind},
+                lambda filtered: self._finish_result(
+                    file_item, channel_name, t(suffix_key), x_column, x_values, filtered,
+                ),
+            )
+        elif kind == "smoothing":
+            x_column = measurement.x_column
+            x_values = measurement.data[x_column].to_numpy()
+            self._run_analysis_in_background(
+                apply_smoothing,
+                (measurement.data, channel_name, dialog.window_size()),
+                {},
+                lambda smoothed: self._finish_result(
+                    file_item, channel_name, t("analysis_smoothing_result_suffix"),
+                    x_column, x_values, smoothed,
+                ),
+            )
+
+    def _run_analysis_in_background(
+        self, fn, args: tuple, kwargs: dict, on_success
+    ) -> None:
+        """Führt eine Analysefunktion im Hintergrund aus und ruft bei
+        Erfolg `on_success(ergebnis)` im GUI-Thread auf (siehe
+        `_finish_result`-Aufrufe in `_on_analysis_function_clicked`)."""
+        self._set_busy(True)
+        worker = BackgroundWorker(fn, *args, **kwargs)
+        worker.succeeded.connect(lambda result: self._on_analysis_succeeded(on_success, result))
+        worker.failed.connect(self._on_analysis_failed)
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_analysis_succeeded(self, on_success, result) -> None:
+        self._set_busy(False)
+        try:
+            on_success(result)
         except Exception as exc:
-            logger.warning("Analysefunktion '%s' fehlgeschlagen: %s", kind, exc)
+            logger.warning("Analyseergebnis konnte nicht übernommen werden: %s", exc)
             QMessageBox.critical(
                 self, t("analysis_error_title"), t("analysis_error_body", error=str(exc))
             )
+
+    def _on_analysis_failed(self, message: str) -> None:
+        self._set_busy(False)
+        logger.warning("Analysefunktion fehlgeschlagen: %s", message)
+        QMessageBox.critical(
+            self, t("analysis_error_title"), t("analysis_error_body", error=message)
+        )
 
     def _collect_channel_options(self) -> list[tuple[str, str, list[tuple[str, str]]]]:
         """Alle aktuell im Baum vorhandenen Dateien mit ihren Kanälen

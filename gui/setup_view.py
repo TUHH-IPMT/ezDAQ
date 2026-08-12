@@ -104,6 +104,7 @@ class SetupView(QWidget):
         self._discovered_devices: list[DeviceInfo] = []
         self._storage_path_is_set = False
         self._status_reason_key = ""
+        self._discovery_in_progress = False
 
         # Die gesamte Ansicht steckt in einem QScrollArea: bei vielen
         # Abschnitten (Geräte, Kanäle, Messeinstellungen, Speicher) reicht
@@ -282,7 +283,9 @@ class SetupView(QWidget):
     def retranslate_ui(self) -> None:
         """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
         self._device_header.setText(t("connected_devices"))
-        self._discover_button.setText(t("search_devices"))
+        self._discover_button.setText(
+            t("searching_devices") if self._discovery_in_progress else t("search_devices")
+        )
         self._channel_header.setText(t("channel_configuration"))
         self._measurement_header.setText(t("measurement_settings"))
         self._storage_header.setText(t("storage_settings"))
@@ -343,6 +346,23 @@ class SetupView(QWidget):
         index = self._storage_format_combo.findData(selected_value)
         self._storage_format_combo.setCurrentIndex(index if index >= 0 else 0)
         self._storage_format_combo.blockSignals(False)
+
+    def set_discovery_in_progress(self, in_progress: bool) -> None:
+        """Sperrt/entsperrt den "Geräte suchen"-Button während eine
+        Geräteerkennung im Hintergrund läuft (siehe
+        `gui/main_window.py::_on_discover_hardware`).
+
+        Läuft in einem `BackgroundWorker` (siehe `gui/workers.py`), damit
+        `nidaqmx.system.System.local()` - bei mehreren Chassis/Modulen
+        oder Treiber-Timeouts spürbar langsam - nicht mehr den GUI-Thread
+        blockiert. Diese Methode gibt dem Nutzer währenddessen sichtbares
+        Feedback und verhindert eine doppelt gestartete Anfrage.
+        """
+        self._discovery_in_progress = in_progress
+        self._discover_button.setEnabled(not in_progress)
+        self._discover_button.setText(
+            t("searching_devices") if in_progress else t("search_devices")
+        )
 
     def set_discovered_devices(self, devices: list[DeviceInfo]) -> None:
         """Zeigt das Ergebnis einer Geräteerkennung an.

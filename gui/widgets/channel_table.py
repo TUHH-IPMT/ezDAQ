@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -565,6 +565,48 @@ class _PickerCell(QWidget):
         self._icon_button.setIconSize(size)
 
 
+class _IconTextButton(QPushButton):
+    """`QPushButton` mit eigenem Icon+Text-Layout statt der nativen
+    QPushButton-Darstellung (siehe `_create_parameter_widget`).
+
+    Grund: Qt's eingebautes Icon+Text-Layout zentriert beides bei manchen
+    Button-Höhen/Styles nicht zuverlässig auf derselben Achse - dasselbe
+    Problem trat bereits bei den Navigationskacheln auf (siehe
+    `gui/main_window.py::_build_navigation_and_workspace`: "Icon bleibt
+    oben kleben, Text landet separat vertikal mittig"). Icon und Text
+    werden hier stattdessen als eng zusammenhängendes Päckchen gebaut und
+    dieses als Ganzes im Button zentriert - beide Labels sind
+    `WA_TransparentForMouseEvents`, damit Klicks trotzdem den Button
+    auslösen statt an den Labels hängenzubleiben.
+    """
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+        self._icon_label = QLabel()
+        self._icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._text_label = QLabel()
+        self._text_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(8)
+        content_layout.addWidget(self._icon_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+        content_layout.addWidget(self._text_label, alignment=Qt.AlignmentFlag.AlignVCenter)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.addStretch(1)
+        layout.addLayout(content_layout)
+        layout.addStretch(1)
+
+    def setText(self, text: str) -> None:  # noqa: D102 - siehe Klassendoc
+        self._text_label.setText(text)
+
+    def setIconPixmap(self, pixmap: QPixmap) -> None:
+        self._icon_label.setPixmap(pixmap)
+
+
 class ChannelTableWidget(QWidget):
     """Tabelle zur Bearbeitung von Kanälen (Setup-Ansicht).
 
@@ -898,29 +940,13 @@ class ChannelTableWidget(QWidget):
         button.setIconSize(QSize(14, 14))
 
     @staticmethod
-    def _apply_parameter_button_icon(button: QPushButton) -> None:
+    def _apply_parameter_button_icon(button: "_IconTextButton") -> None:
         """Setzt das Drei-Punkte-Symbol für den Parameter-Button (siehe
-        `_create_parameter_widget`) mit sichtbarem Abstand zum Text.
-
-        Anders als bei den icon-only-Buttons von Hardwarekanal/Signaltyp
-        (siehe `_apply_picker_button_icon`) stehen hier Icon UND Text auf
-        demselben Button - Qt bietet für `QPushButton` aber kein
-        Stylesheet-Property für den Icon-Text-Abstand (nur `padding` um den
-        gesamten Inhalt, keinen Effekt zwischen Icon und Text). Der
-        zusätzliche Freiraum wird deshalb direkt in die Icon-Pixmap
-        eingebettet (transparenter Bereich rechts vom Symbol) - `setIconSize`
-        wird auf die volle (breitere) Pixmap-Größe gesetzt, damit Qt den
-        Freiraum tatsächlich als Teil des Icons einplant."""
-        icon_size = 14
-        gap = 8
-        base = draw_ellipsis_icon(icon_size)
-        padded = QPixmap(icon_size + gap, icon_size)
-        padded.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(padded)
-        painter.drawPixmap(0, 0, base)
-        painter.end()
-        button.setIcon(QIcon(padded))
-        button.setIconSize(QSize(icon_size + gap, icon_size))
+        `_create_parameter_widget`). Abstand zum Text und vertikale
+        Zentrierung übernimmt bereits `_IconTextButton`s eigenes Layout -
+        hier wird nur die (theme-abhängige) Pixmap gesetzt, auch erneut
+        bei Theme-Wechsel (siehe `_retheme_action_button_icons`)."""
+        button.setIconPixmap(draw_ellipsis_icon(14))
 
     def _update_hw_channel_button_text(self, button: "_PickerCell") -> None:
         """Setzt den sichtbaren Button-Text aus den Properties zusammen.
@@ -1093,7 +1119,8 @@ class ChannelTableWidget(QWidget):
         (einfacher, konsistenter Button statt Wertevorschau), sondern nur
         als Properties mitgeführt.
         """
-        button = QPushButton(t("choose_parameters_button"))
+        button = _IconTextButton()
+        button.setText(t("choose_parameters_button"))
         button.setCursor(Qt.CursorShape.PointingHandCursor)
         button.setProperty("scale", scale)
         button.setProperty("offset", offset)

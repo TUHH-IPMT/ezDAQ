@@ -53,6 +53,7 @@ from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
 from gui.live_view import LiveView
 from gui.setup_view import NamingScheme, SetupView
+from gui.workers import BackgroundWorker
 from gui.theme import (
     connect_theme_changed,
     draw_magnifier_icon,
@@ -93,6 +94,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._controller = controller
         self._configuration_manager = configuration_manager
+
+        # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
+        # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
+        # Python das QThread-Objekt vorzeitig einsammeln.
+        self._background_workers: list[BackgroundWorker] = []
+        self._discovery_worker: BackgroundWorker | None = None
 
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
@@ -509,7 +516,29 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_discover_hardware(self) -> None:
-        devices = self._controller.discover_hardware()
+        """Startet die Geräteerkennung im Hintergrund (siehe
+        `gui/workers.py::BackgroundWorker`).
+
+        `nidaqmx.system.System.local()` plus Kanal-Iteration je Gerät
+        (`hardware/nidaq_device.py::discover_devices`) kann bei mehreren
+        Chassis/Modulen oder Treiber-Timeouts spürbar dauern - lief
+        vorher synchron im GUI-Thread und blockierte dabei auch den
+        automatischen Erkennungslauf beim Programmstart (siehe `__init__`).
+        """
+        if self._discovery_worker is not None:  # bereits eine Anfrage aktiv
+            return
+        self._setup_view.set_discovery_in_progress(True)
+        worker = BackgroundWorker(self._controller.discover_hardware)
+        self._discovery_worker = worker
+        worker.succeeded.connect(self._on_discover_hardware_succeeded)
+        worker.failed.connect(self._on_discover_hardware_failed)
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_discover_hardware_succeeded(self, devices: list[DeviceInfo]) -> None:
+        self._discovery_worker = None
+        self._setup_view.set_discovery_in_progress(False)
         self._setup_view.set_discovered_devices(devices)
         # Nur Geräte MIT Kanälen zählen (dieselbe Filterung wie
         # `SetupView.set_discovered_devices`) - `System.local().devices`
@@ -519,6 +548,20 @@ class MainWindow(QMainWindow):
         # nutzbaren Hardware künstlich aufbläht.
         usable_devices = [d for d in devices if d.num_channels > 0]
         self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
+
+    def _on_discover_hardware_failed(self, message: str) -> None:
+        self._discovery_worker = None
+        self._setup_view.set_discovery_in_progress(False)
+        logger.error("Geräteerkennung fehlgeschlagen: %s", message)
+        self._status_label.setText(t("device_discovery_failed"))
+
+    def _forget_background_worker(self, worker: BackgroundWorker) -> None:
+        """Entfernt eine abgeschlossene `BackgroundWorker`-Referenz, damit
+        `_background_workers` bei langer Programmlaufzeit nicht unbegrenzt
+        wächst."""
+        if worker in self._background_workers:
+            self._background_workers.remove(worker)
+        worker.deleteLater()
 
     def _on_start_measurement(self, config: MeasurementConfig) -> None:
         requested_measurement_name = config.name

@@ -183,7 +183,7 @@ _translations = {
         "add_channel_button": "Kanal hinzufügen",
         "remove_channel_button": "Ausgewählten Kanal entfernen",
         "default_channel_name": "Kanal {index}",
-        "choose_parameters_button": "Einstellungen",
+        "choose_parameters_button": "Weitere Einstellungen",
         "parameters_dialog_title": "Kanaleinstellungen",
         "param_scale_label": "Skalierungsfaktor:",
         "param_offset_label": "Offsetwert:",
@@ -236,6 +236,8 @@ _translations = {
         "measurement_completed_named": "Messung '{name}' abgeschlossen ({duration} s)",
         "no_devices_found": "Keine Geräte gefunden (Treiber installiert? Hardware angeschlossen? Hardware im Treiber für diesen PC reserviert?)",
         "devices_found": "Gerät(e) erkannt",
+        "searching_devices": "Suche läuft...",
+        "device_discovery_failed": "Geräteerkennung fehlgeschlagen",
 
         # Konfiguration speichern/laden (Datei-Menü)
         "status_config_saved": "Konfiguration gespeichert: {filename}",
@@ -427,7 +429,7 @@ _translations = {
         "add_channel_button": "Add Channel",
         "remove_channel_button": "Remove Selected Channel",
         "default_channel_name": "Channel {index}",
-        "choose_parameters_button": "Settings",
+        "choose_parameters_button": "More Settings",
         "parameters_dialog_title": "Channel Settings",
         "param_scale_label": "Scale Factor:",
         "param_offset_label": "Offset Value:",
@@ -480,6 +482,8 @@ _translations = {
         "measurement_completed_named": "Measurement '{name}' completed ({duration} s)",
         "no_devices_found": "No devices found (Drivers installed? Hardware connected? Hardware reserved for this PC in the driver?)",
         "devices_found": "Device(s) found",
+        "searching_devices": "Searching...",
+        "device_discovery_failed": "Device discovery failed",
 
         # Konfiguration speichern/laden (Datei-Menü)
         "status_config_saved": "Configuration saved: {filename}",
