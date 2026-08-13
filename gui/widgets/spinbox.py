@@ -74,3 +74,31 @@ class PrecisionDoubleSpinBox(QDoubleSpinBox):
         if "." in text:
             text = text.rstrip("0").rstrip(".")
         return text
+
+
+def parse_optional_float(text: str) -> float | None:
+    """Wandelt frei eingegebenen Text (z. B. eine editierbare
+    Tabellen-/Baum-Zelle ohne `QDoubleSpinBox`, siehe
+    `gui/sensor_database_dialog.py`) in einen optionalen Float um - Komma
+    UND Punkt werden als Dezimaltrennzeichen akzeptiert (dasselbe Prinzip
+    wie bei `PrecisionDoubleSpinBox`, siehe Moduldoc oben), leerer Text
+    ergibt `None` statt eines Fehlers."""
+    text = text.strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def format_optional_float(value: float | None) -> str:
+    """Kehrt `parse_optional_float` um - `None` wird als leerer Text
+    dargestellt, sonst ohne überflüssige Nachkommanullen (siehe
+    `PrecisionDoubleSpinBox.textFromValue`)."""
+    if value is None:
+        return ""
+    text = f"{value:.10f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text

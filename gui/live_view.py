@@ -1008,9 +1008,18 @@ class LiveView(QWidget):
 
         session = self._controller.current_session
         if session is not None and session.start_time is not None:
-            self._duration_label.setText(
-                t("duration_value", value=f"{session.duration_seconds:.1f} s")
-            )
+            elapsed_seconds = session.duration_seconds
+            self._duration_label.setText(t("duration_value", value=f"{elapsed_seconds:.1f} s"))
+            # Konfiguriertes Aufnahme-Limit (siehe
+            # `data/models.py::MeasurementConfig.is_recording_limit_reached`)
+            # - derselbe Pfad wie der manuelle "Messung stoppen"-Button
+            # (`self._stop_button.clicked.connect(self.stop_requested.emit)`),
+            # damit Metadaten/Storage-Writer identisch abgeschlossen werden.
+            if session.config.is_recording_limit_reached(
+                elapsed_seconds, self._controller.total_samples_acquired
+            ):
+                self.stop_requested.emit()
+                return
         self._sample_rate_label.setText(
             t("sample_rate_value", value=f"{self._sample_rate_hz:.1f} Hz")
         )

@@ -166,6 +166,9 @@ class ConfigurationManager:
         sample_rate_hz: float,
         storage_format: str,
         live_only: bool,
+        recording_unlimited: bool = True,
+        recording_stop_value: float = 0.0,
+        recording_stop_unit: str = "samples",
     ) -> None:
         """Speichert die zuletzt verwendeten Messparameter.
 
@@ -176,6 +179,9 @@ class ConfigurationManager:
         self._settings.default_sample_rate_hz = sample_rate_hz
         self._settings.default_storage_format = storage_format
         self._settings.last_live_only = live_only
+        self._settings.last_recording_unlimited = recording_unlimited
+        self._settings.last_recording_stop_value = recording_stop_value
+        self._settings.last_recording_stop_unit = recording_stop_unit
         self.save_settings()
 
     # ------------------------------------------------------------------ #

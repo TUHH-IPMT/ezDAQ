@@ -95,6 +95,26 @@ class StorageFormat(str, Enum):
     CSV = "csv"
 
 
+class RecordingStopUnit(str, Enum):
+    """Einheit für das konfigurierte Aufnahme-Limit (siehe
+    `MeasurementConfig.recording_stop_value`/`recording_unlimited`)."""
+
+    SAMPLES = "samples"
+    SECONDS = "seconds"
+    MINUTES = "minutes"
+    HOURS = "hours"
+
+
+# Umrechnungsfaktor auf Sekunden je Zeiteinheit - SAMPLES bewusst nicht
+# enthalten, da dafür Messwerte statt Sekunden verglichen werden (siehe
+# `MeasurementConfig.is_recording_limit_reached`).
+_RECORDING_STOP_UNIT_TO_SECONDS: dict[RecordingStopUnit, float] = {
+    RecordingStopUnit.SECONDS: 1.0,
+    RecordingStopUnit.MINUTES: 60.0,
+    RecordingStopUnit.HOURS: 3600.0,
+}
+
+
 @dataclass
 class Channel:
     """Repräsentiert einen einzelnen Messkanal.
@@ -282,6 +302,14 @@ class MeasurementConfig:
         storage_format: Gewähltes Speicherformat (Parquet/CSV).
         samples_per_read: Blockgröße pro Lesevorgang vom DAQ-Gerät.
         ring_buffer_size: Kapazität des Ring Buffers in Samples pro Kanal.
+        recording_unlimited: True (Standard/bisheriges Verhalten) = die
+            Messung läuft, bis der Nutzer manuell stoppt oder der
+            Speicherplatz ausgeht. False = die Messung stoppt automatisch,
+            sobald `recording_stop_value`/`recording_stop_unit` erreicht ist
+            (siehe `is_recording_limit_reached`).
+        recording_stop_value: Grenzwert in der Einheit `recording_stop_unit`
+            - nur relevant, wenn `recording_unlimited` False ist.
+        recording_stop_unit: Einheit des Grenzwerts (Messwerte oder Zeit).
     """
 
     name: str
@@ -291,10 +319,30 @@ class MeasurementConfig:
     samples_per_read: int = 1000
     ring_buffer_size: int = 100_000
     save_to_disk: bool = True
+    recording_unlimited: bool = True
+    recording_stop_value: float = 0.0
+    recording_stop_unit: RecordingStopUnit = RecordingStopUnit.SAMPLES
 
     def active_channels(self) -> list[Channel]:
         """Gibt nur die aktivierten Kanäle zurück."""
         return [ch for ch in self.channels if ch.enabled]
+
+    def is_recording_limit_reached(self, elapsed_seconds: float, samples_acquired: int) -> bool:
+        """Prüft, ob das konfigurierte Aufnahme-Limit erreicht ist.
+
+        Zentrale Stelle für die Grenzwert-Logik (Messwerte vs. Zeiteinheiten),
+        damit `gui/live_view.py` nur noch den aktuellen Fortschritt liefern
+        muss, statt die Umrechnung selbst zu kennen. Gibt bei
+        `recording_unlimited=True` immer False zurück (bisheriges
+        Standardverhalten: laufen, bis manuell gestoppt oder die Festplatte
+        voll ist).
+        """
+        if self.recording_unlimited:
+            return False
+        if self.recording_stop_unit == RecordingStopUnit.SAMPLES:
+            return samples_acquired >= self.recording_stop_value
+        seconds_per_unit = _RECORDING_STOP_UNIT_TO_SECONDS[self.recording_stop_unit]
+        return elapsed_seconds >= self.recording_stop_value * seconds_per_unit
 
     def to_dict(self) -> dict:
         """Serialisiert die Konfiguration in ein JSON-kompatibles Dictionary."""
@@ -306,6 +354,9 @@ class MeasurementConfig:
             "samples_per_read": self.samples_per_read,
             "ring_buffer_size": self.ring_buffer_size,
             "save_to_disk": self.save_to_disk,
+            "recording_unlimited": self.recording_unlimited,
+            "recording_stop_value": self.recording_stop_value,
+            "recording_stop_unit": self.recording_stop_unit.value,
         }
 
     @classmethod
@@ -321,6 +372,11 @@ class MeasurementConfig:
             samples_per_read=data.get("samples_per_read", 1000),
             ring_buffer_size=data.get("ring_buffer_size", 100_000),
             save_to_disk=data.get("save_to_disk", True),
+            recording_unlimited=data.get("recording_unlimited", True),
+            recording_stop_value=data.get("recording_stop_value", 0.0),
+            recording_stop_unit=RecordingStopUnit(
+                data.get("recording_stop_unit", RecordingStopUnit.SAMPLES.value)
+            ),
         )
 
 

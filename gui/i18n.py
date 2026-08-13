@@ -36,6 +36,7 @@ _translations = {
         "menu_save_config": "Konfiguration speichern",
         "menu_load_config": "Konfiguration laden",
         "file_filter_json": "Konfigurationsdateien (*.json)",
+        "menu_sensor_database": "Sensor-Datenbank...",
 
         # Navigation
         "nav_setup": "Konfiguration",
@@ -53,6 +54,12 @@ _translations = {
         "storage_format_parquet": "Parquet (empfohlen)",
         "storage_format_csv": "CSV",
         "live_only": "Nur Live-Ansicht (kein Speichern)",
+        "recording_unlimited": "Unbegrenzt (bis Speicherplatz voll)",
+        "recording_limit_label": "Messzyklus",
+        "recording_stop_unit_samples": "Messwerte",
+        "recording_stop_unit_seconds": "Sekunden",
+        "recording_stop_unit_minutes": "Minuten",
+        "recording_stop_unit_hours": "Stunden",
         "storage_location": "Speicherort",
         "choose_storage_location": "Speicherort wählen",
         "start_measurement": "Messung starten",
@@ -245,6 +252,40 @@ _translations = {
         "theme_dark": "Dunkel",
         "ok": "OK",
         "cancel": "Abbrechen",
+        "close_button": "Schließen",
+
+        # Sensor-Datenbank
+        "sensor_database_dialog_title": "Sensor-Datenbank",
+        "add_sensor_button": "Sensor hinzufügen",
+        "remove_sensor_button": "Sensor entfernen",
+        "sensor_category_label": "Kategorie:",
+        "sensor_uncategorized_label": "Unkategorisiert",
+        "sensor_name_label": "Name:",
+        "sensor_manufacturer_label": "Hersteller:",
+        "sensor_serial_label": "Seriennummer:",
+        "sensor_notes_label": "Notizen:",
+        "new_sensor_default_name": "Neuer Sensor",
+        "new_axis_default_label": "Neuer Messkanal",
+        "add_axis_button": "Messkanal hinzufügen",
+        "remove_axis_button": "Messkanal entfernen",
+        "add_range_button": "Messbereich-Variante hinzufügen",
+        "remove_range_button": "Variante entfernen",
+        "confirm_delete_sensor_body": "Sensor '{name}' wirklich löschen?",
+        "range_minimum_one_body": (
+            "Ein Messkanal muss mindestens eine Messbereich-Variante haben. "
+            "Zum Entfernen stattdessen den ganzen Messkanal löschen."
+        ),
+        "sensor_col_axis": "Messkanal",
+        "sensor_col_signal_type": "Signaltyp",
+        "sensor_col_range": "Messbereich",
+        "sensor_col_sensitivity": "Sensitivitätswert",
+        "sensor_db_unlock_button": "Entsperren...",
+        "sensor_db_relock_button": "Sperren",
+        "sensor_db_locked_status": "Gesperrt (schreibgeschützt)",
+        "sensor_db_unlocked_status": "Entsperrt",
+        "sensor_db_enter_password_title": "Datenbank entsperren",
+        "sensor_db_enter_password_body": "Passwort eingeben:",
+        "sensor_db_wrong_password_body": "Falsches Passwort.",
 
         # Status
         "ready": "Bereit",
@@ -300,6 +341,7 @@ _translations = {
         "menu_save_config": "Save Configuration",
         "menu_load_config": "Load Configuration",
         "file_filter_json": "Configuration Files (*.json)",
+        "menu_sensor_database": "Sensor Database...",
 
         # Navigation
         "nav_setup": "Configuration",
@@ -317,6 +359,12 @@ _translations = {
         "storage_format_parquet": "Parquet (recommended)",
         "storage_format_csv": "CSV",
         "live_only": "Live View Only (do not save)",
+        "recording_unlimited": "Unlimited (until disk is full)",
+        "recording_limit_label": "Recording Limit",
+        "recording_stop_unit_samples": "Samples",
+        "recording_stop_unit_seconds": "Seconds",
+        "recording_stop_unit_minutes": "Minutes",
+        "recording_stop_unit_hours": "Hours",
         "storage_location": "Storage Location",
         "choose_storage_location": "Choose Storage Location",
         "start_measurement": "Start Measurement",
@@ -509,6 +557,40 @@ _translations = {
         "theme_dark": "Dark",
         "ok": "OK",
         "cancel": "Cancel",
+        "close_button": "Close",
+
+        # Sensor Database
+        "sensor_database_dialog_title": "Sensor Database",
+        "add_sensor_button": "Add Sensor",
+        "remove_sensor_button": "Remove Sensor",
+        "sensor_category_label": "Category:",
+        "sensor_uncategorized_label": "Uncategorized",
+        "sensor_name_label": "Name:",
+        "sensor_manufacturer_label": "Manufacturer:",
+        "sensor_serial_label": "Serial Number:",
+        "sensor_notes_label": "Notes:",
+        "new_sensor_default_name": "New Sensor",
+        "new_axis_default_label": "New Channel",
+        "add_axis_button": "Add Channel",
+        "remove_axis_button": "Remove Channel",
+        "add_range_button": "Add Range Variant",
+        "remove_range_button": "Remove Variant",
+        "confirm_delete_sensor_body": "Really delete sensor '{name}'?",
+        "range_minimum_one_body": (
+            "A channel must have at least one range variant. Remove the "
+            "whole channel instead."
+        ),
+        "sensor_col_axis": "Channel",
+        "sensor_col_signal_type": "Signal Type",
+        "sensor_col_range": "Range",
+        "sensor_col_sensitivity": "Sensitivity Value",
+        "sensor_db_unlock_button": "Unlock...",
+        "sensor_db_relock_button": "Lock",
+        "sensor_db_locked_status": "Locked (read-only)",
+        "sensor_db_unlocked_status": "Unlocked",
+        "sensor_db_enter_password_title": "Unlock Database",
+        "sensor_db_enter_password_body": "Enter password:",
+        "sensor_db_wrong_password_body": "Incorrect password.",
 
         # Status
         "ready": "Ready",

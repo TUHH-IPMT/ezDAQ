@@ -76,6 +76,7 @@ def main() -> int:
     from PyQt6.QtWidgets import QApplication
 
     from config.configuration_manager import ConfigurationManager
+    from config.sensor_database import SensorDatabaseManager
     from config.settings import get_resource_path
     from core.controller import MeasurementController
     from gui.main_window import MainWindow
@@ -97,6 +98,7 @@ def main() -> int:
         logger.warning("Anwendungs-Icon nicht gefunden unter %s", icon_path)
 
     configuration_manager = ConfigurationManager()
+    sensor_database = SensorDatabaseManager()
 
     from gui.i18n import set_language
     set_language(configuration_manager.settings.language)
@@ -106,7 +108,7 @@ def main() -> int:
 
     controller = MeasurementController(configuration_manager)
 
-    window = MainWindow(controller, configuration_manager)
+    window = MainWindow(controller, configuration_manager, sensor_database)
     window.show()
 
     exit_code = app.exec()

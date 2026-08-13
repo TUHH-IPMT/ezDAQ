@@ -101,6 +101,19 @@ class MeasurementController:
             return self._session
 
     @property
+    def total_samples_acquired(self) -> int:
+        """Gesamtzahl bisher vom DAQ-Thread erfasster Samples pro Kanal.
+
+        Basis für ein konfiguriertes Messwert-Limit (siehe
+        `data/models.py::MeasurementConfig.is_recording_limit_reached`,
+        aufgerufen von `gui/live_view.py::_on_timer_tick`).
+        """
+        with self._lock:
+            if self._acquisition_thread is None:
+                return 0
+            return self._acquisition_thread.total_samples_acquired
+
+    @property
     def active_channels(self) -> list[Channel]:
         """Aktive Kanäle in der gleichen Reihenfolge wie der Ring Buffer sie schreibt."""
         with self._lock:

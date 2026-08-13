@@ -22,6 +22,10 @@ APP_NAME = "ezDAQ"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
+# Sensor-Katalog (siehe config/sensor_database.py) - bewusst eine eigene
+# Datei, komplett getrennt von Mess-/Kanalkonfigurationen (siehe
+# data/sensor_models.py Moduldoc).
+SENSOR_DATABASE_FILE_NAME = "sensor_database.json"
 
 
 def get_resource_path(*parts: str) -> Path:
@@ -87,6 +91,13 @@ class AppSettings:
         name_number_suffix_digits: Stellenzahl des Nummernsuffix (z. B. 3 -> "_001").
         name_include_date: Ob das aktuelle Datum in den Messnamen einfließt.
         name_include_time: Ob die aktuelle Uhrzeit in den Messnamen einfließt.
+        last_recording_unlimited: Letzte Auswahl für "Unbegrenzt (bis
+            Speicherplatz voll)" - siehe
+            `data.models.MeasurementConfig.recording_unlimited`.
+        last_recording_stop_value: Zuletzt eingegebener Grenzwert (siehe
+            `data.models.MeasurementConfig.recording_stop_value`).
+        last_recording_stop_unit: Zuletzt gewählte Einheit (Wert von
+            `data.models.RecordingStopUnit`, z. B. "samples").
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -103,6 +114,9 @@ class AppSettings:
     name_number_suffix_digits: int = 3
     name_include_date: bool = False
     name_include_time: bool = False
+    last_recording_unlimited: bool = True
+    last_recording_stop_value: float = 0.0
+    last_recording_stop_unit: str = "samples"
 
     def to_dict(self) -> dict[str, Any]:
         """Serialisiert die Einstellungen in ein JSON-kompatibles Dictionary."""
@@ -139,4 +153,7 @@ class AppSettings:
             name_number_suffix_digits=data.get("name_number_suffix_digits", 3),
             name_include_date=data.get("name_include_date", False),
             name_include_time=data.get("name_include_time", False),
+            last_recording_unlimited=data.get("last_recording_unlimited", True),
+            last_recording_stop_value=data.get("last_recording_stop_value", 0.0),
+            last_recording_stop_unit=data.get("last_recording_stop_unit", "samples"),
         )

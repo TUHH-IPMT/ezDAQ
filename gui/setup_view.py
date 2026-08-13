@@ -44,7 +44,8 @@ from PyQt6.QtWidgets import (
 )
 
 from config.configuration_manager import ConfigurationManager
-from data.models import Channel, DeviceInfo, MeasurementConfig, StorageFormat
+from config.sensor_database import SensorDatabaseManager
+from data.models import Channel, DeviceInfo, MeasurementConfig, RecordingStopUnit, StorageFormat
 from gui.i18n import connect_language_changed, t
 from gui.theme import connect_theme_changed, draw_play_icon
 from gui.widgets.channel_table import ChannelTableWidget
@@ -58,6 +59,16 @@ logger = logging.getLogger(__name__)
 _STORAGE_FORMAT_LABEL_KEYS: dict[StorageFormat, str] = {
     StorageFormat.PARQUET: "storage_format_parquet",
     StorageFormat.CSV: "storage_format_csv",
+}
+
+# Übersetzte Anzeige-Labels für die Einheiten-Combobox des Aufnahme-Limits
+# (siehe `_populate_recording_stop_unit_combo`) - analog zu
+# `_STORAGE_FORMAT_LABEL_KEYS`.
+_RECORDING_STOP_UNIT_LABEL_KEYS: dict[RecordingStopUnit, str] = {
+    RecordingStopUnit.SAMPLES: "recording_stop_unit_samples",
+    RecordingStopUnit.SECONDS: "recording_stop_unit_seconds",
+    RecordingStopUnit.MINUTES: "recording_stop_unit_minutes",
+    RecordingStopUnit.HOURS: "recording_stop_unit_hours",
 }
 
 
@@ -97,7 +108,10 @@ class SetupView(QWidget):
     storage_path_requested = pyqtSignal()
 
     def __init__(
-        self, configuration_manager: ConfigurationManager, parent: QWidget | None = None
+        self,
+        configuration_manager: ConfigurationManager,
+        sensor_database: SensorDatabaseManager | None = None,
+        parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._configuration_manager = configuration_manager
@@ -149,7 +163,7 @@ class SetupView(QWidget):
         layout.addWidget(self._channel_header)
         self._channel_group = QGroupBox()
         channel_layout = QVBoxLayout(self._channel_group)
-        self._channel_table = ChannelTableWidget()
+        self._channel_table = ChannelTableWidget(sensor_database)
         channel_layout.addWidget(self._channel_table)
         layout.addWidget(self._channel_group, stretch=1)
 
@@ -190,6 +204,19 @@ class SetupView(QWidget):
         self._min_samples_per_read = 50
         self._max_samples_per_read = 2000
         self._default_ring_buffer_seconds = 30
+        # Obergrenze der BLOCKDAUER in Sekunden (zusaetzlich zur
+        # Sample-Untergrenze oben): `AcquisitionThread.stop()` (siehe
+        # core/acquisition.py) wartet beim Stoppen auf den GERADE
+        # laufenden, blockierenden `device.read()`-Aufruf - bei niedriger
+        # Abtastrate wuerde `_min_samples_per_read` sonst einen einzelnen
+        # Block mehrere Sekunden dauern lassen (z. B. 50 Samples bei 15 Hz
+        # = 3,3 s) und sowohl den manuellen Stopp-Button als auch ein
+        # konfiguriertes Aufnahme-Limit (siehe
+        # `data/models.py::MeasurementConfig.recording_unlimited`)
+        # entsprechend verzoegern. Bei den ueblichen Abtastraten
+        # (>= 100 Hz) greift diese Grenze nicht (50 Samples sind dann
+        # laengst unter 0.5s), aendert dort also nichts.
+        self._max_read_block_seconds = 0.5
 
         # --- Speichereinstellungen ---
         self._storage_header = QLabel(t("storage_settings"))
@@ -237,6 +264,35 @@ class SetupView(QWidget):
         self._storage_format_combo = QComboBox()
         self._populate_storage_format_combo(configuration_manager.settings.default_storage_format)
         self._storage_layout.addRow(f"{t('storage_format')}:", self._storage_format_combo)
+
+        # Aufnahme-Limit ("Messzyklus"): standardmäßig unbegrenzt (heutiges
+        # Verhalten - laufen, bis manuell gestoppt oder die Festplatte voll
+        # ist). Deaktiviert man den Haken, kann ein Grenzwert (Messwerte
+        # oder Zeit) eingegeben werden, bei dessen Erreichen die Messung
+        # automatisch stoppt (siehe `gui/live_view.py::_on_timer_tick`).
+        self._recording_unlimited_checkbox = QCheckBox(t("recording_unlimited"))
+        self._recording_unlimited_checkbox.setChecked(
+            configuration_manager.settings.last_recording_unlimited
+        )
+        self._recording_unlimited_checkbox.toggled.connect(self._on_recording_unlimited_toggled)
+        self._storage_layout.addRow("", self._recording_unlimited_checkbox)
+
+        recording_limit_row = QHBoxLayout()
+        self._recording_stop_spin = QSpinBox()
+        self._recording_stop_spin.setRange(1, 1_000_000_000)
+        self._recording_stop_spin.setValue(
+            max(1, int(configuration_manager.settings.last_recording_stop_value))
+        )
+        self._recording_stop_unit_combo = QComboBox()
+        self._populate_recording_stop_unit_combo(
+            configuration_manager.settings.last_recording_stop_unit
+        )
+        recording_limit_row.addWidget(self._recording_stop_spin)
+        recording_limit_row.addWidget(self._recording_stop_unit_combo)
+        recording_limit_row.addStretch(1)
+        self._recording_limit_row_label = QLabel(f"{t('recording_limit_label')}:")
+        self._storage_layout.addRow(self._recording_limit_row_label, recording_limit_row)
+        self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
 
         self._storage_path_label = QLabel(t("no_storage_location"))
         self._storage_button = QPushButton(t("choose_storage_location"))
@@ -308,6 +364,10 @@ class SetupView(QWidget):
         self._status_label.setText(t(self._status_reason_key))
         self._populate_storage_format_combo(self._storage_format_combo.currentData())
 
+        self._recording_unlimited_checkbox.setText(t("recording_unlimited"))
+        self._recording_limit_row_label.setText(f"{t('recording_limit_label')}:")
+        self._populate_recording_stop_unit_combo(self._recording_stop_unit_combo.currentData())
+
         self._naming_row_label.setText(f"{t('naming_scheme')}:")
         self._naming_number_checkbox.setText(t("naming_number_suffix"))
         self._naming_digits_label.setText(f"{t('naming_digits')}:")
@@ -346,6 +406,19 @@ class SetupView(QWidget):
         index = self._storage_format_combo.findData(selected_value)
         self._storage_format_combo.setCurrentIndex(index if index >= 0 else 0)
         self._storage_format_combo.blockSignals(False)
+
+    def _populate_recording_stop_unit_combo(self, selected_value: str) -> None:
+        """Befüllt die Einheiten-Combobox des Aufnahme-Limits mit übersetzten
+        Labels - analog zu `_populate_storage_format_combo`."""
+        self._recording_stop_unit_combo.blockSignals(True)
+        self._recording_stop_unit_combo.clear()
+        for unit in RecordingStopUnit:
+            self._recording_stop_unit_combo.addItem(
+                t(_RECORDING_STOP_UNIT_LABEL_KEYS[unit]), unit.value
+            )
+        index = self._recording_stop_unit_combo.findData(selected_value)
+        self._recording_stop_unit_combo.setCurrentIndex(index if index >= 0 else 0)
+        self._recording_stop_unit_combo.blockSignals(False)
 
     def set_discovery_in_progress(self, in_progress: bool) -> None:
         """Sperrt/entsperrt den "Geräte suchen"-Button während eine
@@ -417,17 +490,23 @@ class SetupView(QWidget):
         """Zeigt eine Fehlermeldung an (z. B. ungültige Konfiguration)."""
         QMessageBox.warning(self, t("error"), message)
 
-    def get_current_measurement_parameters(self) -> tuple[str, float, str, bool]:
+    def get_current_measurement_parameters(
+        self,
+    ) -> tuple[str, float, str, bool, bool, float, str]:
         """Gibt die aktuell im UI eingestellten Messparameter zurück.
 
         Returns:
-            (measurement_name, sample_rate_hz, storage_format, live_only)
+            (measurement_name, sample_rate_hz, storage_format, live_only,
+            recording_unlimited, recording_stop_value, recording_stop_unit)
         """
         return (
             self._name_edit.text().strip() or "Messung",
             self._sample_rate_spin.value(),
             self._storage_format_combo.currentData(),
             self._live_only_checkbox.isChecked(),
+            self._recording_unlimited_checkbox.isChecked(),
+            float(self._recording_stop_spin.value()),
+            self._recording_stop_unit_combo.currentData(),
         )
 
     def get_configured_channels(self) -> list[Channel]:
@@ -492,6 +571,9 @@ class SetupView(QWidget):
             samples_per_read=samples_per_read,
             ring_buffer_size=ring_buffer_size,
             save_to_disk=not self._live_only_checkbox.isChecked(),
+            recording_unlimited=self._recording_unlimited_checkbox.isChecked(),
+            recording_stop_value=float(self._recording_stop_spin.value()),
+            recording_stop_unit=RecordingStopUnit(self._recording_stop_unit_combo.currentData()),
         )
 
     def apply_config(self, config: MeasurementConfig) -> None:
@@ -508,6 +590,10 @@ class SetupView(QWidget):
         self._sample_rate_spin.setValue(config.sample_rate_hz)
         self._populate_storage_format_combo(config.storage_format.value)
         self._live_only_checkbox.setChecked(not config.save_to_disk)
+        self._recording_unlimited_checkbox.setChecked(config.recording_unlimited)
+        self._recording_stop_spin.setValue(max(1, int(config.recording_stop_value)))
+        self._populate_recording_stop_unit_combo(config.recording_stop_unit.value)
+        self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
         self._channel_table.set_channels(config.channels)
 
     # ------------------------------------------------------------------ #
@@ -524,6 +610,16 @@ class SetupView(QWidget):
             include_date=scheme.include_date,
             include_time=scheme.include_time,
         )
+
+    def _on_recording_unlimited_toggled(self, checked: bool) -> None:
+        """Graut Wert/Einheit des Aufnahme-Limits aus, solange "Unbegrenzt"
+        aktiv ist - reines UI-Feedback, keine sofortige Persistierung (wie
+        beim "Nur Live anzeigen"-Haken wird der Wert erst beim Start/
+        Schließen über `update_last_measurement_parameters` gespeichert,
+        siehe `get_current_measurement_parameters`)."""
+        enabled = not checked
+        self._recording_stop_spin.setEnabled(enabled)
+        self._recording_stop_unit_combo.setEnabled(enabled)
 
     def _on_start_clicked(self) -> None:
         config = self.build_current_config()
@@ -570,10 +666,15 @@ class SetupView(QWidget):
         """Berechnet eine adaptive Blockgroesse pro DAQ-Read.
 
         Kleinere Bloecke reduzieren die wahrgenommene Hakelei der Live View,
-        weil neue Daten haeufiger im Ring Buffer landen.
+        weil neue Daten haeufiger im Ring Buffer landen. Zusaetzlich per
+        `_max_read_block_seconds` nach oben in der BLOCKDAUER begrenzt -
+        siehe dessen Kommentar in `__init__` fuer den Grund (Stopp-Latenz
+        bei niedrigen Abtastraten).
         """
         target = int(sample_rate_hz * (self._target_read_block_ms / 1000.0))
-        return max(self._min_samples_per_read, min(self._max_samples_per_read, target))
+        samples = max(self._min_samples_per_read, min(self._max_samples_per_read, target))
+        max_by_duration = max(1, int(sample_rate_hz * self._max_read_block_seconds))
+        return min(samples, max_by_duration)
 
     def _calculate_dynamic_buffer_size(self, sample_rate_hz: float, num_active_channels: int) -> int:
         """Berechnet die Puffergröße dynamisch basierend auf verfügbarem RAM.

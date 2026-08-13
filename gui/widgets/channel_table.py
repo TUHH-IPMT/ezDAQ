@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from config.sensor_database import SensorDatabaseManager
 from data.models import ADC_TIMING_MODES, THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
 from gui.i18n import connect_language_changed, t
 from gui.widgets.spinbox import PrecisionDoubleSpinBox
@@ -78,8 +79,10 @@ _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
 # eigentliche Wert (Channel.signal_type.value, z. B. "voltage") bleibt
 # unabhängig von der UI-Sprache stabil (Persistenz/Hardware-Vergleiche) -
 # er wird als Button-Property "signal_type" hinterlegt, siehe
-# `_create_signal_type_widget`.
-_SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
+# `_create_signal_type_widget`. Bewusst OHNE Unterstrich-Präfix: wird auch
+# von `gui/sensor_database_dialog.py` importiert, um dieselbe
+# Übersetzungstabelle nicht zu duplizieren.
+SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.VOLTAGE: "signal_type_voltage",
     SignalType.IEPE_ACCELERATION: "signal_type_iepe",
     SignalType.THERMOCOUPLE: "signal_type_thermocouple",
@@ -244,7 +247,7 @@ class SignalTypePickerDialog(QDialog):
 
         selected_item: QTreeWidgetItem | None = None
         for signal_type in allowed:
-            item = QTreeWidgetItem([t(_SIGNAL_TYPE_LABEL_KEYS[signal_type])])
+            item = QTreeWidgetItem([t(SIGNAL_TYPE_LABEL_KEYS[signal_type])])
             item.setData(0, _ROLE_CHANNEL_VALUE, signal_type.value)
             self._tree.addTopLevelItem(item)
             if signal_type.value == current_value:
@@ -424,11 +427,14 @@ class ChannelParameterDialog(QDialog):
         cal_point1_reference: float | None = None,
         cal_point2_measured: float | None = None,
         cal_point2_reference: float | None = None,
+        sensor_database: SensorDatabaseManager | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(t("parameters_dialog_title"))
 
+        self._signal_type = signal_type
+        self._sensor_database = sensor_database
         self._cal_point1_measured = cal_point1_measured
         self._cal_point1_reference = cal_point1_reference
         self._cal_point2_measured = cal_point2_measured
@@ -477,6 +483,18 @@ class ChannelParameterDialog(QDialog):
 
         layout.addLayout(form)
 
+        # Reiner Schnellzugriff auf den Sensor-Katalog (siehe
+        # gui/sensor_database_dialog.py) zum manuellen Nachschlagen des
+        # Sensitivitätswerts - KEINE automatische Übernahme, der Nutzer
+        # liest den Wert selbst ab und trägt ihn per Copy&Paste in das
+        # Sensitivitäts-Feld ein. Nur sichtbar, wenn es überhaupt ein
+        # Sensitivitäts-Feld gibt (IEPE) UND ein `SensorDatabaseManager`
+        # übergeben wurde.
+        if self._sensitivity_spin is not None and self._sensor_database is not None:
+            open_db_button = QPushButton(t("menu_sensor_database"))
+            open_db_button.clicked.connect(self._on_open_sensor_database_clicked)
+            layout.addWidget(open_db_button)
+
         # 2-Punkt-Kalibrierung: bequemer Weg, Skalierung/Offset aus zwei
         # bekannten Referenzpunkten zu berechnen, statt sie von Hand
         # auszurechnen (siehe `TwoPointCalibrationDialog`). Nur für
@@ -497,7 +515,13 @@ class ChannelParameterDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
-        self.resize(320, 180)
+        self.resize(340, 220)
+
+    def _on_open_sensor_database_clicked(self) -> None:
+        from gui.sensor_database_dialog import SensorDatabaseDialog
+
+        dialog = SensorDatabaseDialog(self._sensor_database, self)
+        dialog.exec()
 
     def _on_two_point_calibration_clicked(self) -> None:
         dialog = TwoPointCalibrationDialog(
@@ -640,8 +664,13 @@ class ChannelTableWidget(QWidget):
     konvertiert.
     """
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        sensor_database: SensorDatabaseManager | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._sensor_database = sensor_database
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -1093,7 +1122,7 @@ class ChannelTableWidget(QWidget):
         except ValueError:
             button.setText(t("choose_signal_type_button"))
             return
-        button.setText(t(_SIGNAL_TYPE_LABEL_KEYS[signal_type]))
+        button.setText(t(SIGNAL_TYPE_LABEL_KEYS[signal_type]))
 
     def _on_choose_signal_type_clicked(self) -> None:
         """Öffnet den Signaltyp-Auswahldialog für die Zeile des klickenden Buttons.
@@ -1188,6 +1217,7 @@ class ChannelTableWidget(QWidget):
             cal_point1_reference=self._property_float_or_none(button, "cal_point1_reference"),
             cal_point2_measured=self._property_float_or_none(button, "cal_point2_measured"),
             cal_point2_reference=self._property_float_or_none(button, "cal_point2_reference"),
+            sensor_database=self._sensor_database,
             parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:

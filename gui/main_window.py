@@ -44,6 +44,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.configuration_manager import ConfigurationManager
+from config.sensor_database import SensorDatabaseManager
 from config.settings import get_resource_path
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
@@ -90,10 +91,12 @@ class MainWindow(QMainWindow):
         self,
         controller: MeasurementController,
         configuration_manager: ConfigurationManager,
+        sensor_database: SensorDatabaseManager | None = None,
     ) -> None:
         super().__init__()
         self._controller = controller
         self._configuration_manager = configuration_manager
+        self._sensor_database = sensor_database or SensorDatabaseManager()
 
         # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
         # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
@@ -113,7 +116,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
         self._restore_window_geometry()
 
-        self._setup_view = SetupView(configuration_manager)
+        self._setup_view = SetupView(configuration_manager, self._sensor_database)
         self._live_view = LiveView(controller)
         self._analysis_view = AnalysisView()
 
@@ -350,6 +353,8 @@ class MainWindow(QMainWindow):
             f"{t('menu_channel_display')}..."
         )
         self._channel_display_action.triggered.connect(self._on_open_channel_display_dialog)
+        self._sensor_database_action = self._settings_menu.addAction(t("menu_sensor_database"))
+        self._sensor_database_action.triggered.connect(self._on_open_sensor_database)
 
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
         self._about_action = self._help_menu.addAction(t("menu_about"))
@@ -389,6 +394,16 @@ class MainWindow(QMainWindow):
             # `SetupView.apply_channel_display_settings`) - die Live View
             # kennt hier nur die übergebene Kopie, nicht die Kanaltabelle.
             self._setup_view.apply_channel_display_settings(settings)
+
+    def _on_open_sensor_database(self) -> None:
+        """Öffnet die Sensor-Datenbank-Verwaltung (siehe
+        gui/sensor_database_dialog.py). Änderungen werden dort sofort
+        persistiert - dieser Dialog reicht daher nur die (bereits von
+        `main.py` erzeugte) `SensorDatabaseManager`-Instanz durch."""
+        from gui.sensor_database_dialog import SensorDatabaseDialog
+
+        dialog = SensorDatabaseDialog(self._sensor_database, self)
+        dialog.exec()
 
     def _build_status_bar(self) -> None:
         self._status_label = QLabel(t("ready"))
@@ -602,6 +617,9 @@ class MainWindow(QMainWindow):
             sample_rate_hz=config.sample_rate_hz,
             storage_format=config.storage_format.value,
             live_only=not config.save_to_disk,
+            recording_unlimited=config.recording_unlimited,
+            recording_stop_value=config.recording_stop_value,
+            recording_stop_unit=config.recording_stop_unit.value,
         )
 
         # Storage Writer nur anlegen, wenn Speicherung gewünscht
@@ -789,12 +807,18 @@ class MainWindow(QMainWindow):
             sample_rate_hz,
             storage_format,
             live_only,
+            recording_unlimited,
+            recording_stop_value,
+            recording_stop_unit,
         ) = self._setup_view.get_current_measurement_parameters()
         self._configuration_manager.update_last_measurement_parameters(
             measurement_name=measurement_name,
             sample_rate_hz=sample_rate_hz,
             storage_format=storage_format,
             live_only=live_only,
+            recording_unlimited=recording_unlimited,
+            recording_stop_value=recording_stop_value,
+            recording_stop_unit=recording_stop_unit,
         )
 
         self._configuration_manager.update_window_geometry(
