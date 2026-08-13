@@ -71,6 +71,22 @@ THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
     "B": (250.0, 1820.0),
 }
 
+# ADC-Timing-Modi, die den Kompromiss zwischen Geschwindigkeit und
+# effektiver Auflösung steuern (manche Modi verbessern zusätzlich die
+# Netzbrumm-Unterdrückung) - NUR beim NI9213 hardwareseitig verfügbar,
+# NICHT beim NI9210 (dieses hat eine feste Abtastrate von 14 S/s ohne
+# konfigurierbaren Timing-Modus). Werte entsprechen direkt den
+# Mitgliedsnamen von `nidaqmx.constants.ADCTimingMode`, siehe
+# `hardware/ni9213.py`. "CUSTOM" ist bewusst nicht enthalten, da es
+# zusätzliche, hier nicht abgebildete Parameter erfordert.
+ADC_TIMING_MODES = [
+    "AUTOMATIC",
+    "HIGH_RESOLUTION",
+    "HIGH_SPEED",
+    "BEST_50_HZ_REJECTION",
+    "BEST_60_HZ_REJECTION",
+]
+
 
 class StorageFormat(str, Enum):
     """Von der Anwendung unterstützte Speicherformate für Messdaten."""
@@ -110,6 +126,12 @@ class Channel:
             `gui/widgets/channel_table.py::TwoPointCalibrationDialog`).
         cal_point2_measured / cal_point2_reference: Zweiter Referenzpunkt
             der 2-Punkt-Kalibrierung, z. B. Siedepunkt 100 °C.
+        adc_timing_mode: ADC-Timing-Modus (siehe `ADC_TIMING_MODES`), NUR
+            beim NI9213 hardwareseitig verfügbar (NI9210 hat eine feste
+            Abtastrate). Muss laut nidaqmx für alle Kanäle desselben
+            physischen Moduls identisch sein - die Kanaltabelle überträgt
+            eine Änderung deshalb automatisch auf alle Kanäle desselben
+            Moduls, siehe `gui/widgets/channel_table.py`.
         plot_color: Individuelle Kurvenfarbe in der Live View (z. B.
             "#64b5f6"), `None` = Theme-Standardfarbe (siehe
             `gui/live_view.py::ChannelDisplayDialog`).
@@ -125,6 +147,11 @@ class Channel:
             `plot_y_min`/`plot_y_max` automatisch auf den tatsächlichen
             Wertebereich umschaltet - ist dies `False`, bleibt der feste
             Bereich immer aktiv.
+        plot_visible: Ob der Kanal in der Live View als eigener Subplot
+            angezeigt wird. Betrifft NUR die Anzeige, nicht die Erfassung/
+            Speicherung - ein Kanal mit `plot_visible=False` wird
+            weiterhin normal aufgezeichnet, taucht aber nicht im
+            Live-View-Raster auf (siehe `gui/live_view.py::_rebuild_plots`).
 
     Die physikalische Umrechnung erfolgt gemäß:
         physikalischer_wert = rohwert * scale + offset
@@ -146,11 +173,20 @@ class Channel:
     cal_point1_reference: Optional[float] = None
     cal_point2_measured: Optional[float] = None
     cal_point2_reference: Optional[float] = None
+    adc_timing_mode: str = "AUTOMATIC"
     plot_color: Optional[str] = None
     plot_background: Optional[str] = None
     plot_y_min: Optional[float] = None
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
+    plot_visible: bool = True
+    # Zeigt den Kanal (statt im Hauptraster der Live View) in einem
+    # eigenen Fenster an (siehe `gui/live_view.py::ChannelPopoutWindow`) -
+    # schliesst sich mit `plot_visible` nicht aus: ein Kanal ist entweder
+    # gar nicht (plot_visible=False), im Hauptraster (plot_popout=False)
+    # oder in seinem eigenen Fenster (plot_popout=True) sichtbar, nie an
+    # zwei Stellen gleichzeitig.
+    plot_popout: bool = False
 
     def to_physical(self, raw_value: float) -> float:
         """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
@@ -175,11 +211,14 @@ class Channel:
             "cal_point1_reference": self.cal_point1_reference,
             "cal_point2_measured": self.cal_point2_measured,
             "cal_point2_reference": self.cal_point2_reference,
+            "adc_timing_mode": self.adc_timing_mode,
             "plot_color": self.plot_color,
             "plot_background": self.plot_background,
             "plot_y_min": self.plot_y_min,
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
+            "plot_visible": self.plot_visible,
+            "plot_popout": self.plot_popout,
         }
 
     @classmethod
@@ -202,11 +241,14 @@ class Channel:
             cal_point1_reference=data.get("cal_point1_reference"),
             cal_point2_measured=data.get("cal_point2_measured"),
             cal_point2_reference=data.get("cal_point2_reference"),
+            adc_timing_mode=data.get("adc_timing_mode", "AUTOMATIC"),
             plot_color=data.get("plot_color"),
             plot_background=data.get("plot_background"),
             plot_y_min=data.get("plot_y_min"),
             plot_y_max=data.get("plot_y_max"),
             plot_autoscale=data.get("plot_autoscale", True),
+            plot_visible=data.get("plot_visible", True),
+            plot_popout=data.get("plot_popout", False),
         )
 
 

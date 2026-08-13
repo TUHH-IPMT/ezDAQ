@@ -35,8 +35,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from data.models import THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
+from data.models import ADC_TIMING_MODES, THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
 from gui.i18n import connect_language_changed, t
+from gui.widgets.spinbox import PrecisionDoubleSpinBox
 from gui.theme import (
     connect_theme_changed,
     draw_ellipsis_icon,
@@ -82,6 +83,17 @@ _SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.VOLTAGE: "signal_type_voltage",
     SignalType.IEPE_ACCELERATION: "signal_type_iepe",
     SignalType.THERMOCOUPLE: "signal_type_thermocouple",
+}
+
+# Übersetzte Anzeige-Labels je ADC-Timing-Modus (siehe
+# `data/models.py::ADC_TIMING_MODES`) - NUR beim NI9213 verfügbar (siehe
+# `ChannelParameterDialog`).
+_ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
+    "AUTOMATIC": "adc_timing_mode_automatic",
+    "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
+    "HIGH_SPEED": "adc_timing_mode_high_speed",
+    "BEST_50_HZ_REJECTION": "adc_timing_mode_50hz",
+    "BEST_60_HZ_REJECTION": "adc_timing_mode_60hz",
 }
 
 _COL_NUMBER = 0
@@ -315,27 +327,23 @@ class TwoPointCalibrationDialog(QDialog):
 
         form = QFormLayout()
 
-        self._point1_measured_spin = QDoubleSpinBox()
+        self._point1_measured_spin = PrecisionDoubleSpinBox()
         self._point1_measured_spin.setRange(-1e9, 1e9)
-        self._point1_measured_spin.setDecimals(4)
         self._point1_measured_spin.setValue(point1_measured if point1_measured is not None else 0.0)
         form.addRow(t("cal_point1_measured_label"), self._point1_measured_spin)
 
-        self._point1_reference_spin = QDoubleSpinBox()
+        self._point1_reference_spin = PrecisionDoubleSpinBox()
         self._point1_reference_spin.setRange(-1e9, 1e9)
-        self._point1_reference_spin.setDecimals(4)
         self._point1_reference_spin.setValue(point1_reference if point1_reference is not None else 0.0)
         form.addRow(t("cal_point1_reference_label"), self._point1_reference_spin)
 
-        self._point2_measured_spin = QDoubleSpinBox()
+        self._point2_measured_spin = PrecisionDoubleSpinBox()
         self._point2_measured_spin.setRange(-1e9, 1e9)
-        self._point2_measured_spin.setDecimals(4)
         self._point2_measured_spin.setValue(point2_measured if point2_measured is not None else 1.0)
         form.addRow(t("cal_point2_measured_label"), self._point2_measured_spin)
 
-        self._point2_reference_spin = QDoubleSpinBox()
+        self._point2_reference_spin = PrecisionDoubleSpinBox()
         self._point2_reference_spin.setRange(-1e9, 1e9)
-        self._point2_reference_spin.setDecimals(4)
         self._point2_reference_spin.setValue(point2_reference if point2_reference is not None else 1.0)
         form.addRow(t("cal_point2_reference_label"), self._point2_reference_spin)
 
@@ -391,7 +399,9 @@ class ChannelParameterDialog(QDialog):
     gesperrt/versteckt werden. Zusätzlich zeigt der Dialog NUR das Feld,
     das für den aktuellen Signaltyp der Zeile hardwareseitig zwingend
     nötig ist (Sensitivität bei IEPE, Thermoelement-Typ bei Thermoelement)
-    - bei Spannung entfällt dieses Zusatzfeld ganz.
+    - bei Spannung entfällt dieses Zusatzfeld ganz. Der ADC-Timing-Modus
+    erscheint zusätzlich nur, wenn das Modul der Zeile ein NI9213 ist
+    (NI9210 hat eine feste Abtastrate ohne diese Option).
 
     Ersetzt die vorherigen, immer sichtbaren Spalten
     (Skalierung/Offset/Sensitivität/Thermoelement-Typ): mit wachsender
@@ -404,10 +414,12 @@ class ChannelParameterDialog(QDialog):
     def __init__(
         self,
         signal_type: SignalType,
+        module_type: ModuleType,
         scale: float,
         offset: float,
         sensitivity: float,
         thermocouple_type: str,
+        adc_timing_mode: str = "AUTOMATIC",
         cal_point1_measured: float | None = None,
         cal_point1_reference: float | None = None,
         cal_point2_measured: float | None = None,
@@ -427,23 +439,21 @@ class ChannelParameterDialog(QDialog):
 
         self._sensitivity_spin: QDoubleSpinBox | None = None
         self._thermocouple_combo: QComboBox | None = None
+        self._adc_timing_combo: QComboBox | None = None
 
-        self._scale_spin = QDoubleSpinBox()
+        self._scale_spin = PrecisionDoubleSpinBox()
         self._scale_spin.setRange(-1e9, 1e9)
-        self._scale_spin.setDecimals(4)
         self._scale_spin.setValue(scale)
         form.addRow(t("param_scale_label"), self._scale_spin)
 
-        self._offset_spin = QDoubleSpinBox()
+        self._offset_spin = PrecisionDoubleSpinBox()
         self._offset_spin.setRange(-1e9, 1e9)
-        self._offset_spin.setDecimals(4)
         self._offset_spin.setValue(offset)
         form.addRow(t("param_offset_label"), self._offset_spin)
 
         if signal_type == SignalType.IEPE_ACCELERATION:
-            self._sensitivity_spin = QDoubleSpinBox()
+            self._sensitivity_spin = PrecisionDoubleSpinBox()
             self._sensitivity_spin.setRange(0.0, 1e6)
-            self._sensitivity_spin.setDecimals(4)
             self._sensitivity_spin.setValue(sensitivity)
             form.addRow(t("param_sensitivity_label"), self._sensitivity_spin)
         elif signal_type == SignalType.THERMOCOUPLE:
@@ -452,6 +462,18 @@ class ChannelParameterDialog(QDialog):
             index = self._thermocouple_combo.findText(thermocouple_type)
             self._thermocouple_combo.setCurrentIndex(index if index >= 0 else 0)
             form.addRow(t("param_thermocouple_type_label"), self._thermocouple_combo)
+
+            # ADC-Timing-Modus nur beim NI9213 verfügbar (NI9210 hat eine
+            # feste Abtastrate ohne diese Option) - siehe
+            # hardware/ni9213.py.
+            if module_type == ModuleType.NI9213:
+                self._adc_timing_combo = QComboBox()
+                for mode in ADC_TIMING_MODES:
+                    self._adc_timing_combo.addItem(t(_ADC_TIMING_MODE_LABEL_KEYS[mode]), mode)
+                self._adc_timing_combo.setToolTip(t("param_adc_timing_mode_hint"))
+                index = self._adc_timing_combo.findData(adc_timing_mode)
+                self._adc_timing_combo.setCurrentIndex(index if index >= 0 else 0)
+                form.addRow(t("param_adc_timing_mode_label"), self._adc_timing_combo)
 
         layout.addLayout(form)
 
@@ -504,6 +526,9 @@ class ChannelParameterDialog(QDialog):
 
     def thermocouple_type(self) -> str:
         return self._thermocouple_combo.currentText() if self._thermocouple_combo is not None else "K"
+
+    def adc_timing_mode(self) -> str:
+        return self._adc_timing_combo.currentData() if self._adc_timing_combo is not None else "AUTOMATIC"
 
     def cal_point1(self) -> tuple[float | None, float | None]:
         return self._cal_point1_measured, self._cal_point1_reference
@@ -1099,17 +1124,7 @@ class ChannelTableWidget(QWidget):
         self._update_signal_type_button_text(button)
         self._update_parameter_state(row)
 
-    def _create_parameter_widget(
-        self,
-        scale: float,
-        offset: float,
-        sensitivity: float,
-        thermocouple_type: str,
-        cal_point1_measured: float | None,
-        cal_point1_reference: float | None,
-        cal_point2_measured: float | None,
-        cal_point2_reference: float | None,
-    ) -> QPushButton:
+    def _create_parameter_widget(self, channel: Channel) -> QPushButton:
         """Baut das Zellwidget für die Parameter-Spalte einer Zeile: ein
         einzelner, zellfüllender Button mit fixem Text (statt Label +
         separatem Auswahl-Button wie bei Hardwarekanal/Signaltyp, siehe
@@ -1119,17 +1134,19 @@ class ChannelTableWidget(QWidget):
         (einfacher, konsistenter Button statt Wertevorschau), sondern nur
         als Properties mitgeführt.
         """
+        sensitivity = channel.sensitivity_mv_per_unit if channel.sensitivity_mv_per_unit else 0.0
         button = _IconTextButton()
         button.setText(t("choose_parameters_button"))
         button.setCursor(Qt.CursorShape.PointingHandCursor)
-        button.setProperty("scale", scale)
-        button.setProperty("offset", offset)
+        button.setProperty("scale", channel.scale)
+        button.setProperty("offset", channel.offset)
         button.setProperty("sensitivity", sensitivity)
-        button.setProperty("thermocouple_type", thermocouple_type or "K")
-        button.setProperty("cal_point1_measured", cal_point1_measured)
-        button.setProperty("cal_point1_reference", cal_point1_reference)
-        button.setProperty("cal_point2_measured", cal_point2_measured)
-        button.setProperty("cal_point2_reference", cal_point2_reference)
+        button.setProperty("thermocouple_type", channel.thermocouple_type or "K")
+        button.setProperty("adc_timing_mode", channel.adc_timing_mode or "AUTOMATIC")
+        button.setProperty("cal_point1_measured", channel.cal_point1_measured)
+        button.setProperty("cal_point1_reference", channel.cal_point1_reference)
+        button.setProperty("cal_point2_measured", channel.cal_point2_measured)
+        button.setProperty("cal_point2_reference", channel.cal_point2_reference)
         button.clicked.connect(self._on_choose_parameters_clicked)
         self._apply_parameter_button_icon(button)
         return button
@@ -1156,12 +1173,17 @@ class ChannelTableWidget(QWidget):
         except ValueError:
             return
 
+        hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
+        module_type = ModuleType(self._get_module_value_from_widget(hw_widget))
+
         dialog = ChannelParameterDialog(
             signal_type,
+            module_type,
             scale=float(button.property("scale") or 1.0),
             offset=float(button.property("offset") or 0.0),
             sensitivity=float(button.property("sensitivity") or 0.0),
             thermocouple_type=str(button.property("thermocouple_type") or "K"),
+            adc_timing_mode=str(button.property("adc_timing_mode") or "AUTOMATIC"),
             cal_point1_measured=self._property_float_or_none(button, "cal_point1_measured"),
             cal_point1_reference=self._property_float_or_none(button, "cal_point1_reference"),
             cal_point2_measured=self._property_float_or_none(button, "cal_point2_measured"),
@@ -1181,6 +1203,48 @@ class ChannelTableWidget(QWidget):
         button.setProperty("cal_point1_reference", cal_point1_reference)
         button.setProperty("cal_point2_measured", cal_point2_measured)
         button.setProperty("cal_point2_reference", cal_point2_reference)
+
+        new_adc_timing_mode = dialog.adc_timing_mode()
+        button.setProperty("adc_timing_mode", new_adc_timing_mode)
+        if module_type == ModuleType.NI9213:
+            self._apply_adc_timing_mode_to_module(hw_widget, new_adc_timing_mode, exclude_row=row)
+
+    def _apply_adc_timing_mode_to_module(
+        self, hw_widget: QWidget, value: str, exclude_row: int
+    ) -> None:
+        """Überträgt einen neu gewählten ADC-Timing-Modus auf alle anderen
+        Zeilen desselben physischen Moduls.
+
+        nidaqmx verlangt denselben ADC-Timing-Modus für alle Kanäle
+        desselben Geräts (siehe `hardware/ni9213.py`) - ohne diese
+        Übertragung könnte der Nutzer widersprüchliche Werte pro Zeile
+        einstellen, was erst beim Messstart als Hardwarefehler auffallen
+        würde.
+        """
+        device_name = self._device_name_from_hw_channel(
+            self._get_hw_channel_text_from_widget(hw_widget)
+        )
+        if not device_name:
+            return
+        for row in range(self._table.rowCount()):
+            if row == exclude_row:
+                continue
+            other_hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
+            other_device_name = self._device_name_from_hw_channel(
+                self._get_hw_channel_text_from_widget(other_hw_widget)
+            )
+            if other_device_name != device_name:
+                continue
+            other_param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+            if other_param_widget is not None:
+                other_param_widget.setProperty("adc_timing_mode", value)
+
+    @staticmethod
+    def _device_name_from_hw_channel(hw_channel: str) -> str:
+        """Extrahiert den Gerätenamen aus einem Hardwarekanal, z. B.
+        "cDAQ1Mod1/ai0" -> "cDAQ1Mod1" (dasselbe Prinzip wie
+        `core/measurement.py::_device_name_from_channel`)."""
+        return hw_channel.split("/", 1)[0] if hw_channel else ""
 
     def _find_row_for_widget(self, column: int, widget: QWidget) -> int | None:
         """Findet die Zeile eines Zellwidgets in `column` (siehe `sender()`-
@@ -1235,20 +1299,8 @@ class ChannelTableWidget(QWidget):
             row, _COL_SIGNAL, self._create_signal_type_widget(initial_signal_value)
         )
 
-        sensitivity = channel.sensitivity_mv_per_unit if channel.sensitivity_mv_per_unit else 0.0
         self._table.setCellWidget(
-            row,
-            _COL_PARAMETERS,
-            self._create_parameter_widget(
-                channel.scale,
-                channel.offset,
-                sensitivity,
-                channel.thermocouple_type,
-                channel.cal_point1_measured,
-                channel.cal_point1_reference,
-                channel.cal_point2_measured,
-                channel.cal_point2_reference,
-            ),
+            row, _COL_PARAMETERS, self._create_parameter_widget(channel)
         )
         # Leitet - falls der Hardwarekanal einem bekannten Gerät zugeordnet
         # ist - das Modul daraus ab (siehe `_apply_device_constraint`) und
@@ -1266,6 +1318,8 @@ class ChannelTableWidget(QWidget):
                 "plot_y_min": channel.plot_y_min,
                 "plot_y_max": channel.plot_y_max,
                 "plot_autoscale": channel.plot_autoscale,
+                "plot_visible": channel.plot_visible,
+                "plot_popout": channel.plot_popout,
             }
 
     def _read_row(self, row: int) -> Channel:
@@ -1283,6 +1337,7 @@ class ChannelTableWidget(QWidget):
         offset = float(param_widget.property("offset") or 0.0)
         sensitivity = float(param_widget.property("sensitivity") or 0.0)
         thermocouple_type = str(param_widget.property("thermocouple_type") or "K")
+        adc_timing_mode = str(param_widget.property("adc_timing_mode") or "AUTOMATIC")
         cal_point1_measured = self._property_float_or_none(param_widget, "cal_point1_measured")
         cal_point1_reference = self._property_float_or_none(param_widget, "cal_point1_reference")
         cal_point2_measured = self._property_float_or_none(param_widget, "cal_point2_measured")
@@ -1300,6 +1355,7 @@ class ChannelTableWidget(QWidget):
             enabled=enabled,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
             thermocouple_type=thermocouple_type or "K",
+            adc_timing_mode=adc_timing_mode or "AUTOMATIC",
             cal_point1_measured=cal_point1_measured,
             cal_point1_reference=cal_point1_reference,
             cal_point2_measured=cal_point2_measured,
@@ -1309,6 +1365,8 @@ class ChannelTableWidget(QWidget):
             plot_y_min=display_settings.get("plot_y_min"),
             plot_y_max=display_settings.get("plot_y_max"),
             plot_autoscale=display_settings.get("plot_autoscale", True),
+            plot_visible=display_settings.get("plot_visible", True),
+            plot_popout=display_settings.get("plot_popout", False),
         )
 
     def apply_display_settings(self, settings: dict[str, dict]) -> None:

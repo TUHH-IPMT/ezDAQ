@@ -95,6 +95,17 @@ _translations = {
             "liegen - überschreiten sie ihn, schaltet die Skalierung "
             "automatisch auf den tatsächlichen Wertebereich um."
         ),
+        "plot_visible_checkbox": "Aktiv",
+        "plot_visible_checkbox_tooltip": (
+            "Deaktivierte Kanäle werden nicht mehr geplottet (weder im "
+            "Hauptfenster noch in einem eigenen Fenster) - die Aufzeichnung "
+            "selbst ist davon nicht betroffen."
+        ),
+        "popout_button": "Eigenes Fenster",
+        "popout_button_tooltip": (
+            "Zeigt diesen Kanal statt im Hauptraster in einem eigenen, frei "
+            "verschiebbaren Fenster an - verhindert Doppel-Darstellung."
+        ),
         "axis_time": "Zeit",
         "storage_detail": "Datei: {file_size} — Rückstand: {pending} / {capacity} Samples ({percent} %)",
 
@@ -189,6 +200,13 @@ _translations = {
         "param_offset_label": "Offsetwert:",
         "param_sensitivity_label": "Sensitivität (mV/g):",
         "param_thermocouple_type_label": "Thermoelement-Typ:",
+        "param_adc_timing_mode_label": "ADC-Timing-Modus:",
+        "param_adc_timing_mode_hint": "Gilt für alle Kanäle dieses Moduls (nur NI9213).",
+        "adc_timing_mode_automatic": "Automatisch",
+        "adc_timing_mode_high_resolution": "Hohe Auflösung",
+        "adc_timing_mode_high_speed": "Hohe Geschwindigkeit",
+        "adc_timing_mode_50hz": "Beste 50-Hz-Unterdrückung",
+        "adc_timing_mode_60hz": "Beste 60-Hz-Unterdrückung",
         "two_point_cal_button": "2-Punkt-Kalibrierung...",
         "two_point_cal_dialog_title": "2-Punkt-Kalibrierung",
         "two_point_cal_hint": (
@@ -341,6 +359,17 @@ _translations = {
             "within it - if they exceed it, scaling automatically switches "
             "to the actual value range."
         ),
+        "plot_visible_checkbox": "Active",
+        "plot_visible_checkbox_tooltip": (
+            "Disabled channels are no longer plotted (neither in the main "
+            "window nor in a popout window) - recording itself is not "
+            "affected."
+        ),
+        "popout_button": "Popout Window",
+        "popout_button_tooltip": (
+            "Shows this channel in its own, freely movable window instead of "
+            "the main grid - prevents duplicate display."
+        ),
         "axis_time": "Time",
         "storage_detail": "File: {file_size} — Backlog: {pending} / {capacity} Samples ({percent} %)",
 
@@ -435,6 +464,13 @@ _translations = {
         "param_offset_label": "Offset Value:",
         "param_sensitivity_label": "Sensitivity (mV/g):",
         "param_thermocouple_type_label": "Thermocouple Type:",
+        "param_adc_timing_mode_label": "ADC Timing Mode:",
+        "param_adc_timing_mode_hint": "Applies to all channels of this module (NI9213 only).",
+        "adc_timing_mode_automatic": "Automatic",
+        "adc_timing_mode_high_resolution": "High Resolution",
+        "adc_timing_mode_high_speed": "High Speed",
+        "adc_timing_mode_50hz": "Best 50 Hz Rejection",
+        "adc_timing_mode_60hz": "Best 60 Hz Rejection",
         "two_point_cal_button": "2-Point Calibration...",
         "two_point_cal_dialog_title": "2-Point Calibration",
         "two_point_cal_hint": (

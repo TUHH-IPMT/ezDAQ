@@ -17,6 +17,7 @@ erbt daher direkt von `NI9210`, statt die Kanal-Logik zu duplizieren.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from data.models import (
     THERMOCOUPLE_TEMPERATURE_RANGES_C,
@@ -30,6 +31,8 @@ from hardware.nidaq_device import NIDAQDevice, NIDAQMX_AVAILABLE
 
 if NIDAQMX_AVAILABLE:
     from nidaqmx.constants import CJCSource, TemperatureUnits, ThermocoupleType
+if TYPE_CHECKING:
+    from nidaqmx.task.channels import AIChannel
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +58,11 @@ class NI9210(NIDAQDevice):
     bedeutungslos und in der Kanaltabelle nicht editierbar), sondern aus
     `THERMOCOUPLE_TEMPERATURE_RANGES_C` anhand von
     `channel.thermocouple_type` abgeleitet.
+
+    HINWEIS ADC-Timing-Modus: Das NI9210 hat - anders als das NI9213 -
+    eine feste Abtastrate (14 S/s gesamt) ohne konfigurierbaren
+    ADC-Timing-Modus; `channel.adc_timing_mode` wird hier deshalb bewusst
+    NICHT ausgewertet (siehe `hardware/ni9213.py`, wo das der Fall ist).
     """
 
     # Von `NI9213` überschrieben (siehe hardware/ni9213.py) - steuert
@@ -72,7 +80,7 @@ class NI9210(NIDAQDevice):
         device_info.module_type = self._MODULE_TYPE
         super().__init__(device_info, channels)
 
-    def _add_channel_to_task(self, task, channel: Channel) -> None:
+    def _add_channel_to_task(self, task, channel: Channel) -> "AIChannel":
         try:
             thermocouple_type = ThermocoupleType[channel.thermocouple_type]
         except KeyError as exc:
@@ -85,7 +93,10 @@ class NI9210(NIDAQDevice):
             channel.thermocouple_type, _DEFAULT_TEMPERATURE_RANGE_C
         )
 
-        task.ai_channels.add_ai_thrmcpl_chan(
+        # Rückgabewert (das erzeugte AIChannel-Objekt) wird von NI9213
+        # genutzt, um zusätzlich den ADC-Timing-Modus zu setzen (siehe
+        # hardware/ni9213.py) - hier selbst ungenutzt.
+        return task.ai_channels.add_ai_thrmcpl_chan(
             physical_channel=channel.hardware_channel,
             name_to_assign_to_channel=channel.display_name,
             min_val=min_val,

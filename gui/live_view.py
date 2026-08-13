@@ -27,6 +27,20 @@ Darstellungsart (Sweep, wie ein Oszilloskop):
     Zeitspanne (siehe `_cycle_start_seconds`), auch wenn die Kurve selbst
     weiterhin bei x=Fensterstart neu beginnt.
 
+Architektur-Hinweis (bewusst KEIN Reveal-Pacing):
+    Der DAQ-Thread liefert neue Daten in Bloecken von ~25ms (Hardware-
+    Read-Granularitaet, siehe
+    `gui/setup_view.py::_calculate_samples_per_read` - bewusst nicht
+    kleiner, sonst Pufferueberlauf-Risiko bei echter Hardware). Dadurch
+    ist mit blossem Auge ein leicht "blockweises" Kurvenwachstum sichtbar.
+    Ein Versuch, das ueber eine kuenstliche, zeitbasierte Nachzieh-
+    Verzoegerung der Anzeige zu glaetten, wurde bewusst wieder verworfen:
+    das fuehrte bei einem direkten Reiz-Reaktions-Test (Klopftest auf
+    einen Beschleunigungssensor waehrend die App laeuft) zu spuerbarer
+    zusaetzlicher Latenz. Fuer ein Live-Messinstrument ist Latenz
+    wichtiger als Anzeige-Glaette - `_get_display_view()` zeigt daher
+    IMMER sofort den vollen aktuell eingetroffenen Stand.
+
 Architektur-Hinweis (Performance):
     Der Anzeigepuffer für das aktuelle Sweep-Fenster ist ein einmalig
     vorallokiertes NumPy-Array (`_ensure_display_buffer`) - keine
@@ -42,9 +56,11 @@ Architektur-Hinweis (Performance):
 from __future__ import annotations
 
 import logging
+import weakref
 
 import numpy as np
 import pyqtgraph as pg
+from PyQt6 import sip
 from PyQt6.QtCore import QSize, QTimer, pyqtSignal, Qt
 from PyQt6.QtGui import QColor, QIcon
 from PyQt6.QtWidgets import (
@@ -52,7 +68,6 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -78,6 +93,7 @@ from gui.theme import (
     style_plot_container,
     style_plot_item,
 )
+from gui.widgets.spinbox import PrecisionDoubleSpinBox
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +142,13 @@ class ChannelDisplayDialog(QDialog):
     Wertebereich um (siehe `LiveView._apply_channel_y_range`). Ist der
     Haken NICHT gesetzt, bleibt der feste Bereich immer aktiv, egal was
     die Messwerte tun.
+
+    Die "Eigenes Fenster"-Checkbox (wie alle anderen Felder hier) wirkt
+    erst nach OK - anders als frühere Versionen dieses Dialogs öffnet ein
+    Klick auf die Checkbox NICHT sofort ein Fenster. Das eigentliche
+    Öffnen/Schließen übernimmt `LiveView._rebuild_plots()` anhand von
+    `Channel.plot_popout`, nachdem `results()` über `OK` angewendet wurde
+    (siehe `LiveView._apply_display_settings_to_live_channels`).
     """
 
     def __init__(
@@ -177,13 +200,11 @@ class ChannelDisplayDialog(QDialog):
             row.addWidget(QLabel(f"{t('plot_background')}:"))
             row.addWidget(bg_button)
 
-            min_spin = QDoubleSpinBox()
+            min_spin = PrecisionDoubleSpinBox()
             min_spin.setRange(-1e9, 1e9)
-            min_spin.setDecimals(3)
             min_spin.setValue(current_min)
-            max_spin = QDoubleSpinBox()
+            max_spin = PrecisionDoubleSpinBox()
             max_spin.setRange(-1e9, 1e9)
-            max_spin.setDecimals(3)
             max_spin.setValue(current_max)
             row.addWidget(QLabel(f"{t('min')}:"))
             row.addWidget(min_spin)
@@ -195,11 +216,28 @@ class ChannelDisplayDialog(QDialog):
             autoscale_check.setChecked(channel.plot_autoscale)
             row.addWidget(autoscale_check)
 
+            # Betrifft NUR, ob der Kanal als Subplot im Hauptraster
+            # erscheint (siehe `LiveView._rebuild_plots`) - Erfassung/
+            # Speicherung laufen unabhängig davon unverändert weiter.
+            visible_check = QCheckBox(t("plot_visible_checkbox"))
+            visible_check.setToolTip(t("plot_visible_checkbox_tooltip"))
+            visible_check.setChecked(channel.plot_visible)
+            row.addWidget(visible_check)
+
+            # Wirkt (wie "Aktiv" oben) erst nach OK über `results()` -
+            # siehe Klassendoc oben.
+            popout_check = QCheckBox(t("popout_button"))
+            popout_check.setToolTip(t("popout_button_tooltip"))
+            popout_check.setChecked(channel.plot_popout)
+            row.addWidget(popout_check)
+
             form.addRow(channel.display_name, row)
             self._rows[hw] = {
                 "min": min_spin,
                 "max": max_spin,
                 "autoscale": autoscale_check,
+                "visible": visible_check,
+                "popout": popout_check,
             }
 
         button_box = QDialogButtonBox()
@@ -236,9 +274,65 @@ class ChannelDisplayDialog(QDialog):
                 "plot_y_min": row["min"].value(),
                 "plot_y_max": row["max"].value(),
                 "plot_autoscale": row["autoscale"].isChecked(),
+                "plot_visible": row["visible"].isChecked(),
+                "plot_popout": row["popout"].isChecked(),
             }
             for hw_channel, row in self._rows.items()
         }
+
+
+class ChannelPopoutWindow(QWidget):
+    """Eigenständiges Fenster mit dem Live-Plot EINES einzelnen Kanals.
+
+    Wird geöffnet, wenn die "Eigenes Fenster"-Checkbox im Kanal-
+    Darstellung-Dialog per OK übernommen wurde (siehe
+    `LiveView._rebuild_plots`/`_open_popout_window`). Hält bewusst KEINEN
+    eigenen Timer und fragt den Ring Buffer nicht selbst ab - Kurve und
+    Y-Bereich werden vom selben Timer-Tick wie die Haupt-Plots
+    mitaktualisiert (siehe `LiveView._on_timer_tick`), damit nicht doppelt
+    aus dem Ring Buffer gelesen wird.
+    """
+
+    def __init__(self, channel: Channel, parent: QWidget | None = None) -> None:
+        super().__init__(parent, Qt.WindowType.Window)
+        self.hardware_channel = channel.hardware_channel
+        # Schliesst der Nutzer das Fenster, soll das C++/Qt-Objekt
+        # tatsaechlich zerstoert werden (nicht nur versteckt) - darauf
+        # reagiert `LiveView._on_popout_window_closed` ueber das
+        # `destroyed`-Signal, um die eigene Nachverfolgung aufzuraeumen
+        # UND (falls der Nutzer das Fenster direkt schliesst, statt die
+        # Checkbox im Dialog zu nutzen) den Kanal wieder im Hauptraster
+        # erscheinen zu lassen.
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+
+        unit_suffix = f" [{channel.unit}]" if channel.unit else ""
+        title = f"{channel.display_name}{unit_suffix}"
+        self.setWindowTitle(title)
+        self.resize(640, 400)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        self.plot_widget = pg.PlotWidget()
+        self.plot_item = self.plot_widget.getPlotItem()
+        self.plot_item.setTitle(title)
+        self.plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_item.setLabel("bottom", t("axis_time"), units="s")
+        style_plot_container(self.plot_widget)
+        style_plot_item(self.plot_item)
+
+        self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
+        self.curve.setDownsampling(auto=True, method="mean")
+        self.curve.setClipToView(True)
+        self.plot_item.enableAutoRange(x=False)
+
+        layout.addWidget(self.plot_widget)
+
+        connect_theme_changed(self._retheme)
+
+    def _retheme(self) -> None:
+        style_plot_container(self.plot_widget)
+        style_plot_item(self.plot_item)
 
 
 class LiveView(QWidget):
@@ -306,6 +400,22 @@ class LiveView(QWidget):
         self._plot_widget = pg.GraphicsLayoutWidget()
         self._plot_items: list = []
         self._curves: list = []
+        # `self._curves[i]`/`self._plot_items[i]` gehören zum Kanal
+        # `self._channels[self._curve_channel_indices[i]]` - NICHT mehr
+        # zwangsläufig `self._channels[i]`, seit unsichtbare Kanäle
+        # (`Channel.plot_visible=False`) keinen Subplot mehr bekommen
+        # (siehe `_rebuild_plots`).
+        self._curve_channel_indices: list[int] = []
+
+        # Eigene Fenster einzelner Kanäle (siehe `ChannelPopoutWindow`,
+        # `_on_popout_requested`), nach hardware_channel - unabhängig von
+        # `plot_visible`: ein Kanal kann im Hauptraster ausgeblendet UND
+        # trotzdem in einem eigenen Fenster sichtbar sein. Eigener
+        # Autoscale-Zustands-Cache (siehe `_apply_channel_y_range`), damit
+        # sich Popout und Hauptraster-Subplot eines Kanals nicht
+        # gegenseitig die Skalierung "wegcachen".
+        self._popout_windows: dict[str, ChannelPopoutWindow] = {}
+        self._popout_y_auto_active: dict[str, bool] = {}
 
         # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen").
         self._storage_writer: StorageWriter | None = None
@@ -561,6 +671,7 @@ class LiveView(QWidget):
         if not self._channels:
             return
         changed = False
+        visibility_changed = False
         for channel in self._channels:
             values = settings.get(channel.hardware_channel)
             if values is None:
@@ -570,24 +681,121 @@ class LiveView(QWidget):
             channel.plot_y_min = values.get("plot_y_min")
             channel.plot_y_max = values.get("plot_y_max")
             channel.plot_autoscale = values.get("plot_autoscale", True)
+            new_visible = values.get("plot_visible", True)
+            new_popout = values.get("plot_popout", False)
+            if new_visible != channel.plot_visible or new_popout != channel.plot_popout:
+                visibility_changed = True
+            channel.plot_visible = new_visible
+            channel.plot_popout = new_popout
             changed = True
-        if changed:
+        if visibility_changed:
+            # Welche Kanäle überhaupt einen Subplot bekommen, hat sich
+            # geändert - Farb-/Bereichs-Anwendung ist Teil von
+            # `_rebuild_plots()` und muss daher nicht separat erfolgen.
+            self._rebuild_plots()
+        elif changed:
             self._apply_channel_appearance()
             self._apply_y_range_mode()
+
+    def _find_channel(self, hardware_channel: str) -> Channel | None:
+        return next(
+            (c for c in self._channels if c.hardware_channel == hardware_channel), None
+        )
+
+    def _open_popout_window(self, channel: Channel) -> None:
+        """Öffnet ein eigenständiges Fenster mit dem Live-Plot eines
+        einzelnen Kanals (siehe `ChannelPopoutWindow`), oder aktiviert ein
+        dafür bereits offenes Fenster, statt ein zweites zu öffnen."""
+        existing = self._popout_windows.get(channel.hardware_channel)
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        window = ChannelPopoutWindow(channel, self)
+        window.plot_item.setXRange(
+            self._cycle_start_seconds,
+            self._cycle_start_seconds + self._display_window_seconds,
+            padding=0,
+        )
+        self._apply_channel_curve_style(window.plot_item, window.curve, channel)
+        self._apply_channel_y_range(window.plot_item, channel, None, self._popout_y_auto_active)
+        # WICHTIG: Die Closure haelt `self` (LiveView) NUR als `weakref`,
+        # nicht direkt - sonst entsteht ein echter Referenzzyklus
+        # (LiveView -> self._popout_windows[hw] -> window -> Qt/sip-
+        # Verbindungsregister -> diese Closure -> self). Ein solcher
+        # Zyklus wird nur vom zyklischen GC aufgeloest, nicht durch
+        # normales Refcounting - und weil dieser dabei die beteiligten
+        # Objekte ueber `tp_clear` "leerraeumt", kann `destroyed` mitten
+        # in diesem Aufraeumvorgang feuern und `self` als bereits
+        # geleerte Closure-Zelle vorfinden
+        # (`NameError: cannot access free variable 'self'`) - reproduzierbar
+        # ueber `profile_live_tick.py` (mehrere LiveView-Instanzen kurz
+        # hintereinander anlegen/verwerfen). Mit `weakref` entsteht gar
+        # kein Zyklus, Refcounting allein reicht zum Aufraeumen.
+        view_ref = weakref.ref(self)
+
+        def _on_window_destroyed(_obj=None, hw=channel.hardware_channel, view_ref=view_ref) -> None:
+            view = view_ref()
+            if view is not None:
+                view._on_popout_window_closed(hw)
+
+        window.destroyed.connect(_on_window_destroyed)
+        self._popout_windows[channel.hardware_channel] = window
+        window.show()
+
+    def _on_popout_window_closed(self, hardware_channel: str) -> None:
+        """Räumt die Nachverfolgung eines geschlossenen eigenen Fensters
+        auf (`self._popout_windows`). Wurde das Fenster vom Nutzer direkt
+        geschlossen (z. B. über das X, statt über die Checkbox im
+        Dialog), soll der Kanal nicht spurlos verschwinden, sondern
+        wieder im Hauptraster erscheinen - daher `plot_popout` hier
+        ebenfalls zurücksetzen und neu aufbauen.
+
+        `destroyed` ist eine QUEUED Verbindung und kann daher auch noch
+        feuern, NACHDEM die Live View selbst (z. B. beim Beenden der
+        Anwendung mit offenem eigenem Fenster) bereits zerstört wird -
+        `sip.isdeleted` verhindert in diesem Fall einen Zugriff auf ein
+        bereits abgebautes `self._plot_widget` in `_rebuild_plots()`.
+        """
+        self._popout_windows.pop(hardware_channel, None)
+        if sip.isdeleted(self):
+            return
+        channel = self._find_channel(hardware_channel)
+        if channel is not None and channel.plot_popout:
+            channel.plot_popout = False
+            self._rebuild_plots()
 
     # ------------------------------------------------------------------ #
     # Interna
     # ------------------------------------------------------------------ #
 
     def _rebuild_plots(self) -> None:
-        """Erzeugt für jeden Kanal einen eigenen, X-Achsen-verknüpften Subplot."""
+        """Erzeugt für jeden im Hauptraster sichtbaren Kanal einen eigenen,
+        X-Achsen-verknüpften Subplot.
+
+        Ein Kanal erscheint hier NICHT, wenn er entweder komplett
+        deaktiviert ist (`Channel.plot_visible=False`) ODER stattdessen in
+        einem eigenen Fenster angezeigt wird (`Channel.plot_popout=True`,
+        siehe `ChannelPopoutWindow`/`_open_popout_window`) - so landet
+        jeder sichtbare Kanal an GENAU einer Stelle, nie doppelt.
+
+        `self._curve_channel_indices[i]` hält fest, auf welchen Index in
+        `self._channels` sich `self._curves[i]`/`self._plot_items[i]`
+        bezieht - ausgeblendete/ausgelagerte Kanäle werden übersprungen,
+        Kurven-Position und Kanal-Index in `self._channels` sind daher
+        NICHT mehr zwangsläufig identisch (siehe `_on_timer_tick`).
+        """
         self._plot_widget.clear()
         self._plot_items = []
         self._curves = []
+        self._curve_channel_indices = []
         self._channel_y_auto_active = {}
 
         previous_plot_item = None
-        for channel in self._channels:
+        for index, channel in enumerate(self._channels):
+            if not channel.plot_visible or channel.plot_popout:
+                continue
             unit_suffix = f" [{channel.unit}]" if channel.unit else ""
             plot_item = self._plot_widget.addPlot(title=f"{channel.display_name}{unit_suffix}")
             plot_item.showGrid(x=True, y=True, alpha=0.3)
@@ -609,32 +817,88 @@ class LiveView(QWidget):
             self._plot_widget.nextRow()
             self._plot_items.append(plot_item)
             self._curves.append(curve)
+            self._curve_channel_indices.append(index)
             previous_plot_item = plot_item
+
+        # Eigene Fenster (siehe `ChannelPopoutWindow`) für Kanäle
+        # schliessen, die es nach dieser Kanalkonfiguration nicht mehr
+        # gibt, die inzwischen komplett deaktiviert wurden
+        # (`plot_visible=False`) ODER deren "Eigenes Fenster"-Haken im
+        # Dialog wieder entfernt wurde (`plot_popout=False`) - Letzteres
+        # ist seit "erst mit OK aktiv werden" der EINZIGE Weg, ein Fenster
+        # wieder zu schliessen, wenn der Nutzer es nicht direkt selbst
+        # zumacht (siehe `_on_popout_window_closed`). Verhindert außerdem
+        # verwaiste Fenster mit eingefrorenen Altdaten. Wird über
+        # `window.destroyed` automatisch aus `self._popout_windows`
+        # entfernt (siehe `_on_popout_window_closed`).
+        for hw in list(self._popout_windows.keys()):
+            channel = self._find_channel(hw)
+            if channel is None or not channel.plot_visible or not channel.plot_popout:
+                self._popout_windows[hw].close()
+
+        # Kanäle, die als "eigenes Fenster" konfiguriert sind
+        # (`plot_popout=True`, z. B. aus einer geladenen Konfiguration
+        # oder nach einem Messstart), aber noch kein offenes Fenster
+        # haben, automatisch öffnen - sonst würde ein solcher Kanal sonst
+        # spurlos verschwinden (weder Hauptraster noch Fenster sichtbar).
+        for channel in self._channels:
+            if (
+                channel.plot_visible
+                and channel.plot_popout
+                and channel.hardware_channel not in self._popout_windows
+            ):
+                self._open_popout_window(channel)
 
         self._apply_channel_appearance()
         self._apply_y_range_mode()
 
+    @staticmethod
+    def _apply_channel_curve_style(plot_item, curve, channel: Channel) -> None:
+        """Wendet Kurvenfarbe und Hintergrundfarbe EINES Kanals auf sein
+        Plot/Kurven-Paar an - Theme-Default, falls keine eigene Farbe
+        konfiguriert ist. Gemeinsam genutzt von Hauptraster-Subplots
+        (`_apply_channel_appearance`) und eigenen Fenstern
+        (`_open_popout_window`)."""
+        color = channel.plot_color or curve_color()
+        background = channel.plot_background or plot_background_color()
+        curve.setPen(pg.mkPen(color=color, width=1.5))
+        plot_item.getViewBox().setBackgroundColor(background)
+
     def _apply_channel_appearance(self) -> None:
         """Wendet Kurvenfarbe und Hintergrundfarbe pro Kanal an (siehe
-        `open_channel_display_dialog`) - Theme-Default, falls für einen
-        Kanal keine eigene Farbe konfiguriert ist."""
-        for plot_item, curve, channel in zip(self._plot_items, self._curves, self._channels):
-            color = channel.plot_color or curve_color()
-            background = channel.plot_background or plot_background_color()
-            curve.setPen(pg.mkPen(color=color, width=1.5))
-            plot_item.getViewBox().setBackgroundColor(background)
+        `open_channel_display_dialog`), für Hauptraster-Subplots UND
+        offene eigene Fenster."""
+        for pos, (plot_item, curve) in enumerate(zip(self._plot_items, self._curves)):
+            channel = self._channels[self._curve_channel_indices[pos]]
+            self._apply_channel_curve_style(plot_item, curve, channel)
+        for hw, window in self._popout_windows.items():
+            channel = self._find_channel(hw)
+            if channel is not None:
+                self._apply_channel_curve_style(window.plot_item, window.curve, channel)
 
     def _apply_y_range_mode(self) -> None:
         """Wendet den Y-Bereich (fest, Autoscale oder Hybrid) auf alle
-        Subplots an - ohne aktuelle Messwerte (siehe `_apply_channel_y_range`),
-        z. B. direkt nach `_rebuild_plots()` oder nach Ändern der
-        Einstellungen im Dialog, bevor der nächste Tick neue Daten liefert.
+        Subplots UND offenen eigenen Fenster an - ohne aktuelle Messwerte
+        (siehe `_apply_channel_y_range`), z. B. direkt nach
+        `_rebuild_plots()` oder nach Ändern der Einstellungen im Dialog,
+        bevor der nächste Tick neue Daten liefert.
         """
-        for plot_item, channel in zip(self._plot_items, self._channels):
+        for pos, plot_item in enumerate(self._plot_items):
+            channel = self._channels[self._curve_channel_indices[pos]]
             self._apply_channel_y_range(plot_item, channel, None)
+        for hw, window in self._popout_windows.items():
+            channel = self._find_channel(hw)
+            if channel is not None:
+                self._apply_channel_y_range(
+                    window.plot_item, channel, None, self._popout_y_auto_active
+                )
 
     def _apply_channel_y_range(
-        self, plot_item, channel: Channel, data: np.ndarray | None
+        self,
+        plot_item,
+        channel: Channel,
+        data: np.ndarray | None,
+        auto_active_cache: dict[str, bool] | None = None,
     ) -> None:
         """Setzt die Y-Achse eines einzelnen Subplots gemäß der pro Kanal
         konfigurierten Autoskalierung (siehe `ChannelDisplayDialog`).
@@ -647,10 +911,17 @@ class LiveView(QWidget):
         aktuellen Durchlaufs. Ist Autoskalierung deaktiviert, bleibt der
         feste Bereich immer aktiv, unabhängig von `data`.
 
-        `self._channel_y_auto_active` verhindert unnötige
-        `setYRange`/`enableAutoRange`-Aufrufe, wenn sich der effektive
-        Modus gegenüber dem letzten Aufruf nicht geändert hat.
+        `auto_active_cache` (Default `self._channel_y_auto_active`)
+        verhindert unnötige `setYRange`/`enableAutoRange`-Aufrufe, wenn
+        sich der effektive Modus gegenüber dem letzten Aufruf nicht
+        geändert hat. Hauptraster-Subplot und eigenes Fenster (siehe
+        `ChannelPopoutWindow`) desselben Kanals nutzen bewusst
+        UNTERSCHIEDLICHE Caches (`self._popout_y_auto_active`) - sie
+        haben getrennte `plot_item`-Instanzen und dürfen sich beim
+        Umschalten auf Autoscale nicht gegenseitig überspringen.
         """
+        if auto_active_cache is None:
+            auto_active_cache = self._channel_y_auto_active
         hw = channel.hardware_channel
         default_min = channel.min_range if channel.min_range is not None else -10.0
         default_max = channel.max_range if channel.max_range is not None else 10.0
@@ -667,9 +938,9 @@ class LiveView(QWidget):
         else:
             use_auto = False
 
-        if self._channel_y_auto_active.get(hw) == use_auto:
+        if auto_active_cache.get(hw) == use_auto:
             return
-        self._channel_y_auto_active[hw] = use_auto
+        auto_active_cache[hw] = use_auto
 
         if use_auto:
             plot_item.enableAutoRange(y=True)
@@ -756,14 +1027,29 @@ class LiveView(QWidget):
         if all_values.size == 0:
             return
 
-        for i, curve in enumerate(self._curves):
-            curve.setData(times, all_values[i])
+        for pos, curve in enumerate(self._curves):
+            curve.setData(times, all_values[self._curve_channel_indices[pos]])
 
         # Hybrid-Autoskalierung pro Kanal (fester Bereich, bis Messwerte
         # ihn über-/unterschreiten - siehe `_apply_channel_y_range`) mit
         # den JETZT tatsächlich angezeigten Werten neu bewerten.
-        for i, (plot_item, channel) in enumerate(zip(self._plot_items, self._channels)):
-            self._apply_channel_y_range(plot_item, channel, all_values[i])
+        for pos, plot_item in enumerate(self._plot_items):
+            channel_index = self._curve_channel_indices[pos]
+            self._apply_channel_y_range(plot_item, self._channels[channel_index], all_values[channel_index])
+
+        # Eigene Fenster (siehe `ChannelPopoutWindow`) unabhängig vom
+        # Hauptraster mit denselben Werten aktualisieren - `all_values`
+        # ist immer nach `self._channels` indiziert (siehe `apply_scaling`),
+        # unabhängig von `plot_visible`, daher hier per Index statt Position.
+        if self._popout_windows:
+            for index, channel in enumerate(self._channels):
+                window = self._popout_windows.get(channel.hardware_channel)
+                if window is None:
+                    continue
+                window.curve.setData(times, all_values[index])
+                self._apply_channel_y_range(
+                    window.plot_item, channel, all_values[index], self._popout_y_auto_active
+                )
 
         # X-Bereich selbst bleibt fensterbreit fest (Sweep scrollt nicht) -
         # nur bei einem tatsächlichen Zyklus-Wechsel (neuer Durchlauf
@@ -776,6 +1062,8 @@ class LiveView(QWidget):
             x_max = self._cycle_start_seconds + self._display_window_seconds
             for plot_item in self._plot_items:
                 plot_item.setXRange(x_min, x_max, padding=0)
+            for window in self._popout_windows.values():
+                window.plot_item.setXRange(x_min, x_max, padding=0)
 
     def _ensure_display_buffer(self, num_channels: int) -> None:
         """Initialisiert oder passt den internen Sweep-Anzeigepuffer an."""
@@ -834,6 +1122,16 @@ class LiveView(QWidget):
         Darstellung aber schlechter statt besser: jede Kurve hätte dann
         JEDEN Tick auf volle Fensterlänge verarbeitet werden müssen, auch
         wenn erst wenige Punkte echte Daten sind).
+
+        Zeigt IMMER den vollen aktuell eingetroffenen Stand
+        (`_buffer_write_pos`) - bewusst OHNE künstliches Nachzieh-Tempo:
+        ein frueherer Versuch, neu eingetroffene ~25ms-Bloecke (siehe
+        `gui/setup_view.py::_calculate_samples_per_read`) ueber mehrere
+        Ticks zu "verschmieren", hat zwar das sichtbare Blockweise-
+        Wachstum der Kurve geglaettet, dabei aber spuerbare zusaetzliche
+        Latenz eingefuehrt - bei einem direkten Reiz-Reaktions-Test (Klopf-
+        test auf einen Beschleunigungssensor) war das inakzeptabel: Latenz
+        ist fuer ein Live-Messinstrument wichtiger als Anzeige-Glaette.
         """
         m = self._buffer_write_pos
         if self._display_buffer is None or m == 0:

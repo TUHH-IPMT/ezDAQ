@@ -66,6 +66,7 @@ from gui.theme import (
     style_plot_container,
     style_plot_item,
 )
+from gui.widgets.spinbox import PrecisionDoubleSpinBox
 from gui.workers import BackgroundWorker
 
 logger = logging.getLogger(__name__)
@@ -259,9 +260,8 @@ class _AnalysisFunctionDialog(QDialog):
         self._cutoff_spin: QDoubleSpinBox | None = None
         self._window_spin: QSpinBox | None = None
         if kind in ("lowpass", "highpass"):
-            self._cutoff_spin = QDoubleSpinBox()
+            self._cutoff_spin = PrecisionDoubleSpinBox()
             self._cutoff_spin.setRange(0.01, 1_000_000.0)
-            self._cutoff_spin.setDecimals(2)
             self._cutoff_spin.setValue(10.0)
             self._cutoff_spin.setSuffix(" Hz")
             form.addRow(t("analysis_cutoff_frequency"), self._cutoff_spin)
