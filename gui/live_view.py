@@ -228,8 +228,19 @@ class ChannelDisplayDialog(QDialog):
             # siehe Klassendoc oben.
             popout_check = QCheckBox(t("popout_button"))
             popout_check.setToolTip(t("popout_button_tooltip"))
-            popout_check.setChecked(channel.plot_popout)
+            popout_check.setChecked(channel.plot_visible and channel.plot_popout)
+            popout_check.setEnabled(channel.plot_visible)
             row.addWidget(popout_check)
+
+            def _on_visible_toggled(
+                checked: bool,
+                popout_checkbox: QCheckBox = popout_check,
+            ) -> None:
+                popout_checkbox.setEnabled(checked)
+                if not checked:
+                    popout_checkbox.setChecked(False)
+
+            visible_check.toggled.connect(_on_visible_toggled)
 
             form.addRow(channel.display_name, row)
             self._rows[hw] = {

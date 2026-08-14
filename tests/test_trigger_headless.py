@@ -13,6 +13,7 @@ from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
 from core.controller import MeasurementController
 from data.models import (
+    Channel,
     MeasurementConfig,
     TriggerCondition,
     TriggerConfig,
@@ -20,7 +21,7 @@ from data.models import (
     TriggerKind,
 )
 from data.sensor_models import SensorEntry
-from gui.live_view import LiveView
+from gui.live_view import ChannelDisplayDialog, LiveView
 from gui.analysis_view import AnalysisView
 from gui.setup_view import SetupView
 
@@ -34,6 +35,31 @@ class _SignalSpy:
 
 
 class TriggerModelTests(unittest.TestCase):
+    def test_channel_display_dialog_keeps_popout_consistent_with_visibility(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        channel = Channel(
+            hardware_channel="ai0",
+            display_name="Channel",
+            plot_visible=False,
+            plot_popout=True,
+        )
+        dialog = ChannelDisplayDialog([channel], "#ffffff", "#000000")
+        row = dialog._rows["ai0"]
+        visible_check = row["visible"]
+        popout_check = row["popout"]
+
+        self.assertFalse(popout_check.isEnabled())
+        self.assertFalse(dialog.results()["ai0"]["plot_popout"])
+
+        visible_check.setChecked(True)
+        self.assertTrue(popout_check.isEnabled())
+        popout_check.setChecked(True)
+        visible_check.setChecked(False)
+        self.assertFalse(dialog.results()["ai0"]["plot_popout"])
+
+        dialog.deleteLater()
+        app.processEvents()
+
     def test_setup_view_preserves_discovery_sentinel(self) -> None:
         setup_view = SetupView.__new__(SetupView)
 
