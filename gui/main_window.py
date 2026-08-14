@@ -1072,7 +1072,9 @@ class MainWindow(QMainWindow):
         self.resize(geom.width, geom.height)
         self.move(geom.pos_x, geom.pos_y)
         if geom.maximized:
-            self.showMaximized()
+            # Nur den Zustand vormerken; `main.py` zeigt das vollständig
+            # aufgebaute Fenster anschließend genau einmal an.
+            self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
 
     def closeEvent(self, event) -> None:
         """Speichert Fenstergeometrie und stoppt eine ggf. laufende Messung."""
