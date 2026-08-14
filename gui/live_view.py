@@ -1268,8 +1268,13 @@ class LiveView(QWidget):
             # Zeitpunkt) laeuft, nicht erst ab dem tatsaechlichen Trigger
             # (siehe `mark_recording_started`). Bei manuellem Start bleibt
             # die Baseline 0, also unveraendertes Verhalten.
-            if not self._armed and session.config.is_recording_limit_reached(
-                self._controller.total_samples_acquired - self._recording_baseline_samples
+            if (
+                not self._armed
+                and not session.config.recording_unlimited
+                and session.config.is_recording_limit_reached(
+                    self._controller.total_samples_acquired
+                    - self._recording_baseline_samples
+                )
             ):
                 self.stop_requested.emit()
                 return

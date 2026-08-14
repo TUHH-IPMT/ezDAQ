@@ -451,6 +451,12 @@ class MeasurementConfig:
     recording_stop_unit: RecordingStopUnit = RecordingStopUnit.SAMPLES
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
 
+    def __post_init__(self) -> None:
+        if not self.recording_unlimited and self.recording_stop_value <= 0:
+            raise ValueError(
+                "recording_stop_value muss bei begrenzten Messungen größer als 0 sein."
+            )
+
     def active_channels(self) -> list[Channel]:
         """Gibt nur die aktivierten Kanäle zurück."""
         return [ch for ch in self.channels if ch.enabled]

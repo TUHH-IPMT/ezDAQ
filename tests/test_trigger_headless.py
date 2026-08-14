@@ -149,6 +149,17 @@ class TriggerModelTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "stop_measurement"):
                 controller.start_measurement(MeasurementConfig("Test", 1000.0))
 
+    def test_limited_measurement_rejects_non_positive_stop_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "größer als 0"):
+            MeasurementConfig(
+                "Limited",
+                1000.0,
+                recording_unlimited=False,
+                recording_stop_value=0.0,
+            )
+
+        MeasurementConfig("Unlimited", 1000.0, recording_stop_value=0.0)
+
     def test_sensor_database_ignores_invalid_sensor_data(self) -> None:
         invalid_documents = [
             [{"name": "broken", "channels": [{"signal_type": "removed-type"}]}],
