@@ -89,6 +89,7 @@ from gui.theme import (
     curve_color,
     draw_play_icon,
     draw_stop_icon,
+    is_theme_default_plot_background,
     plot_background_color,
     style_plot_container,
     style_plot_item,
@@ -1099,7 +1100,11 @@ class LiveView(QWidget):
         (`_apply_channel_appearance`) und eigenen Fenstern
         (`_open_popout_window`)."""
         color = channel.plot_color or curve_color()
-        background = channel.plot_background or plot_background_color()
+        background = (
+            plot_background_color()
+            if is_theme_default_plot_background(channel.plot_background)
+            else channel.plot_background or plot_background_color()
+        )
         curve.setPen(pg.mkPen(color=color, width=1.5))
         plot_item.getViewBox().setBackgroundColor(background)
 

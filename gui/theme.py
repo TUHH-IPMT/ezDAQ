@@ -131,6 +131,17 @@ def plot_background_color() -> str:
     return _PLOT_COLORS[_current_theme]["background"]
 
 
+def is_theme_default_plot_background(color: str | None) -> bool:
+    """Erkennt gespeicherte Plot-Hintergründe aus einem Theme-Default.
+
+    Ältere Konfigurationen speichern den hellen Default als ``"w"``;
+    spätere Versionen können die Hexwerte des hellen oder dunklen Themes
+    enthalten. Diese Werte sind keine individuellen Kanalfarben und sollen
+    bei einem Theme-Wechsel dem aktuellen Theme folgen.
+    """
+    return color in {"w", "#ffffff", "#232323"}
+
+
 def style_plot_container(widget) -> None:
     """Setzt den Hintergrund eines PyQtGraph-Containers (`PlotWidget` oder
     `GraphicsLayoutWidget`) auf die aktuelle Theme-Hintergrundfarbe."""
