@@ -55,8 +55,10 @@ class SensorDatabaseManager:
             # Dict-Format (Passwort-Hash+Sensoren) einer frueheren
             # Session - nur die Sensoren daraus uebernehmen.
             sensors_data = data.get("sensors", []) if isinstance(data, dict) else data
+            if not isinstance(sensors_data, list):
+                raise ValueError("Sensor-Datenbank muss eine Liste von Sensoren enthalten")
             return [SensorEntry.from_dict(item) for item in sensors_data]
-        except (json.JSONDecodeError, OSError, KeyError) as exc:
+        except (json.JSONDecodeError, OSError, KeyError, ValueError, AttributeError, TypeError) as exc:
             logger.warning(
                 "Sensor-Datenbank konnte nicht gelesen werden (%s), ignoriere Datei: %s",
                 self._path,

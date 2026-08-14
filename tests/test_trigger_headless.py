@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from pathlib import Path
 import numpy as np
 
 from config.configuration_manager import ConfigurationManager
+from config.sensor_database import SensorDatabaseManager
 from core.controller import MeasurementController
 from data.models import (
     MeasurementConfig,
@@ -15,6 +17,7 @@ from data.models import (
     TriggerDirection,
     TriggerKind,
 )
+from data.sensor_models import SensorEntry
 from gui.live_view import LiveView
 
 
@@ -35,6 +38,29 @@ class TriggerModelTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "stop_measurement"):
                 controller.start_measurement(MeasurementConfig("Test", 1000.0))
+
+    def test_sensor_database_ignores_invalid_sensor_data(self) -> None:
+        invalid_documents = [
+            [{"name": "broken", "channels": [{"signal_type": "removed-type"}]}],
+            [{"name": "broken"}, "not-a-sensor"],
+            {"sensors": {"not": "a-list"}},
+        ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "sensor_database.json"
+            for document in invalid_documents:
+                path.write_text(json.dumps(document), encoding="utf-8")
+                manager = SensorDatabaseManager(Path(directory))
+                self.assertEqual(manager.list_sensors(), [])
+
+            path.write_text(
+                json.dumps([SensorEntry(name="valid").to_dict()]),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                [sensor.name for sensor in SensorDatabaseManager(Path(directory)).list_sensors()],
+                ["valid"],
+            )
 
     def test_trigger_config_round_trip_preserves_start_and_stop(self) -> None:
         config = TriggerConfig(
