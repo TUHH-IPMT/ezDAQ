@@ -363,9 +363,14 @@ _translations = {
         "about_title": "Über ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 1.0\n\n"
-            "Anwendung zur Messdatenerfassung, Visualisierung und Analyse "
+            "Version 0.1\n\n"
+            "Anwendung zur Messdatenerfassung, Live-Visualisierung und Analyse "
             "mit NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
+            "Unterstützt kanalabhängige Skalierung und Kalibrierung, "
+            "Parquet-/CSV-Speicherung, Aufnahme-Limits sowie automatische "
+            "Start- und Stopp-Trigger per Schwellwert oder serieller Schnittstelle.\n\n"
+            "Zusätzlich verfügbar: Sensor-Datenbank, FFT und Filteranalyse, "
+            "Drag-and-Drop-Import, Mehrsprachigkeit und Hell-/Dunkel-Theme.\n\n"
             "© 2026 IPMT\n\n"
             "Verwendete Open-Source-Komponenten:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."
@@ -708,9 +713,13 @@ _translations = {
         "about_title": "About ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 1.0\n\n"
-            "Application for data acquisition, visualization, and analysis "
+            "Version 0.1\n\n"
+            "Application for data acquisition, live visualization, and analysis "
             "with NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
+            "Supports channel scaling and calibration, Parquet/CSV storage, "
+            "recording limits, and automatic threshold or serial start/stop triggers.\n\n"
+            "Also included: sensor database, FFT and filter analysis, "
+            "drag-and-drop import, multilingual UI, and light/dark themes.\n\n"
             "© 2026 IPMT\n\n"
             "Open-source components used:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."
