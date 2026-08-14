@@ -51,6 +51,16 @@ _DEVICE_CLASSES: dict[ModuleType, type[BaseDevice]] = {
 }
 
 
+def device_name_from_hw_channel(hw_channel: str) -> str:
+    """Extrahiert den Gerätenamen aus einem Hardwarekanal.
+
+    Gibt bei einem leeren oder unvollständigen Kanalnamen einen leeren
+    String zurück; die strengere Konfigurationsprüfung bleibt in
+    `_device_name_from_channel()` erhalten.
+    """
+    return hw_channel.split("/", 1)[0] if hw_channel else ""
+
+
 def _device_name_from_channel(channel: Channel) -> str:
     """Extrahiert den Gerätenamen aus einem Hardwarekanal.
 
@@ -60,12 +70,13 @@ def _device_name_from_channel(channel: Channel) -> str:
         MeasurementConfigError: falls `hardware_channel` nicht dem
             erwarteten Format "Gerät/Kanal" entspricht.
     """
-    if "/" not in channel.hardware_channel:
+    device_name = device_name_from_hw_channel(channel.hardware_channel)
+    if not device_name or "/" not in channel.hardware_channel:
         raise MeasurementConfigError(
             f"Ungültiger hardware_channel '{channel.hardware_channel}' "
             f"(erwartetes Format 'Gerät/Kanal', z. B. 'cDAQ1Mod1/ai0')."
         )
-    return channel.hardware_channel.split("/", 1)[0]
+    return device_name
 
 
 def group_channels_by_device(channels: list[Channel]) -> dict[str, list[Channel]]:

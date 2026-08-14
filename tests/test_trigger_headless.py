@@ -12,6 +12,11 @@ from PyQt6.QtWidgets import QApplication, QLineEdit, QTreeWidgetItem
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
 from core.controller import MeasurementController
+from core.measurement import (
+    _device_name_from_channel,
+    device_name_from_hw_channel,
+)
+from core.measurement import MeasurementConfigError
 from data.models import (
     Channel,
     MeasurementConfig,
@@ -71,6 +76,16 @@ class TriggerModelTests(unittest.TestCase):
 
         setup_view._discovered_devices = []
         self.assertEqual(setup_view.get_discovered_devices(), [])
+
+    def test_device_name_extraction_has_shared_and_strict_paths(self) -> None:
+        self.assertEqual(device_name_from_hw_channel("cDAQ1Mod1/ai0"), "cDAQ1Mod1")
+        self.assertEqual(device_name_from_hw_channel(""), "")
+        self.assertEqual(
+            _device_name_from_channel(Channel("cDAQ1Mod1/ai0", "Channel")),
+            "cDAQ1Mod1",
+        )
+        with self.assertRaises(MeasurementConfigError):
+            _device_name_from_channel(Channel("invalid", "Channel"))
 
     def test_analysis_filter_shows_no_results_hint(self) -> None:
         app = QApplication.instance() or QApplication([])

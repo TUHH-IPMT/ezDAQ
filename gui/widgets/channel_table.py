@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 )
 
 from config.sensor_database import SensorDatabaseManager
+from core.measurement import device_name_from_hw_channel
 from data.models import ADC_TIMING_MODES, THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
 from gui.i18n import connect_language_changed, t
 from gui.widgets.spinbox import PrecisionDoubleSpinBox
@@ -789,12 +790,12 @@ class ChannelTableWidget(QWidget):
                 timing_mode = str(
                     param_widget.property("adc_timing_mode") or "AUTOMATIC"
                 )
-                device_name = self._device_name_from_hw_channel(hw_channel)
+                device_name = device_name_from_hw_channel(hw_channel)
                 for other_row in range(self._table.rowCount()):
                     if other_row == row:
                         continue
                     other_hw_widget = self._table.cellWidget(other_row, _COL_HW_CHANNEL)
-                    if self._device_name_from_hw_channel(
+                    if device_name_from_hw_channel(
                         self._get_hw_channel_text_from_widget(other_hw_widget)
                     ) != device_name:
                         continue
@@ -1277,7 +1278,7 @@ class ChannelTableWidget(QWidget):
         einstellen, was erst beim Messstart als Hardwarefehler auffallen
         würde.
         """
-        device_name = self._device_name_from_hw_channel(
+        device_name = device_name_from_hw_channel(
             self._get_hw_channel_text_from_widget(hw_widget)
         )
         if not device_name:
@@ -1286,7 +1287,7 @@ class ChannelTableWidget(QWidget):
             if row == exclude_row:
                 continue
             other_hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
-            other_device_name = self._device_name_from_hw_channel(
+            other_device_name = device_name_from_hw_channel(
                 self._get_hw_channel_text_from_widget(other_hw_widget)
             )
             if other_device_name != device_name:
@@ -1294,13 +1295,6 @@ class ChannelTableWidget(QWidget):
             other_param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
             if other_param_widget is not None:
                 other_param_widget.setProperty("adc_timing_mode", value)
-
-    @staticmethod
-    def _device_name_from_hw_channel(hw_channel: str) -> str:
-        """Extrahiert den Gerätenamen aus einem Hardwarekanal, z. B.
-        "cDAQ1Mod1/ai0" -> "cDAQ1Mod1" (dasselbe Prinzip wie
-        `core/measurement.py::_device_name_from_channel`)."""
-        return hw_channel.split("/", 1)[0] if hw_channel else ""
 
     def _find_row_for_widget(self, column: int, widget: QWidget) -> int | None:
         """Findet die Zeile eines Zellwidgets in `column` (siehe `sender()`-
