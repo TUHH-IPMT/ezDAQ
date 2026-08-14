@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -98,6 +98,10 @@ class SensorDatabaseDialog(QDialog):
         self._loading = False
         # Startet IMMER gesperrt (siehe Klassendoc) - kein Opt-in mehr.
         self._locked = True
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(300)
+        self._save_timer.timeout.connect(self._save_current_sensor_now)
 
         self.setWindowTitle(t("sensor_database_dialog_title"))
         self.resize(860, 520)
@@ -609,6 +613,10 @@ class SensorDatabaseDialog(QDialog):
         )
 
     def _save_current_sensor(self) -> None:
+        """Plant das Speichern nach einer kurzen Änderungspause ein."""
+        self._save_timer.start()
+
+    def _save_current_sensor_now(self) -> None:
         if self._loading or self._locked or self._current_sensor_id is None:
             return
         sensor = self._read_sensor_from_widgets()
