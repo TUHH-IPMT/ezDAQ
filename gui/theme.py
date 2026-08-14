@@ -158,6 +158,13 @@ def style_plot_item(plot_item) -> None:
         plot_item.setTitle(plot_item.titleLabel.text, color=foreground)
 
 
+def repolish(widget) -> None:
+    """Erzwingt eine erneute Auswertung des Stylesheets eines Widgets."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    widget.update()
+
+
 # ---------------------------------------------------------------------- #
 # Einfache, selbst gezeichnete Navigations-Icons
 # ---------------------------------------------------------------------- #

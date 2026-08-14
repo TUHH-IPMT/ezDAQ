@@ -29,7 +29,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -44,6 +43,7 @@ from config.sensor_database import SensorDatabaseManager
 from data.models import SignalType
 from data.sensor_models import SensorChannelDefinition, SensorEntry, SensorRangeVariant
 from gui.i18n import connect_language_changed, t
+from gui.dialogs import confirm_delete
 from gui.widgets.channel_table import SIGNAL_TYPE_LABEL_KEYS
 from gui.widgets.spinbox import format_optional_float, parse_optional_float
 
@@ -68,22 +68,13 @@ _COL_RANGE_UNIT = 1
 _COL_SENSITIVITY = 2
 _COL_SENSITIVITY_UNIT = 3
 
-# Fest codiertes Passwort - reiner Schutz gegen VERSEHENTLICHES Ändern
-# von Tabellenwerten, keine echte Sicherheitsfunktion (siehe Klassendoc
-# unten). Bewusst kein pro-Katalog konfigurierbares Passwort (das wäre
-# hier unnötiger Aufwand für ein reines Bedienungs-Versehen-Schloss).
-_UNLOCK_PASSWORD = "fertig"
-
-
 class SensorDatabaseDialog(QDialog):
     """Verwaltet den Sensor-Katalog: Sensoren links als Liste, rechts
     Stammdaten + Achsen/Messbereich-Varianten als Baum.
 
     Schreibschutz: Der Dialog startet IMMER gesperrt (nur Lesen/Kopieren
-    möglich) - "Entsperren..." verlangt das feste Passwort
-    (`_UNLOCK_PASSWORD`), danach ist Bearbeiten für den Rest dieser
-    Dialog-Sitzung möglich. Rein gegen versehentliches Ändern von
-    Tabellenwerten gedacht, keine echte Zugriffskontrolle.
+    möglich). Ein einfacher Bearbeiten-/Sperren-Toggle schützt vor
+    versehentlichen Änderungen; er ist keine Sicherheitsfunktion.
     """
 
     def __init__(
@@ -315,7 +306,7 @@ class SensorDatabaseDialog(QDialog):
         self._remove_range_button.setEnabled(editable)
 
         self._unlock_button.setText(
-            t("sensor_db_unlock_button") if self._locked else t("sensor_db_relock_button")
+            t("sensor_db_edit_button") if self._locked else t("sensor_db_relock_button")
         )
         self._lock_status_label.setText(
             t("sensor_db_locked_status") if self._locked else t("sensor_db_unlocked_status")
@@ -326,23 +317,7 @@ class SensorDatabaseDialog(QDialog):
         self._apply_state()
 
     def _on_unlock_button_clicked(self) -> None:
-        if not self._locked:
-            self._set_locked(True)
-            return
-        password, ok = QInputDialog.getText(
-            self,
-            t("sensor_db_enter_password_title"),
-            t("sensor_db_enter_password_body"),
-            QLineEdit.EchoMode.Password,
-        )
-        if not ok:
-            return
-        if password != _UNLOCK_PASSWORD:
-            QMessageBox.warning(
-                self, t("sensor_db_enter_password_title"), t("sensor_db_wrong_password_body")
-            )
-            return
-        self._set_locked(False)
+        self._set_locked(not self._locked)
 
     # ------------------------------------------------------------------ #
     # Sensor-Liste
@@ -425,14 +400,7 @@ class SensorDatabaseDialog(QDialog):
             return
         sensor = self._sensor_database.get_sensor(self._current_sensor_id)
         name = sensor.name if sensor is not None else ""
-        reply = QMessageBox.question(
-            self,
-            t("confirm_delete_title"),
-            t("confirm_delete_sensor_body", name=name),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        if not confirm_delete(self, t("confirm_delete_sensor_body", name=name)):
             return
         self._sensor_database.delete_sensor(self._current_sensor_id)
         self._current_sensor_id = None

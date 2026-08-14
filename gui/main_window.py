@@ -71,6 +71,7 @@ from gui.theme import (
     draw_gear_icon,
     draw_play_icon,
     get_theme,
+    repolish,
     set_theme,
 )
 
@@ -323,9 +324,7 @@ class MainWindow(QMainWindow):
             *self._nav_text_labels,
         ]
         for widget in all_widgets:
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
-            widget.update()
+            repolish(widget)
 
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()

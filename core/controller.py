@@ -43,6 +43,9 @@ class MeasurementController:
         * Live-Daten für Konsumenten (Live View, Storage Writer) über
           unabhängige Ring-Buffer-Reader bereitstellen.
         * Eine Messung sauber stoppen und Hardware-Ressourcen freigeben.
+                * Hardwarebezogene Werkzeuge wie NI-MAX über die Hardware-Schicht
+                    bereitstellen, damit die GUI keine Hardware-Implementierungen
+                    direkt aufrufen muss.
 
     Eine Instanz verwaltet höchstens eine laufende Messung gleichzeitig
     (siehe Projektvorgabe: "Es soll zunächst nur ein Projekt gleichzeitig

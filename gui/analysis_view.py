@@ -57,12 +57,14 @@ from analysis.basic_analysis import apply_filter, apply_smoothing, compute_fft
 from data.loader import LoadedMeasurement, infer_metadata_path, load_measurement_file
 from data.models import Channel
 from gui.i18n import connect_language_changed, t
+from gui.dialogs import confirm_delete
 from gui.theme import (
     connect_theme_changed,
     draw_fft_icon,
     draw_highpass_icon,
     draw_lowpass_icon,
     draw_smoothing_icon,
+    repolish,
     style_plot_container,
     style_plot_item,
 )
@@ -147,9 +149,7 @@ class ChannelTreeWidget(QTreeWidget):
         (eigenes Stylesheet wird von Qt sonst nicht automatisch neu
         ausgewertet, siehe gleiches Problem bei den Nav-Kacheln in
         `gui/main_window.py::_retheme_nav_icons`)."""
-        self._empty_hint_label.style().unpolish(self._empty_hint_label)
-        self._empty_hint_label.style().polish(self._empty_hint_label)
-        self._empty_hint_label.update()
+        repolish(self._empty_hint_label)
 
     def _update_empty_hint_visibility(self, *_args) -> None:
         self._empty_hint_label.setVisible(self.topLevelItemCount() == 0)
@@ -728,15 +728,7 @@ class AnalysisView(QWidget):
     def _confirm_delete(self, body: str) -> bool:
         """Fragt vor einer Lösch-Aktion (Datei/Kanal, per Kontextmenü oder
         Entfernen-Taste) explizit nach Bestätigung."""
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle(t("confirm_delete_title"))
-        box.setText(body)
-        delete_button = box.addButton(t("delete_action"), QMessageBox.ButtonRole.YesRole)
-        box.addButton(t("cancel"), QMessageBox.ButtonRole.NoRole)
-        box.setDefaultButton(delete_button)
-        box.exec()
-        return box.clickedButton() is delete_button
+        return confirm_delete(self, body)
 
     def _remove_channel_item(self, item: QTreeWidgetItem) -> None:
         """Entfernt einen einzelnen Kanal (regulär oder Analyseergebnis) aus
