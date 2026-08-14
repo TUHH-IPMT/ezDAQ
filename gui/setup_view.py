@@ -49,6 +49,7 @@ from data.models import (
     Channel,
     DeviceInfo,
     MeasurementConfig,
+    ModuleType,
     RecordingStopUnit,
     NI9210_FIXED_SAMPLE_RATE_HZ,
     StorageFormat,
