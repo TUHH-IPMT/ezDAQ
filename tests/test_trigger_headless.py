@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+from PyQt6.QtWidgets import QApplication
 
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
@@ -20,6 +21,7 @@ from data.models import (
 )
 from data.sensor_models import SensorEntry
 from gui.live_view import LiveView
+from gui.analysis_view import AnalysisView
 from gui.setup_view import SetupView
 
 
@@ -126,6 +128,25 @@ class LiveViewStopTriggerTests(unittest.TestCase):
 
         self.assertNotIn("ai0", live_view._popout_windows)
         self.assertNotIn("ai0", live_view._popout_y_auto_active)
+
+    def test_analysis_busy_state_is_reference_counted(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        analysis_view = AnalysisView.__new__(AnalysisView)
+        analysis_view._busy_count = 0
+        analysis_view._function_buttons = {}
+
+        analysis_view._begin_busy()
+        analysis_view._begin_busy()
+        self.assertEqual(analysis_view._busy_count, 2)
+
+        analysis_view._end_busy()
+        self.assertEqual(analysis_view._busy_count, 1)
+        analysis_view._end_busy()
+        self.assertEqual(analysis_view._busy_count, 0)
+        analysis_view._end_busy()
+        self.assertEqual(analysis_view._busy_count, 0)
+
+        app.processEvents()
 
     def _live_view_for_stop_check(self, condition: TriggerCondition) -> LiveView:
         live_view = LiveView.__new__(LiveView)

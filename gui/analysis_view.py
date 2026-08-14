@@ -380,6 +380,8 @@ class AnalysisView(QWidget):
         self._plot_x_columns: dict[int, str] = {}
         self._function_buttons: dict[str, QToolButton] = {}
         self._function_category_labels: dict[str, QLabel] = {}
+        self._busy_count = 0
+        self._loading_paths: set[Path] = set()
         # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
         # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
         # Python das QThread-Objekt vorzeitig einsammeln.
@@ -642,18 +644,24 @@ class AnalysisView(QWidget):
     # Interna
     # ------------------------------------------------------------------ #
 
-    def _set_busy(self, busy: bool) -> None:
+    def _begin_busy(self) -> None:
         """Sperrt die Bedienelemente, deren Aktionen im Hintergrund laufen
         (Datei laden, Analysefunktionen, siehe `gui/workers.py`), und
         zeigt einen Wartecursor - verhindert, dass mehrere solche
         Operationen gleichzeitig gestartet werden, während der Nutzer
         über den Fortschritt im Bilde bleibt.
         """
-        for button in self._function_buttons.values():
-            button.setEnabled(not busy)
-        if busy:
+        self._busy_count += 1
+        if self._busy_count == 1:
+            for button in self._function_buttons.values():
+                button.setEnabled(False)
             QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        else:
+
+    def _end_busy(self) -> None:
+        self._busy_count = max(0, self._busy_count - 1)
+        if self._busy_count == 0:
+            for button in self._function_buttons.values():
+                button.setEnabled(True)
             QApplication.restoreOverrideCursor()
 
     def _forget_background_worker(self, worker: BackgroundWorker) -> None:
@@ -802,12 +810,18 @@ class AnalysisView(QWidget):
                 self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
             )
             return
+        if path in self._loading_paths:
+            QMessageBox.information(
+                self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
+            )
+            return
 
         # Laden selbst (pd.read_parquet/pd.read_csv) läuft im Hintergrund,
         # da das bei großen Messdateien den GUI-Thread spürbar blockieren
         # würde (siehe gui/workers.py::BackgroundWorker).
         metadata_path = infer_metadata_path(path)
-        self._set_busy(True)
+        self._loading_paths.add(path)
+        self._begin_busy()
         worker = BackgroundWorker(load_measurement_file, path, metadata_path)
         worker.succeeded.connect(lambda measurement: self._on_file_loaded(path, measurement))
         worker.failed.connect(lambda message: self._on_file_load_failed(path, message))
@@ -816,11 +830,13 @@ class AnalysisView(QWidget):
         worker.start()
 
     def _on_file_load_failed(self, path: Path, message: str) -> None:
-        self._set_busy(False)
+        self._loading_paths.discard(path)
+        self._end_busy()
         QMessageBox.critical(self, t("load_error_title"), message)
 
     def _on_file_loaded(self, path: Path, measurement: LoadedMeasurement) -> None:
-        self._set_busy(False)
+        self._loading_paths.discard(path)
+        self._end_busy()
 
         # Zwischen Start des Hintergrund-Ladens und hier könnte dieselbe
         # Datei bereits über einen zweiten, parallel gestarteten Ladevorgang
@@ -1054,7 +1070,7 @@ class AnalysisView(QWidget):
         """Führt eine Analysefunktion im Hintergrund aus und ruft bei
         Erfolg `on_success(ergebnis)` im GUI-Thread auf (siehe
         `_finish_result`-Aufrufe in `_on_analysis_function_clicked`)."""
-        self._set_busy(True)
+        self._begin_busy()
         worker = BackgroundWorker(fn, *args, **kwargs)
         worker.succeeded.connect(lambda result: self._on_analysis_succeeded(on_success, result))
         worker.failed.connect(self._on_analysis_failed)
@@ -1063,7 +1079,7 @@ class AnalysisView(QWidget):
         worker.start()
 
     def _on_analysis_succeeded(self, on_success, result) -> None:
-        self._set_busy(False)
+        self._end_busy()
         try:
             on_success(result)
         except Exception as exc:
@@ -1073,7 +1089,7 @@ class AnalysisView(QWidget):
             )
 
     def _on_analysis_failed(self, message: str) -> None:
-        self._set_busy(False)
+        self._end_busy()
         logger.warning("Analysefunktion fehlgeschlagen: %s", message)
         QMessageBox.critical(
             self, t("analysis_error_title"), t("analysis_error_body", error=message)
