@@ -15,6 +15,13 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
+
+# Splash bleibt mindestens so lange sichtbar, auch wenn Konfiguration/
+# Sensor-Datenbank/Hauptfenster schneller fertig sind - sonst blitzt er auf
+# schnellen Rechnern nur einen Wimpernschlag lang auf und wirkt eher wie
+# ein Grafikfehler als wie absichtliches Startup-Feedback.
+_SPLASH_MIN_SECONDS = 0.7
 
 
 def configure_logging() -> None:
@@ -72,8 +79,9 @@ def main() -> int:
 
     # Importe bewusst innerhalb von main(), damit ein reiner Import von
     # main.py (z. B. durch Tooling) nicht sofort PyQt6 lädt.
-    from PyQt6.QtGui import QIcon
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
+    from PyQt6.QtWidgets import QApplication, QSplashScreen
 
     from config.configuration_manager import ConfigurationManager
     from config.sensor_database import SensorDatabaseManager
@@ -97,7 +105,53 @@ def main() -> int:
     else:
         logger.warning("Anwendungs-Icon nicht gefunden unter %s", icon_path)
 
+    # Splash-Screen: PyQt6/pyqtgraph-Import sowie Config-/Sensor-Datenbank-
+    # Laden brauchen spuerbar Zeit, bevor das Hauptfenster erscheint - ohne
+    # sichtbares Feedback wirkt die App in dieser Zeit wie eingefroren.
+    splash = None
+    splash_path = get_resource_path("ezDAQ_logo_full.png")
+    if splash_path.exists():
+        pixmap = QPixmap(str(splash_path))
+        if not pixmap.isNull():
+            pixmap = pixmap.scaledToWidth(
+                420, Qt.TransformationMode.SmoothTransformation
+            )
+            # Eigene Textzeile UNTER dem Logo statt darueber gelegt: das
+            # Logo hat unten bereits den "ezDAQ / EASY DATA ACQUISITION"-
+            # Schriftzug eingebrannt, ein `showMessage()` direkt am unteren
+            # Rand des Bildes wuerde sich damit ueberlappen.
+            padded = QPixmap(pixmap.width(), pixmap.height() + 28)
+            padded.fill(QColor("white"))
+            painter = QPainter(padded)
+            painter.drawPixmap(0, 0, pixmap)
+            painter.end()
+
+            splash = QSplashScreen(padded)
+            splash.show()
+    else:
+        logger.warning("Splash-Grafik nicht gefunden unter %s", splash_path)
+
+    def _set_splash_status(message: str) -> None:
+        """Zeigt `message` unten im Splash an und verarbeitet sofort
+        anstehende Paint-Events - ohne das wuerde Qt das Neuzeichnen erst
+        beim naechsten Event-Loop-Durchlauf nachholen, der Text bliebe also
+        unsichtbar, solange der naechste (ggf. langsame) Initialisierungs-
+        schritt synchron laeuft."""
+        if splash is None:
+            return
+        splash.showMessage(
+            message,
+            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+            QColor("#13233d"),
+        )
+        app.processEvents()
+
+    splash_start = time.monotonic()
+
+    _set_splash_status("Lade Konfiguration ...")
     configuration_manager = ConfigurationManager()
+
+    _set_splash_status("Lade Sensor-Datenbank ...")
     sensor_database = SensorDatabaseManager()
 
     from gui.i18n import set_language
@@ -106,10 +160,24 @@ def main() -> int:
     from gui.theme import set_theme
     set_theme(configuration_manager.settings.theme)
 
+    _set_splash_status("Initialisiere Messsystem ...")
     controller = MeasurementController(configuration_manager)
 
+    _set_splash_status("Baue Hauptfenster auf ...")
     window = MainWindow(controller, configuration_manager, sensor_database)
-    window.show()
+
+    if splash is not None:
+        remaining = _SPLASH_MIN_SECONDS - (time.monotonic() - splash_start)
+        if remaining > 0:
+            time.sleep(remaining)
+        # Reihenfolge wichtig: `window.show()` VOR `splash.finish()`, sonst
+        # blitzt kurz der leere Desktop auf, bevor das Hauptfenster
+        # erscheint (Qt-Beispielcode fuer `QSplashScreen` folgt derselben
+        # Reihenfolge).
+        window.show()
+        splash.finish(window)
+    else:
+        window.show()
 
     exit_code = app.exec()
     logger.info("ezDAQ wurde beendet.")
