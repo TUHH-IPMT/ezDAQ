@@ -84,6 +84,7 @@ class StorageWriter:
         storage_format: StorageFormat,
         sample_rate_hz: float,
         poll_interval_seconds: float = 0.05,
+        reader_back_samples: int = 0,
     ) -> None:
         """Initialisiert den Storage Writer.
 
@@ -98,6 +99,14 @@ class StorageWriter:
             sample_rate_hz: Abtastrate, für die berechnete Zeitspalte.
             poll_interval_seconds: Wartezeit zwischen Lesevorgängen, wenn
                 aktuell keine neuen Daten im Ring Buffer vorliegen.
+            reader_back_samples: Optionaler Vorlauf in Samples - lässt den
+                internen Ring-Buffer-Reader rückwirkend beginnen (siehe
+                `core/ringbuffer.py::RingBuffer.register_reader`), damit
+                bereits vor dem Erzeugen dieses StorageWriters gepufferte
+                Daten mitgeschrieben werden (Pre-Trigger-Aufzeichnung beim
+                Schwellwert-Trigger, siehe
+                `gui/main_window.py::_on_trigger_fired`). `0` (Standard)
+                entspricht dem bisherigen Verhalten (Start "jetzt").
         """
         self._ring_buffer = ring_buffer
         self._channels = channels
@@ -106,7 +115,7 @@ class StorageWriter:
         self._sample_rate_hz = sample_rate_hz
         self._poll_interval_seconds = poll_interval_seconds
 
-        self._reader_id = ring_buffer.register_reader()
+        self._reader_id = ring_buffer.register_reader(back_samples=reader_back_samples)
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._last_error: Optional[Exception] = None

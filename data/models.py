@@ -115,6 +115,130 @@ _RECORDING_STOP_UNIT_TO_SECONDS: dict[RecordingStopUnit, float] = {
 }
 
 
+class TriggerKind(str, Enum):
+    """Art einer einzelnen Trigger-Bedingung (siehe `TriggerCondition`).
+
+    NONE (Standard) = keine automatische Bedingung (manuelles Verhalten).
+    THRESHOLD/SERIAL lösen automatisch aus, sobald die jeweils
+    konfigurierte Bedingung eintritt - der "Scharf"-Zustand (Hardware
+    läuft bereits, wartet auf die Start-Bedingung) lebt in
+    `gui/live_view.py::LiveView.enter_armed_state`.
+    """
+
+    NONE = "none"
+    THRESHOLD = "threshold"
+    SERIAL = "serial"
+
+
+class TriggerDirection(str, Enum):
+    """Vergleichsrichtung des Schwellwert-Triggers (siehe
+    `TriggerCondition.threshold_direction`)."""
+
+    RISES_ABOVE = "rises_above"
+    FALLS_BELOW = "falls_below"
+    ABS_EXCEEDS = "abs_exceeds"
+
+
+@dataclass
+class TriggerCondition:
+    """Eine einzelne Trigger-Bedingung - wird sowohl für den Start als auch
+    für das Stopp einer Messung verwendet (siehe `TriggerConfig.start`/
+    `TriggerConfig.stop`), jeweils unabhängig konfigurierbar.
+
+    Attributes:
+        kind: Art der Bedingung.
+        threshold_channel_hardware_id: Hardwarekanal (`Channel.hardware_channel`)
+            des zu überwachenden Kanals - nur bei `kind=THRESHOLD` relevant.
+        threshold_value: Schwellwert in der physikalischen Einheit des Kanals.
+        threshold_direction: Vergleichsrichtung (siehe `TriggerDirection`).
+        serial_port: Serielle Schnittstelle (z. B. "COM3") - nur bei
+            `kind=SERIAL` relevant.
+        serial_baud_rate: Baudrate der seriellen Verbindung.
+        serial_expected_message: Exaktes Byte-/Text-Signal, dessen Empfang
+            die Bedingung auslöst (kein beliebiges Byte) - siehe
+            `gui/serial_trigger.py::SerialTriggerListener`.
+    """
+
+    kind: TriggerKind = TriggerKind.NONE
+    threshold_channel_hardware_id: str = ""
+    threshold_value: float = 0.0
+    threshold_direction: TriggerDirection = TriggerDirection.RISES_ABOVE
+    serial_port: str = ""
+    serial_baud_rate: int = 9600
+    serial_expected_message: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            "kind": self.kind.value,
+            "threshold_channel_hardware_id": self.threshold_channel_hardware_id,
+            "threshold_value": self.threshold_value,
+            "threshold_direction": self.threshold_direction.value,
+            "serial_port": self.serial_port,
+            "serial_baud_rate": self.serial_baud_rate,
+            "serial_expected_message": self.serial_expected_message,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TriggerCondition":
+        return cls(
+            kind=TriggerKind(data.get("kind", TriggerKind.NONE.value)),
+            threshold_channel_hardware_id=data.get("threshold_channel_hardware_id", ""),
+            threshold_value=data.get("threshold_value", 0.0),
+            threshold_direction=TriggerDirection(
+                data.get("threshold_direction", TriggerDirection.RISES_ABOVE.value)
+            ),
+            serial_port=data.get("serial_port", ""),
+            serial_baud_rate=data.get("serial_baud_rate", 9600),
+            serial_expected_message=data.get("serial_expected_message", ""),
+        )
+
+
+@dataclass
+class TriggerConfig:
+    """Konfiguration für automatischen Mess-Start UND/ODER -Stopp.
+
+    Bewusst als eigenes, verschachteltes Dataclass statt flacher Felder
+    auf `MeasurementConfig`.
+
+    `start.kind == NONE` = manueller Start (Klick auf "Messung starten",
+    bisheriges Standardverhalten). `stop.kind == NONE` = kein
+    Trigger-Stopp - das bestehende, separate Aufnahme-Limit
+    (`MeasurementConfig.recording_unlimited`/`recording_stop_value`/
+    `recording_stop_unit`) sowie der manuelle Stopp-Button wirken davon
+    UNABHÄNGIG weiter (wer zuerst eintrifft, stoppt die Messung - gleiche
+    "oder"-Beziehung wie schon zwischen manuellem Stopp und Aufnahme-Limit).
+
+    Attributes:
+        start: Bedingung für den automatischen Start.
+        stop: Bedingung für den automatischen Stopp.
+        pretrigger_seconds: Wie viele Sekunden VOR dem Start-Trigger-
+            Zeitpunkt zusätzlich rückwirkend aufgezeichnet werden sollen
+            (wie ein Oszilloskop-Trigger) - nur bei `start.kind=THRESHOLD`
+            relevant, siehe `core/ringbuffer.py::RingBuffer.register_reader`.
+            Für den Stopp gibt es bewusst KEINEN Vorlauf - ein Stopp-Trigger
+            beendet die Aufzeichnung einfach zum Zeitpunkt des Auslösens.
+    """
+
+    start: TriggerCondition = field(default_factory=TriggerCondition)
+    stop: TriggerCondition = field(default_factory=TriggerCondition)
+    pretrigger_seconds: float = 5.0
+
+    def to_dict(self) -> dict:
+        return {
+            "start": self.start.to_dict(),
+            "stop": self.stop.to_dict(),
+            "pretrigger_seconds": self.pretrigger_seconds,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "TriggerConfig":
+        return cls(
+            start=TriggerCondition.from_dict(data.get("start", {}) or {}),
+            stop=TriggerCondition.from_dict(data.get("stop", {}) or {}),
+            pretrigger_seconds=data.get("pretrigger_seconds", 5.0),
+        )
+
+
 @dataclass
 class Channel:
     """Repräsentiert einen einzelnen Messkanal.
@@ -310,6 +434,9 @@ class MeasurementConfig:
         recording_stop_value: Grenzwert in der Einheit `recording_stop_unit`
             - nur relevant, wenn `recording_unlimited` False ist.
         recording_stop_unit: Einheit des Grenzwerts (Messwerte oder Zeit).
+        trigger: Konfiguration für automatischen Mess-Start UND/ODER
+            -Stopp (siehe `TriggerConfig`) - das Aufnahme-Limit oben gilt
+            unabhängig davon zusätzlich weiter (wer zuerst greift, stoppt).
     """
 
     name: str
@@ -322,6 +449,7 @@ class MeasurementConfig:
     recording_unlimited: bool = True
     recording_stop_value: float = 0.0
     recording_stop_unit: RecordingStopUnit = RecordingStopUnit.SAMPLES
+    trigger: TriggerConfig = field(default_factory=TriggerConfig)
 
     def active_channels(self) -> list[Channel]:
         """Gibt nur die aktivierten Kanäle zurück."""
@@ -369,6 +497,7 @@ class MeasurementConfig:
             "recording_unlimited": self.recording_unlimited,
             "recording_stop_value": self.recording_stop_value,
             "recording_stop_unit": self.recording_stop_unit.value,
+            "trigger": self.trigger.to_dict(),
         }
 
     @classmethod
@@ -389,6 +518,7 @@ class MeasurementConfig:
             recording_stop_unit=RecordingStopUnit(
                 data.get("recording_stop_unit", RecordingStopUnit.SAMPLES.value)
             ),
+            trigger=TriggerConfig.from_dict(data.get("trigger", {})),
         )
 
 

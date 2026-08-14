@@ -98,6 +98,11 @@ class AppSettings:
             `data.models.MeasurementConfig.recording_stop_value`).
         last_recording_stop_unit: Zuletzt gewählte Einheit (Wert von
             `data.models.RecordingStopUnit`, z. B. "samples").
+        last_trigger_config: Zuletzt verwendete Trigger-Konfiguration für
+            Start UND Stopp, als Rohdaten von
+            `data.models.TriggerConfig.to_dict()` (analog zu `window`
+            oben - direkt als Dict statt eigener flacher Felder, da
+            `TriggerConfig` selbst schon verschachtelt ist).
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -117,6 +122,7 @@ class AppSettings:
     last_recording_unlimited: bool = True
     last_recording_stop_value: float = 0.0
     last_recording_stop_unit: str = "samples"
+    last_trigger_config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialisiert die Einstellungen in ein JSON-kompatibles Dictionary."""
@@ -156,4 +162,5 @@ class AppSettings:
             last_recording_unlimited=data.get("last_recording_unlimited", True),
             last_recording_stop_value=data.get("last_recording_stop_value", 0.0),
             last_recording_stop_unit=data.get("last_recording_stop_unit", "samples"),
+            last_trigger_config=data.get("last_trigger_config", {}) or {},
         )

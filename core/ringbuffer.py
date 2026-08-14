@@ -97,11 +97,24 @@ class RingBuffer:
     # Reader-Verwaltung
     # ------------------------------------------------------------------ #
 
-    def register_reader(self) -> int:
+    def register_reader(self, back_samples: int = 0) -> int:
         """Registriert einen neuen, unabhängigen Konsumenten (Reader).
 
-        Der neue Reader beginnt an der aktuellen Schreibposition, sieht
-        also nur Daten, die NACH der Registrierung geschrieben werden.
+        Der neue Reader beginnt standardmäßig an der aktuellen
+        Schreibposition, sieht also nur Daten, die NACH der Registrierung
+        geschrieben werden.
+
+        Args:
+            back_samples: Optional - lässt den Reader stattdessen
+                `back_samples` Samples VOR der aktuellen Schreibposition
+                beginnen (rückwirkendes Lesen, z. B. für einen
+                Vorlauf-/Pre-Trigger-Puffer beim Schwellwert-Trigger, siehe
+                `gui/main_window.py::_on_trigger_fired`). Wird auf die
+                älteste noch im Puffer vorhandene Position geclamped -
+                sowohl nach unten (nicht vor Sample 0), als auch nach oben
+                (nicht weiter zurück, als der Puffer noch hält, sonst
+                bereits überschriebene Daten). `0` (Standard) entspricht
+                exakt dem bisherigen Verhalten.
 
         Returns:
             Eine Reader-ID, die bei allen weiteren Aufrufen
@@ -110,8 +123,15 @@ class RingBuffer:
         with self._lock:
             reader_id = self._next_reader_id
             self._next_reader_id += 1
-            self._readers[reader_id] = self._total_written
-            logger.debug("Reader %d registriert (start_count=%d)", reader_id, self._total_written)
+            oldest_valid = max(0, self._total_written - self._capacity)
+            start_count = max(oldest_valid, self._total_written - max(0, back_samples))
+            self._readers[reader_id] = start_count
+            logger.debug(
+                "Reader %d registriert (start_count=%d, back_samples=%d)",
+                reader_id,
+                start_count,
+                back_samples,
+            )
             return reader_id
 
     def unregister_reader(self, reader_id: int) -> None:

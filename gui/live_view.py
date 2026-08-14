@@ -82,7 +82,7 @@ from PyQt6.QtWidgets import (
 from core.controller import MeasurementController
 from core.measurement import apply_scaling
 from data.exporter import StorageWriter
-from data.models import Channel
+from data.models import Channel, TriggerConfig, TriggerDirection, TriggerKind
 from gui.i18n import connect_language_changed, get_language, t
 from gui.theme import (
     connect_theme_changed,
@@ -345,10 +345,15 @@ class LiveView(QWidget):
         stop_requested: Der Nutzer hat auf "Messung stoppen" geklickt.
             `gui/main_window.py` ist dafür zuständig, die Messung über
             den `MeasurementController` tatsächlich zu stoppen.
+        trigger_fired: Ein scharf geschalteter Schwellwert-Trigger (siehe
+            `enter_armed_state`) hat ausgelöst - `gui/main_window.py`
+            erzeugt daraufhin den StorageWriter (ggf. rückwirkend, siehe
+            `_on_trigger_fired`).
     """
 
     start_requested = pyqtSignal()
     stop_requested = pyqtSignal()
+    trigger_fired = pyqtSignal()
 
     def __init__(self, controller: MeasurementController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -417,8 +422,39 @@ class LiveView(QWidget):
         self._popout_windows: dict[str, ChannelPopoutWindow] = {}
         self._popout_y_auto_active: dict[str, bool] = {}
 
-        # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen").
+        # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen"
+        # UND waehrend der Scharf-Phase eines Schwellwert-/seriellen
+        # Triggers, bevor er ausgeloest hat - siehe `attach_storage_writer`).
         self._storage_writer: StorageWriter | None = None
+
+        # Zustand fuer automatische Mess-Trigger (siehe
+        # `data/models.py::TriggerConfig`, `enter_armed_state`). Hardware-
+        # Erfassung + Anzeige laufen waehrend der Scharf-Phase bereits, nur
+        # der StorageWriter fehlt noch (siehe
+        # `gui/main_window.py::_on_start_measurement`). Start UND Stopp
+        # sind unabhaengig konfigurierbar (siehe `TriggerConfig`) - daher
+        # getrennte Kanal-Indizes/Flankendetektoren fuer beide Seiten.
+        self._trigger_config: TriggerConfig | None = None
+        self._armed: bool = False
+        self._start_trigger_channel_index: int | None = None
+        self._stop_trigger_channel_index: int | None = None
+        # None = noch kein Tick seit dem jeweiligen Reset-Punkt beobachtet -
+        # verhindert ein sofortiges Ausloesen, falls der Kanal zu diesem
+        # Zeitpunkt bereits jenseits der Schwelle liegt (siehe
+        # `_check_threshold_trigger`/`_check_stop_threshold_trigger`).
+        # Start-Seite wird in `start_display()` zurueckgesetzt, Stopp-Seite
+        # zusaetzlich in `mark_recording_started()` (die Aufzeichnung kann
+        # bei Serien-/manuellem Start erst SPAETER als `start_display()`
+        # tatsaechlich beginnen).
+        self._start_trigger_last_condition: bool | None = None
+        self._stop_trigger_last_condition: bool | None = None
+        # Nullpunkt fuer das Aufnahme-Limit (siehe
+        # `data/models.py::MeasurementConfig.is_recording_limit_reached`) -
+        # bei getriggerten Messungen NICHT der Beginn der Hardware-
+        # Erfassung (das waere der Scharf-Zeitpunkt), sondern der
+        # tatsaechliche Trigger-Zeitpunkt (siehe `mark_recording_started`).
+        # Bleibt bei manuellem Start 0, also unveraendertes Verhalten.
+        self._recording_baseline_samples: int = 0
 
         self._timer = QTimer(self)
         # PreciseTimer statt des Qt-Default (CoarseTimer, an Windows'
@@ -478,6 +514,19 @@ class LiveView(QWidget):
         info_row.addWidget(self._stop_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(info_row)
 
+        # "Scharf, wartet auf Trigger"-Banner (siehe `enter_armed_state`) -
+        # deutlich hervorgehoben, standardmaessig unsichtbar. Der bestehende
+        # Stop-Button dient waehrenddessen unveraendert als Abbrechen-Funktion
+        # (siehe `gui/main_window.py::_on_stop_measurement`).
+        self._armed_banner = QLabel()
+        self._armed_banner.setWordWrap(True)
+        self._armed_banner.setStyleSheet(
+            "QLabel { background-color: #fd7e14; color: #1a1a1a; padding: 6px 10px;"
+            " border-radius: 4px; font-weight: 600; }"
+        )
+        self._armed_banner.setVisible(False)
+        layout.addWidget(self._armed_banner)
+
         layout.addWidget(self._plot_widget, stretch=1)
 
         # Pufferauslastung des Storage Writers (Schreib-Rückstand ggü. DAQ-Thread).
@@ -523,6 +572,7 @@ class LiveView(QWidget):
         channels: list[Channel],
         sample_rate_hz: float,
         storage_writer: StorageWriter | None = None,
+        trigger_config: TriggerConfig | None = None,
     ) -> None:
         """Beginnt die Live-Anzeige für eine neu gestartete Messung.
 
@@ -531,14 +581,34 @@ class LiveView(QWidget):
         Samples verlieren/überspringen, ohne den Storage Writer zu
         beeinträchtigen (siehe `core/ringbuffer.py`).
 
+        IMMER aufgerufen, auch bei manuellem Start (nicht nur bei einem
+        Schwellwert-/seriellen Start-Trigger) - der Stopp-Trigger (siehe
+        `TriggerConfig.stop`) muss unabhaengig von der Art des Starts
+        ueberwacht werden koennen. Loest hier BEIDE Kanal-Indizes auf
+        (Start- und Stopp-Seite) und setzt beide Flankendetektoren zurueck.
+
         Args:
             storage_writer: Der `StorageWriter` der laufenden Messung, falls
                 gespeichert wird. `None` bei "Nur Live anzeigen" - dann
                 bleibt die Speicherpuffer-Anzeige ausgeblendet.
+            trigger_config: Aktuelle Start-/Stopp-Trigger-Konfiguration
+                (siehe `data/models.py::TriggerConfig`). `None` entspricht
+                einer leeren Konfiguration (kein Trigger).
         """
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
         self._reader_id = self._controller.register_reader()
+
+        self._trigger_config = trigger_config or TriggerConfig()
+        self._start_trigger_channel_index = None
+        self._stop_trigger_channel_index = None
+        for index, channel in enumerate(channels):
+            if channel.hardware_channel == self._trigger_config.start.threshold_channel_hardware_id:
+                self._start_trigger_channel_index = index
+            if channel.hardware_channel == self._trigger_config.stop.threshold_channel_hardware_id:
+                self._stop_trigger_channel_index = index
+        self._start_trigger_last_condition = None
+        self._stop_trigger_last_condition = None
 
         self._rebuild_plots()
         self._ensure_display_buffer(len(channels))
@@ -552,20 +622,177 @@ class LiveView(QWidget):
         self._x_range_cycle_start = None
         self._timer.start()
 
-        self._storage_writer = storage_writer
-        self._storage_group.setVisible(storage_writer is not None)
-        if storage_writer is not None:
-            self._on_storage_timer_tick()
-            self._storage_timer.start()
+        self.attach_storage_writer(storage_writer)
 
         logger.info(
             "Live View gestartet für %d Kanäle bei %.1f Hz", len(channels), sample_rate_hz
         )
 
+    def attach_storage_writer(self, storage_writer: StorageWriter | None) -> None:
+        """Setzt (oder entfernt) den StorageWriter der laufenden Messung.
+
+        Bei manuellem Start ruft `start_display()` dies direkt mit dem
+        bereits fertigen StorageWriter auf (bzw. `None` bei "Nur Live
+        anzeigen"). Bei einem automatischen Trigger (siehe
+        `enter_armed_state`) existiert waehrend der Scharf-Phase noch KEIN
+        StorageWriter - `gui/main_window.py::_on_trigger_fired` ruft diese
+        Methode dann NACHTRAEGLICH auf, sobald der Trigger tatsaechlich
+        ausgeloest hat.
+        """
+        self._storage_writer = storage_writer
+        self._storage_group.setVisible(storage_writer is not None)
+        if storage_writer is not None:
+            self._on_storage_timer_tick()
+            self._storage_timer.start()
+        else:
+            self._storage_timer.stop()
+
+    def mark_recording_started(self, baseline_samples: int) -> None:
+        """Setzt den Nullpunkt fuer das Aufnahme-Limit auf den
+        tatsaechlichen Aufzeichnungs-Beginn (siehe
+        `_recording_baseline_samples`, `_on_timer_tick`) und ist der
+        universelle Reset-Punkt fuer den Stopp-Trigger-Flankendetektor
+        (siehe `_check_stop_threshold_trigger`) - eine bereits beim
+        tatsaechlichen Aufzeichnungsbeginn erfuellte Stopp-Bedingung darf
+        nicht sofort (faelschlich) ausloesen.
+
+        Bei manuellem Start mit `0` aufgerufen (Nullpunkt = Erfassungsstart,
+        unveraendertes Verhalten) - MUSS auch dort aufgerufen werden, da der
+        Stopp-Flankendetektor sonst nie zurueckgesetzt wird. Bei einem
+        Start-Trigger ruft `gui/main_window.py::_on_trigger_fired` dies mit
+        der Samplezahl auf, bei der der Trigger tatsaechlich ausgeloest hat.
+        """
+        self._recording_baseline_samples = baseline_samples
+        self._stop_trigger_last_condition = None
+
+    def enter_armed_state(self) -> None:
+        """Versetzt die Live View in den "scharf, wartet auf Trigger"-Zustand.
+
+        Kanal-Aufloesung und Flankendetektor-Reset sind bereits durch
+        `start_display()` erledigt (IMMER aufgerufen, auch bei manuellem
+        Start) - hier nur noch Zustand + Banner. Hardware-Erfassung und
+        Anzeige laufen zu diesem Zeitpunkt bereits (siehe
+        `gui/main_window.py::_on_start_measurement`) - nur der
+        StorageWriter fehlt noch. Bei einem Schwellwert-Trigger prueft
+        `_on_timer_tick`/`_check_threshold_trigger` ab jetzt jeden Tick den
+        konfigurierten Kanal; bei einem seriellen Trigger geschieht die
+        eigentliche Ueberwachung extern (siehe
+        `gui/serial_trigger.py::SerialTriggerListener`), dieser Zustand
+        steuert hier nur die Banner-Anzeige.
+        """
+        self._armed = True
+        self._update_armed_banner()
+
+    def exit_armed_state(self) -> None:
+        """Beendet den "scharf, wartet auf Trigger"-Zustand (Trigger
+        ausgeloest ODER Messung waehrenddessen abgebrochen). Idempotent."""
+        self._armed = False
+        self._armed_banner.setVisible(False)
+
+    def _update_armed_banner(self) -> None:
+        if self._trigger_config is None:
+            return
+        start = self._trigger_config.start
+        if start.kind == TriggerKind.SERIAL:
+            text = t("armed_waiting_serial", port=start.serial_port)
+        else:
+            channel_name = (
+                self._channels[self._start_trigger_channel_index].display_name
+                if self._start_trigger_channel_index is not None
+                else start.threshold_channel_hardware_id
+            )
+            text = t(
+                "armed_waiting_threshold",
+                channel=channel_name,
+                threshold=start.threshold_value,
+            )
+        self._armed_banner.setText(text)
+        self._armed_banner.setVisible(True)
+
+    @staticmethod
+    def _evaluate_threshold_condition(latest: float, condition) -> bool:
+        """Wertet eine `TriggerCondition` (Schwellwert-Art) fuer einen
+        einzelnen Messwert aus - gemeinsam genutzt von Start- und
+        Stopp-Pruefung."""
+        threshold = condition.threshold_value
+        direction = condition.threshold_direction
+        if direction == TriggerDirection.RISES_ABOVE:
+            return latest > threshold
+        if direction == TriggerDirection.FALLS_BELOW:
+            return latest < threshold
+        return abs(latest) > threshold  # ABS_EXCEEDS
+
+    def _check_threshold_trigger(self, scaled: np.ndarray) -> None:
+        """Prueft den konfigurierten Start-Kanal jeden Tick gegen den
+        Schwellwert (siehe `enter_armed_state`) und emittiert
+        `trigger_fired`, sobald die Bedingung FLANKENARTIG eintritt (also
+        beim Wechsel von "nicht erfuellt" auf "erfuellt", nicht bei jedem
+        Tick waehrend sie weiter erfuellt bleibt). `_start_trigger_last_condition`
+        startet bei jedem Scharfschalten bewusst bei `None`, damit ein
+        Kanal, der beim Scharfschalten bereits jenseits der Schwelle liegt,
+        NICHT sofort ausloest - der Nutzer muss eine tatsaechliche
+        Ueberschreitung sehen, wie bei einem Oszilloskop-Trigger.
+
+        Bewusste Vereinfachung: geprueft wird nur der letzte Sample-Wert
+        des jeweiligen Ticks (~15ms-Granularitaet), nicht der gesamte
+        Datenblock - bei der geforderten "ca. 5s"-Vorlauftoleranz ist das
+        unerheblich, gleiches Praezisionsniveau wie das bestehende
+        Aufnahme-Limit (siehe `_on_timer_tick`).
+        """
+        if (
+            not self._armed
+            or self._trigger_config is None
+            or self._trigger_config.start.kind != TriggerKind.THRESHOLD
+            or self._start_trigger_channel_index is None
+        ):
+            return
+        values = scaled[self._start_trigger_channel_index]
+        if values.size == 0:
+            return
+        latest = float(values[-1])
+        condition = self._evaluate_threshold_condition(latest, self._trigger_config.start)
+
+        fired = self._start_trigger_last_condition is False and condition is True
+        self._start_trigger_last_condition = condition
+        if fired:
+            self._armed = False
+            self._armed_banner.setVisible(False)
+            self.trigger_fired.emit()
+
+    def _check_stop_threshold_trigger(self, scaled: np.ndarray) -> None:
+        """Prueft den konfigurierten Stopp-Kanal jeden Tick gegen den
+        Schwellwert, solange tatsaechlich aufgezeichnet wird (`not
+        self._armed`) - gleiche Flankenlogik wie `_check_threshold_trigger`,
+        loest aber ueber `stop_requested` aus (denselben Pfad wie
+        Aufnahme-Limit und manueller Stopp-Button), statt ueber
+        `trigger_fired`. `_stop_trigger_last_condition` wird von
+        `mark_recording_started()` zurueckgesetzt - dem Zeitpunkt, ab dem
+        die Aufzeichnung tatsaechlich beginnt (nicht notwendigerweise
+        `start_display()`, z. B. bei einem Start-Trigger).
+        """
+        if (
+            self._armed
+            or self._trigger_config is None
+            or self._trigger_config.stop.kind != TriggerKind.THRESHOLD
+            or self._stop_trigger_channel_index is None
+        ):
+            return
+        values = scaled[self._stop_trigger_channel_index]
+        if values.size == 0:
+            return
+        latest = float(values[-1])
+        condition = self._evaluate_threshold_condition(latest, self._trigger_config.stop)
+
+        fired = self._stop_trigger_last_condition is False and condition is True
+        self._stop_trigger_last_condition = condition
+        if fired:
+            self.stop_requested.emit()
+
     def stop_display(self) -> None:
         """Beendet die Live-Anzeige (nach Messungsende)."""
         self._timer.stop()
         self._storage_timer.stop()
+        self.exit_armed_state()
         if self._reader_id is not None:
             self._controller.unregister_reader(self._reader_id)
             self._reader_id = None
@@ -1020,7 +1247,18 @@ class LiveView(QWidget):
             # Pfad wie der manuelle "Messung stoppen"-Button
             # (`self._stop_button.clicked.connect(self.stop_requested.emit)`),
             # damit Metadaten/Storage-Writer identisch abgeschlossen werden.
-            if session.config.is_recording_limit_reached(self._controller.total_samples_acquired):
+            #
+            # WICHTIG bei getriggerten Messungen: waehrend der Scharf-Phase
+            # (`self._armed`) noch KEINE Pruefung - es wird ja noch nichts
+            # aufgezeichnet. Danach wird gegen `total_samples_acquired -
+            # _recording_baseline_samples` geprueft statt gegen den rohen
+            # Zaehler, da dieser bereits ab Erfassungsstart (= Scharf-
+            # Zeitpunkt) laeuft, nicht erst ab dem tatsaechlichen Trigger
+            # (siehe `mark_recording_started`). Bei manuellem Start bleibt
+            # die Baseline 0, also unveraendertes Verhalten.
+            if not self._armed and session.config.is_recording_limit_reached(
+                self._controller.total_samples_acquired - self._recording_baseline_samples
+            ):
                 self.stop_requested.emit()
                 return
         self._sample_rate_label.setText(
@@ -1033,6 +1271,8 @@ class LiveView(QWidget):
             return
 
         scaled = apply_scaling(raw, self._channels)
+        self._check_threshold_trigger(scaled)
+        self._check_stop_threshold_trigger(scaled)
         self._write_to_display_buffer(scaled)
 
         times, all_values = self._get_display_view()

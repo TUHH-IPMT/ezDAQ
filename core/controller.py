@@ -25,7 +25,7 @@ from config.configuration_manager import ConfigurationManager
 from core.acquisition import AcquisitionThread
 from core.measurement import MeasurementConfigError, create_devices
 from core.ringbuffer import RingBuffer
-from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession
+from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession, TriggerKind
 from hardware.base_device import AcquisitionError, BaseDevice
 from hardware.nidaq_device import NIDAQSharedTask, discover_devices, open_ni_max
 
@@ -223,14 +223,29 @@ class MeasurementController:
                 self._close_devices(devices)
                 raise
 
+            # Der Hardware-Hard-Stop (target_samples) zaehlt Samples ab
+            # Beginn der Hardware-Erfassung - bei einem automatischen
+            # Trigger (Schwellwert/Seriell) ist das der Scharf-Zeitpunkt,
+            # NICHT der tatsaechliche Aufnahme-Start (siehe
+            # `data/models.py::TriggerConfig`). Ein hier gesetztes Limit
+            # wuerde daher bereits waehrend der Vorlauf-/Wartephase
+            # ablaufen. Nur im manuellen Modus fallen beide Zeitpunkte
+            # zusammen - dort bleibt das bisherige Verhalten unveraendert.
+            # Fuer Schwellwert/Seriell greift das Limit stattdessen
+            # ausschliesslich per Software-Check in
+            # `gui/live_view.py::_on_timer_tick` (mit korrektem, auf den
+            # tatsaechlichen Trigger-Zeitpunkt bezogenem Nullpunkt).
+            hardware_target_samples = (
+                None
+                if config.recording_unlimited or config.trigger.start.kind != TriggerKind.NONE
+                else config.target_recording_stop_samples()
+            )
             acquisition_thread = AcquisitionThread(
                 devices=devices,
                 ring_buffer=ring_buffer,
                 samples_per_read=config.samples_per_read,
                 on_error=self._handle_acquisition_error,
-                target_samples=(
-                    None if config.recording_unlimited else config.target_recording_stop_samples()
-                ),
+                target_samples=hardware_target_samples,
             )
             acquisition_thread.start()
 

@@ -34,6 +34,7 @@ from pathlib import Path
 from PyQt6.QtCore import QSize, pyqtSignal, Qt
 from PyQt6.QtGui import QActionGroup, QIcon
 from PyQt6.QtWidgets import (
+    QDialog,
     QFileDialog,
     QLabel,
     QMainWindow,
@@ -49,11 +50,20 @@ from config.settings import get_resource_path
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
-from data.models import DeviceInfo, MeasurementConfig, MeasurementSession, StorageFormat
+from data.models import (
+    DeviceInfo,
+    MeasurementConfig,
+    MeasurementSession,
+    StorageFormat,
+    TriggerConfig,
+    TriggerKind,
+)
 from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
 from gui.live_view import LiveView
+from gui.serial_trigger import SerialTriggerListener
 from gui.setup_view import NamingScheme, SetupView
+from gui.trigger_settings_dialog import TriggerSettingsDialog
 from gui.workers import BackgroundWorker
 from gui.theme import (
     connect_theme_changed,
@@ -108,6 +118,21 @@ class MainWindow(QMainWindow):
         last_storage = self._configuration_manager.settings.last_storage_path
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
 
+        # Zustand fuer automatische Mess-Trigger (siehe
+        # `data/models.py::TriggerConfig`, `_on_start_measurement`). Besitzt
+        # die aktuelle Konfiguration selbst (nicht mehr die Setup-Ansicht,
+        # siehe `gui/trigger_settings_dialog.py`) - vorbelegt mit der
+        # zuletzt verwendeten Konfiguration.
+        self._trigger_config: TriggerConfig = TriggerConfig.from_dict(
+            configuration_manager.settings.last_trigger_config
+        )
+        self._start_serial_listener: SerialTriggerListener | None = None
+        self._stop_serial_listener: SerialTriggerListener | None = None
+        # False waehrend der Scharf-Phase (Start-Trigger noch nicht
+        # ausgeloest) - steuert, ob `_on_stop_measurement` Metadaten
+        # schreibt (siehe dort).
+        self._recording_started: bool = False
+
         self.setWindowTitle(t("window_title"))
         # .ico statt .png (siehe main.py) - mehrere Aufloesungen fuer
         # Titelleiste/Taskleiste statt einer einzelnen 256px-Groesse.
@@ -134,6 +159,7 @@ class MainWindow(QMainWindow):
         self._setup_view.storage_path_requested.connect(self._on_choose_storage_path)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
         self._live_view.stop_requested.connect(self._on_stop_measurement)
+        self._live_view.trigger_fired.connect(self._on_trigger_fired)
 
         # DAQ-Thread-Fehler thread-sicher in den GUI-Thread bringen
         self._acquisition_error_signal.connect(self._on_acquisition_error_gui)
@@ -364,6 +390,8 @@ class MainWindow(QMainWindow):
         self._channel_display_action.triggered.connect(self._on_open_channel_display_dialog)
         self._sensor_database_action = self._settings_menu.addAction(t("menu_sensor_database"))
         self._sensor_database_action.triggered.connect(self._on_open_sensor_database)
+        self._trigger_settings_action = self._settings_menu.addAction(t("menu_trigger_settings"))
+        self._trigger_settings_action.triggered.connect(self._on_open_trigger_settings_dialog)
 
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
         self._about_action = self._help_menu.addAction(t("menu_about"))
@@ -414,6 +442,18 @@ class MainWindow(QMainWindow):
         dialog = SensorDatabaseDialog(self._sensor_database, self)
         dialog.exec()
 
+    def _on_open_trigger_settings_dialog(self) -> None:
+        """Öffnet den Trigger-Einstellungen-Dialog (siehe
+        `gui/trigger_settings_dialog.py::TriggerSettingsDialog`) mit den im
+        Setup konfigurierten AKTIVEN Kanälen als Auswahl für einen
+        Schwellwert-Trigger - wie beim Kanal-Darstellung-Dialog schon vor
+        dem Messstart nutzbar (siehe `_on_open_channel_display_dialog`)."""
+        channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
+        dialog = TriggerSettingsDialog(self._trigger_config, channels, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._trigger_config = dialog.results()
+            self._configuration_manager.update_last_trigger_settings(self._trigger_config)
+
     def _build_status_bar(self) -> None:
         self._status_label = QLabel(t("ready"))
         self.statusBar().addWidget(self._status_label)
@@ -440,6 +480,8 @@ class MainWindow(QMainWindow):
         self._theme_light_action.setText(t("theme_light"))
         self._theme_dark_action.setText(t("theme_dark"))
         self._channel_display_action.setText(f"{t('menu_channel_display')}...")
+        self._sensor_database_action.setText(t("menu_sensor_database"))
+        self._trigger_settings_action.setText(t("menu_trigger_settings"))
 
         self._help_menu.setTitle(f"&{t('menu_help')}")
         self._about_action.setText(t("menu_about"))
@@ -465,6 +507,12 @@ class MainWindow(QMainWindow):
         config = self._setup_view.build_current_config()
         if config is None:
             return
+        # Wie bei `_on_start_measurement`: `SetupView.build_current_config()`
+        # kennt die Trigger-Konfiguration nicht mehr (siehe
+        # `gui/trigger_settings_dialog.py`) - ohne diese Zeile wuerde
+        # "Konfiguration speichern" den aktiven Trigger stillschweigend
+        # verlieren (Default-`TriggerConfig()` statt der echten Werte).
+        config.trigger = self._trigger_config
         filename, _ = QFileDialog.getSaveFileName(
             self,
             t("menu_save_config"),
@@ -503,6 +551,10 @@ class MainWindow(QMainWindow):
             )
             return
         self._setup_view.apply_config(config)
+        # Die geladene Konfiguration bringt ihre eigene Trigger-Konfiguration
+        # mit (siehe `_on_save_config`) - MainWindow uebernimmt sie hier als
+        # neue aktive Konfiguration (siehe `_trigger_config`).
+        self._trigger_config = config.trigger
         self._status_label.setText(t("status_config_loaded", filename=file_path.name))
 
     def _on_load_measurement(self) -> None:
@@ -611,6 +663,12 @@ class MainWindow(QMainWindow):
 
     def _on_start_measurement(self, config: MeasurementConfig) -> None:
         requested_measurement_name = config.name
+        # Trigger-Konfiguration gehoert seit der Verallgemeinerung auf
+        # Start UND Stopp `MainWindow` selbst (siehe `TriggerSettingsDialog`)
+        # - `SetupView.build_current_config()` liefert nur noch eine leere
+        # Default-`TriggerConfig()`, hier wird die tatsaechlich aktive
+        # Konfiguration eingespeist.
+        config.trigger = self._trigger_config
 
         if config.save_to_disk:
             if self._storage_path is None:
@@ -658,32 +716,195 @@ class MainWindow(QMainWindow):
             recording_stop_value=config.recording_stop_value,
             recording_stop_unit=config.recording_stop_unit.value,
         )
+        self._configuration_manager.update_last_trigger_settings(config.trigger)
 
-        # Storage Writer nur anlegen, wenn Speicherung gewünscht
-        if config.save_to_disk:
-            ring_buffer = self._controller.get_ring_buffer()
+        self._setup_view.set_start_enabled(False, "measurement_running")
+        self._live_view.set_start_enabled(False)
+
+        if config.trigger.start.kind == TriggerKind.NONE:
+            # Manueller Start: StorageWriter (falls gewuenscht) wird SOFORT
+            # angelegt und gestartet (bisheriges Verhalten unveraendert).
+            if config.save_to_disk:
+                ring_buffer = self._controller.get_ring_buffer()
+                extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
+                data_path = self._storage_path / f"{config.name}{extension}"
+                self._storage_writer = StorageWriter(
+                    ring_buffer=ring_buffer,
+                    channels=self._controller.active_channels,
+                    output_path=data_path,
+                    storage_format=config.storage_format,
+                    sample_rate_hz=config.sample_rate_hz,
+                )
+                self._storage_writer.start()
+            else:
+                self._storage_writer = None
+            self._recording_started = True
+            self._live_view.start_display(
+                self._controller.active_channels,
+                config.sample_rate_hz,
+                storage_writer=self._storage_writer,
+                trigger_config=config.trigger,
+            )
+            # Nullpunkt fuer ein evtl. konfiguriertes Aufnahme-Limit UND
+            # Reset des Stopp-Trigger-Flankendetektors (siehe
+            # `gui/live_view.py::mark_recording_started`) - MUSS auch hier
+            # aufgerufen werden, nicht nur bei einem Start-Trigger.
+            self._live_view.mark_recording_started(0)
+            self._maybe_start_stop_listener(config)
+            self._set_nav_index(_VIEW_LIVE)
+            self._status_label.setText(t("measurement_running_named", name=config.name))
+            return
+
+        # Schwellwert/Seriell START-Trigger: Hardware-Erfassung + Anzeige
+        # starten sofort (Vorlauf-Pufferung, siehe
+        # `data/models.py::TriggerConfig`), der StorageWriter wird ERST bei
+        # `_on_trigger_fired` angelegt.
+        self._recording_started = False
+        self._storage_writer = None
+        self._live_view.start_display(
+            self._controller.active_channels,
+            config.sample_rate_hz,
+            storage_writer=None,
+            trigger_config=config.trigger,
+        )
+        self._live_view.enter_armed_state()
+
+        if config.trigger.start.kind == TriggerKind.SERIAL:
+            listener = SerialTriggerListener(
+                config.trigger.start.serial_port,
+                config.trigger.start.serial_baud_rate,
+                config.trigger.start.serial_expected_message.encode("utf-8"),
+            )
+            listener.message_matched.connect(self._on_trigger_fired)
+            listener.connection_failed.connect(self._on_trigger_connection_failed)
+            self._start_serial_listener = listener
+            listener.start()
+
+        self._set_nav_index(_VIEW_LIVE)
+        self._status_label.setText(t("measurement_armed_status", name=config.name))
+
+    def _maybe_start_stop_listener(self, config: MeasurementConfig) -> None:
+        """Startet den seriellen STOPP-Trigger-Lauscher, falls konfiguriert
+        (siehe `TriggerConfig.stop`) - aufgerufen direkt NACHDEM die
+        Aufzeichnung tatsaechlich begonnen hat (`mark_recording_started`),
+        unabhaengig davon ob der Start manuell oder getriggert erfolgte
+        (siehe manueller Zweig oben bzw. `_on_trigger_fired`). Ein
+        Schwellwert-Stopp-Trigger braucht keinen eigenen Lauscher - der
+        wird bereits unabhaengig ueber
+        `gui/live_view.py::_check_stop_threshold_trigger` ueberwacht."""
+        if config.trigger.stop.kind != TriggerKind.SERIAL:
+            return
+        listener = SerialTriggerListener(
+            config.trigger.stop.serial_port,
+            config.trigger.stop.serial_baud_rate,
+            config.trigger.stop.serial_expected_message.encode("utf-8"),
+        )
+        listener.message_matched.connect(self._on_stop_measurement)
+        listener.connection_failed.connect(self._on_stop_trigger_connection_failed)
+        self._stop_serial_listener = listener
+        listener.start()
+
+    def _on_trigger_fired(self) -> None:
+        """Ein scharf geschalteter START-Trigger hat ausgeloest (siehe
+        `gui/live_view.py::LiveView.trigger_fired` bzw.
+        `gui/serial_trigger.py::SerialTriggerListener.message_matched`) -
+        legt jetzt (erst jetzt!) den StorageWriter an, ggf. mit
+        rueckwirkendem Vorlauf (Schwellwert-Trigger, siehe
+        `core/ringbuffer.py::RingBuffer.register_reader`)."""
+        session = self._controller.current_session
+        if session is None or self._recording_started:
+            return
+        config = session.config
+
+        back_samples = 0
+        if config.trigger.start.kind == TriggerKind.THRESHOLD:
+            back_samples = round(config.trigger.pretrigger_seconds * config.sample_rate_hz)
+
+        total_now = self._controller.total_samples_acquired
+        ring_buffer = self._controller.get_ring_buffer()
+        capacity = ring_buffer.capacity if ring_buffer is not None else 0
+        # Gleiche Clamp-Formel wie `RingBuffer.register_reader` - der
+        # tatsaechliche Nullpunkt fuer das Aufnahme-Limit (siehe
+        # `gui/live_view.py::mark_recording_started`) muss exakt dem
+        # spaeter vom StorageWriter registrierten Reader entsprechen.
+        oldest_valid = max(0, total_now - capacity)
+        baseline_samples = max(oldest_valid, total_now - back_samples)
+
+        if config.save_to_disk and self._storage_path is not None:
+            ring_buffer_for_writer = self._controller.get_ring_buffer()
             extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
             data_path = self._storage_path / f"{config.name}{extension}"
             self._storage_writer = StorageWriter(
-                ring_buffer=ring_buffer,
+                ring_buffer=ring_buffer_for_writer,
                 channels=self._controller.active_channels,
                 output_path=data_path,
                 storage_format=config.storage_format,
                 sample_rate_hz=config.sample_rate_hz,
+                reader_back_samples=back_samples,
             )
             self._storage_writer.start()
         else:
             self._storage_writer = None
 
-        self._setup_view.set_start_enabled(False, "measurement_running")
-        self._live_view.set_start_enabled(False)
-        self._live_view.start_display(
-            self._controller.active_channels,
-            config.sample_rate_hz,
-            storage_writer=self._storage_writer,
-        )
-        self._set_nav_index(_VIEW_LIVE)
+        self._live_view.exit_armed_state()
+        self._live_view.attach_storage_writer(self._storage_writer)
+        self._live_view.mark_recording_started(baseline_samples)
+        self._recording_started = True
+
+        # WICHTIG: `.stop()` VOR `.deleteLater()` - garantiert, dass der
+        # COM-Port tatsaechlich geschlossen ist, BEVOR ein evtl.
+        # konfigurierter Stopp-Trigger (siehe `_maybe_start_stop_listener`)
+        # denselben Port erneut oeffnet (sonst moeglicher Ressourcen-
+        # Konflikt, falls Start- und Stopp-Trigger denselben Port nutzen).
+        if self._start_serial_listener is not None:
+            self._start_serial_listener.stop()
+            self._start_serial_listener.deleteLater()
+            self._start_serial_listener = None
+
+        self._maybe_start_stop_listener(config)
+
         self._status_label.setText(t("measurement_running_named", name=config.name))
+
+    def _on_trigger_connection_failed(self, message: str) -> None:
+        """Der serielle START-Trigger konnte den konfigurierten COM-Port
+        nicht oeffnen (siehe `gui/serial_trigger.py::SerialTriggerListener`)
+        - sauberes Disarmieren statt eine hilflos wartende Messung. Anders
+        als beim Stopp-Trigger (siehe `_on_stop_trigger_connection_failed`)
+        existiert hier noch KEINE laufende Aufzeichnung - ein voller
+        Abbruch ist daher unproblematisch."""
+        logger.error("Serieller Start-Trigger fehlgeschlagen: %s", message)
+        self._live_view.exit_armed_state()
+        self._live_view.stop_display()
+        self._controller.stop_measurement()
+        if self._start_serial_listener is not None:
+            self._start_serial_listener.stop()
+            self._start_serial_listener.deleteLater()
+            self._start_serial_listener = None
+        self._recording_started = False
+        self._setup_view.set_start_enabled(True, "")
+        self._live_view.set_start_enabled(True)
+        self._status_label.setText(t("ready"))
+        QMessageBox.warning(self, t("trigger_connection_failed_title"), message)
+        self._set_nav_index(_VIEW_SETUP)
+
+    def _on_stop_trigger_connection_failed(self, message: str) -> None:
+        """Der serielle STOPP-Trigger konnte den konfigurierten COM-Port
+        nicht oeffnen - anders als beim Start-Trigger
+        (`_on_trigger_connection_failed`) darf das die laufende
+        Aufzeichnung NICHT abbrechen: zu diesem Zeitpunkt werden ggf.
+        schon echte Messdaten geschrieben. Nur der Stopp-Lauscher wird
+        aufgeraeumt, die Messung laeuft unveraendert weiter (manueller
+        Stopp/Aufnahme-Limit funktionieren unabhaengig davon weiter)."""
+        logger.error("Serieller Stopp-Trigger fehlgeschlagen: %s", message)
+        if self._stop_serial_listener is not None:
+            self._stop_serial_listener.stop()
+            self._stop_serial_listener.deleteLater()
+            self._stop_serial_listener = None
+        QMessageBox.warning(
+            self,
+            t("trigger_stop_connection_failed_title"),
+            t("error_stop_trigger_connection_failed", message=message),
+        )
 
     def _on_start_measurement_from_live(self) -> None:
         config = self._setup_view.build_current_config()
@@ -751,6 +972,20 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_stop_measurement(self) -> None:
+        # Noch laufende serielle Trigger-Lauscher (Start UND Stopp) muessen
+        # VOR dem eigentlichen Stoppen beendet werden (z. B. Abbruch
+        # waehrend der Scharf-Phase, oder wenn der Stopp-Trigger selbst
+        # diesen Aufruf ausgeloest hat) - sonst blieben Hintergrund-Threads
+        # verwaist.
+        if self._start_serial_listener is not None:
+            self._start_serial_listener.stop()
+            self._start_serial_listener.deleteLater()
+            self._start_serial_listener = None
+        if self._stop_serial_listener is not None:
+            self._stop_serial_listener.stop()
+            self._stop_serial_listener.deleteLater()
+            self._stop_serial_listener = None
+
         # WICHTIG: active_device_infos VOR stop_measurement() auslesen -
         # der Controller leert seine interne Geräteliste beim Stoppen,
         # danach ausgelesen wäre die Liste immer leer und die
@@ -763,11 +998,16 @@ class MainWindow(QMainWindow):
             self._storage_writer.stop()
             self._storage_writer = None
 
-        # Schreibe Metadaten nur, wenn die Messung tatsächlich gespeichert wurde
+        # Schreibe Metadaten nur, wenn die Messung tatsächlich gespeichert
+        # UND tatsächlich aufgezeichnet wurde - bei einem Abbruch waehrend
+        # der Scharf-Phase (Trigger nie ausgeloest, siehe
+        # `_recording_started`) existiert gar kein StorageWriter/keine
+        # Datendatei, eine Metadaten-Datei dafuer waere irrefuehrend.
         if (
             session is not None
             and self._storage_path is not None
             and session.config.save_to_disk
+            and self._recording_started
         ):
             self._finalize_measurement(session, device_infos)
 
@@ -786,6 +1026,7 @@ class MainWindow(QMainWindow):
         else:
             self._status_label.setText(t("ready"))
 
+        self._recording_started = False
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
 
@@ -857,6 +1098,7 @@ class MainWindow(QMainWindow):
             recording_stop_value=recording_stop_value,
             recording_stop_unit=recording_stop_unit,
         )
+        self._configuration_manager.update_last_trigger_settings(self._trigger_config)
 
         self._configuration_manager.update_window_geometry(
             width=self.width(),

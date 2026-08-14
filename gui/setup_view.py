@@ -45,10 +45,17 @@ from PyQt6.QtWidgets import (
 
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
-from data.models import Channel, DeviceInfo, MeasurementConfig, RecordingStopUnit, StorageFormat
+from data.models import (
+    Channel,
+    DeviceInfo,
+    MeasurementConfig,
+    RecordingStopUnit,
+    StorageFormat,
+)
 from gui.i18n import connect_language_changed, t
 from gui.theme import connect_theme_changed, draw_play_icon
 from gui.widgets.channel_table import ChannelTableWidget
+from gui.widgets.spinbox import PrecisionDoubleSpinBox
 
 logger = logging.getLogger(__name__)
 
@@ -618,6 +625,14 @@ class SetupView(QWidget):
             recording_unlimited=self._recording_unlimited_checkbox.isChecked(),
             recording_stop_value=float(self._recording_stop_spin.value()),
             recording_stop_unit=RecordingStopUnit(self._recording_stop_unit_combo.currentData()),
+            # trigger bewusst NICHT gesetzt (Default-`TriggerConfig()`,
+            # also kein Trigger) - die tatsächlich aktive Trigger-
+            # Konfiguration lebt seit der Verallgemeinerung auf Start UND
+            # Stopp in `gui/main_window.py` (siehe
+            # `gui/trigger_settings_dialog.py::TriggerSettingsDialog`),
+            # nicht mehr in der Setup-Ansicht - `MainWindow` speist sie
+            # direkt in `config.trigger` ein (siehe `_on_start_measurement`,
+            # `_on_save_config`).
         )
 
     def apply_config(self, config: MeasurementConfig) -> None:
@@ -639,6 +654,9 @@ class SetupView(QWidget):
         self._populate_recording_stop_unit_combo(config.recording_stop_unit.value)
         self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
         self._channel_table.set_channels(config.channels)
+        # config.trigger wird NICHT hier übernommen - `gui/main_window.py`
+        # liest es direkt aus dem geladenen `MeasurementConfig` und setzt
+        # es als seine eigene `_trigger_config` (siehe `_on_load_config`).
 
     # ------------------------------------------------------------------ #
     # Interna

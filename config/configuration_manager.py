@@ -23,7 +23,7 @@ from config.settings import (
     CONFIG_FILE_NAME,
     get_config_directory,
 )
-from data.models import Channel, MeasurementConfig
+from data.models import Channel, MeasurementConfig, TriggerConfig
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +182,14 @@ class ConfigurationManager:
         self._settings.last_recording_unlimited = recording_unlimited
         self._settings.last_recording_stop_value = recording_stop_value
         self._settings.last_recording_stop_unit = recording_stop_unit
+        self.save_settings()
+
+    def update_last_trigger_settings(self, trigger: TriggerConfig) -> None:
+        """Merkt sich die zuletzt verwendete Mess-Trigger-Konfiguration für
+        Start UND Stopp (siehe `data/models.py::TriggerConfig`) - wie bei
+        `update_last_measurement_parameters` werden diese Werte beim
+        nächsten App-Start automatisch vorbelegt."""
+        self._settings.last_trigger_config = trigger.to_dict()
         self.save_settings()
 
     # ------------------------------------------------------------------ #
