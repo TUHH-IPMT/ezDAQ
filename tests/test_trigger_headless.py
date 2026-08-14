@@ -160,6 +160,20 @@ class TriggerModelTests(unittest.TestCase):
 
         MeasurementConfig("Unlimited", 1000.0, recording_stop_value=0.0)
 
+    def test_ni9210_requires_fixed_sample_rate(self) -> None:
+        channels = [
+            Channel(
+                "cDAQ1Mod1/ai0",
+                "Temperature",
+                module_type=ModuleType.NI9210,
+            )
+        ]
+
+        with self.assertRaisesRegex(ValueError, "14 S/s"):
+            MeasurementConfig("Invalid NI9210", 1000.0, channels=channels)
+
+        MeasurementConfig("Valid NI9210", 14.0, channels=channels)
+
     def test_sensor_database_ignores_invalid_sensor_data(self) -> None:
         invalid_documents = [
             [{"name": "broken", "channels": [{"signal_type": "removed-type"}]}],

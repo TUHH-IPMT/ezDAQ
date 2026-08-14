@@ -50,6 +50,7 @@ from data.models import (
     DeviceInfo,
     MeasurementConfig,
     RecordingStopUnit,
+    NI9210_FIXED_SAMPLE_RATE_HZ,
     StorageFormat,
 )
 from gui.i18n import connect_language_changed, t
@@ -612,6 +613,16 @@ class SetupView(QWidget):
             return None
 
         sample_rate = self._sample_rate_spin.value()
+        if any(
+            ch.enabled and ch.module_type == ModuleType.NI9210 for ch in channels
+        ) and sample_rate != NI9210_FIXED_SAMPLE_RATE_HZ:
+            self.show_error(
+                t(
+                    "error_ni9210_fixed_sample_rate",
+                    rate=NI9210_FIXED_SAMPLE_RATE_HZ,
+                )
+            )
+            return None
         ring_buffer_size = self._calculate_dynamic_buffer_size(
             sample_rate, len([ch for ch in channels if ch.enabled])
         )

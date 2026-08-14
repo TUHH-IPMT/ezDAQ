@@ -35,6 +35,9 @@ class ModuleType(str, Enum):
     NI9213 = "NI9213"
 
 
+NI9210_FIXED_SAMPLE_RATE_HZ = 14.0
+
+
 class SignalType(str, Enum):
     """Physikalischer Signaltyp eines Kanals.
 
@@ -455,6 +458,16 @@ class MeasurementConfig:
         if not self.recording_unlimited and self.recording_stop_value <= 0:
             raise ValueError(
                 "recording_stop_value muss bei begrenzten Messungen größer als 0 sein."
+            )
+        if (
+            any(
+                channel.enabled and channel.module_type == ModuleType.NI9210
+                for channel in self.channels
+            )
+            and self.sample_rate_hz != NI9210_FIXED_SAMPLE_RATE_HZ
+        ):
+            raise ValueError(
+                "Das NI9210 unterstützt ausschließlich eine Abtastrate von 14 S/s."
             )
 
     def active_channels(self) -> list[Channel]:
