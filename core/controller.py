@@ -27,7 +27,7 @@ from core.measurement import MeasurementConfigError, create_devices
 from core.ringbuffer import RingBuffer
 from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession
 from hardware.base_device import AcquisitionError, BaseDevice
-from hardware.nidaq_device import NIDAQSharedTask, discover_devices
+from hardware.nidaq_device import NIDAQSharedTask, discover_devices, open_ni_max
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,10 @@ class MeasurementController:
     def discover_hardware(self) -> list[DeviceInfo]:
         """Erkennt angeschlossene NI-cDAQ-Module (für die Setup-Ansicht)."""
         return discover_devices()
+
+    def open_ni_max(self) -> None:
+        """Startet NI-MAX (siehe `hardware/nidaq_device.py::open_ni_max`)."""
+        open_ni_max()
 
     # ------------------------------------------------------------------ #
     # Fehlerbenachrichtigung
@@ -224,6 +228,9 @@ class MeasurementController:
                 ring_buffer=ring_buffer,
                 samples_per_read=config.samples_per_read,
                 on_error=self._handle_acquisition_error,
+                target_samples=(
+                    None if config.recording_unlimited else config.target_recording_stop_samples()
+                ),
             )
             acquisition_thread.start()
 

@@ -99,11 +99,15 @@ class SetupView(QWidget):
             erkennen lassen. `gui/main_window.py` ruft daraufhin
             `controller.discover_hardware()` auf und liefert das Ergebnis
             über `set_discovered_devices()` zurück.
+        open_ni_max_requested: Nutzer möchte NI-MAX (Measurement &
+            Automation Explorer) als separates Programm öffnen - z. B. um
+            ein Gerät umzubenennen, ohne diese Anwendung zu verlassen.
         start_measurement_requested: Nutzer möchte die Messung mit der
             übergebenen `MeasurementConfig` starten.
     """
 
     discover_hardware_requested = pyqtSignal()
+    open_ni_max_requested = pyqtSignal()
     start_measurement_requested = pyqtSignal(object)  # MeasurementConfig
     storage_path_requested = pyqtSignal()
 
@@ -144,8 +148,16 @@ class SetupView(QWidget):
         layout.addWidget(self._device_header)
         self._device_group = QGroupBox()
         device_layout = QVBoxLayout(self._device_group)
+        discover_row = QHBoxLayout()
         self._discover_button = QPushButton(t("search_devices"))
         self._discover_button.clicked.connect(self.discover_hardware_requested.emit)
+        # Schnellzugriff auf NI-MAX (Measurement & Automation Explorer) -
+        # z. B. um ein Gerät umzubenennen/zu konfigurieren, ohne diese
+        # Anwendung zu verlassen (siehe `open_ni_max_requested`).
+        self._open_ni_max_button = QPushButton(t("open_ni_max_button"))
+        self._open_ni_max_button.clicked.connect(self.open_ni_max_requested.emit)
+        discover_row.addWidget(self._discover_button)
+        discover_row.addWidget(self._open_ni_max_button)
         # Baumansicht Gerät -> Kanäle (dieselbe Gruppierung wie im
         # Kanal-Zuweisungsdialog, siehe
         # `gui/widgets/channel_table.py::HardwareChannelPickerDialog`).
@@ -154,7 +166,7 @@ class SetupView(QWidget):
         # Mindesthöhe für ein paar sichtbare Zeilen, ohne dass eine leere
         # Liste (vor der ersten Geräteerkennung) unnötig viel Platz belegt.
         self._device_list.setMinimumHeight(120)
-        device_layout.addWidget(self._discover_button)
+        device_layout.addLayout(discover_row)
         device_layout.addWidget(self._device_list)
         layout.addWidget(self._device_group)
 
@@ -342,6 +354,7 @@ class SetupView(QWidget):
         self._discover_button.setText(
             t("searching_devices") if self._discovery_in_progress else t("search_devices")
         )
+        self._open_ni_max_button.setText(t("open_ni_max_button"))
         self._channel_header.setText(t("channel_configuration"))
         self._measurement_header.setText(t("measurement_settings"))
         self._storage_header.setText(t("storage_settings"))
@@ -437,6 +450,22 @@ class SetupView(QWidget):
             t("searching_devices") if in_progress else t("search_devices")
         )
 
+    def get_discovered_devices(self) -> list[DeviceInfo]:
+        """Gibt die zuletzt erkannten Geräte zurück (siehe
+        `set_discovered_devices`).
+
+        Wird von `gui/main_window.py` beim Messstart an
+        `MeasurementController.start_measurement()` durchgereicht, damit
+        dort NICHT erneut `discover_hardware()` aufgerufen werden muss -
+        bei mehreren Chassis/Modulen laut `_on_discover_hardware`
+        spürbar langsam und würde sonst bei JEDEM Messstart erneut den
+        GUI-Thread blockieren, obwohl das Ergebnis (Kanalzuordnung kommt
+        ohnehin aus der Kanalkonfiguration selbst, siehe
+        `core/measurement.py::create_devices`) hier nur für kosmetische
+        Metadaten (`DeviceInfo.product_type`) gebraucht wird.
+        """
+        return self._discovered_devices
+
     def set_discovered_devices(self, devices: list[DeviceInfo]) -> None:
         """Zeigt das Ergebnis einer Geräteerkennung an.
 
@@ -471,6 +500,21 @@ class SetupView(QWidget):
         # mehreren Modulen mit jeweils vielen Kanälen deutlich Platz. Der
         # Nutzer klappt ein Gerät bei Bedarf einzeln auf.
         self._device_list.collapseAll()
+
+    def show_discovery_error(self, message: str) -> None:
+        """Zeigt einen fehlgeschlagenen Geräteerkennungsversuch (z. B.
+        NI-DAQmx-Treiber nicht installiert) direkt im Gerätebrowser an,
+        statt nur im Log - der Nutzer sieht die Ursache damit genau dort,
+        wo er als nächstes hinschaut (siehe
+        `gui/main_window.py::_on_discover_hardware_failed`, ruft dies
+        anstelle von `set_discovered_devices` auf).
+        """
+        self._device_list.clear()
+        self._discovered_devices = []
+        self._channel_table.set_available_devices([])
+        self._device_list.addTopLevelItem(
+            QTreeWidgetItem([f"{t('device_discovery_failed')}: {message}"])
+        )
 
     def set_start_enabled(self, enabled: bool, reason: str = "") -> None:
         """Aktiviert/deaktiviert den Start-Button (z. B. während eine Messung läuft).

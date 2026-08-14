@@ -60,6 +60,7 @@ class AcquisitionThread:
         samples_per_read: int,
         read_timeout_seconds: float = 5.0,
         on_error: Optional[ErrorCallback] = None,
+        target_samples: Optional[int] = None,
     ) -> None:
         """Initialisiert den DAQ-Thread.
 
@@ -76,6 +77,13 @@ class AcquisitionThread:
                 DAQ-Thread aufgerufen wird. WICHTIG: Der Callback läuft
                 selbst im DAQ-Thread (siehe `core/controller.py` für die
                 daraus resultierenden Konsequenzen bzgl. Deadlock-Vermeidung).
+            target_samples: Optionale Ziel-Samplezahl pro Kanal (siehe
+                `data/models.py::MeasurementConfig.target_recording_stop_samples`).
+                Wird NIE überschritten: der letzte Block wird exakt auf die
+                verbleibende Anzahl gekappt, danach beendet sich der Thread
+                SOFORT selbst - ohne auf `stop()`/das externe Stop-Signal zu
+                warten (siehe `_run`). `None` = unbegrenzt (läuft, bis
+                `stop()` aufgerufen wird - bisheriges Standardverhalten).
 
         Raises:
             ValueError: falls die Kanalanzahl der Geräte nicht zur
@@ -93,6 +101,7 @@ class AcquisitionThread:
         self._ring_buffer = ring_buffer
         self._samples_per_read = samples_per_read
         self._read_timeout_seconds = read_timeout_seconds
+        self._target_samples = target_samples
         self._on_error = on_error
 
         self._thread: Optional[threading.Thread] = None
@@ -151,13 +160,39 @@ class AcquisitionThread:
         )
 
     def _run(self) -> None:
-        """Haupt-Schleife des DAQ-Threads (läuft im Hintergrund-Thread)."""
+        """Haupt-Schleife des DAQ-Threads (läuft im Hintergrund-Thread).
+
+        Mit `target_samples` gesetzt: fordert für den letzten Block gezielt
+        nur noch die verbleibende Samplezahl an (statt eines vollen Blocks)
+        und bricht die Schleife SOFORT ab, sobald das Ziel erreicht ist -
+        kein Warten auf `_stop_event`. Das garantiert exakt `target_samples`
+        im Ring Buffer (weder mehr noch weniger) UND macht den Stopp bei
+        einem konfigurierten Limit praktisch verzögerungsfrei, da der Thread
+        beim naechsten externen `stop()`-Aufruf (siehe `gui/live_view.py::
+        _on_timer_tick`) in aller Regel schon beendet ist.
+        """
         try:
             while not self._stop_event.is_set():
-                blocks = self._read_blocks_from_devices()
+                samples_to_read = self._samples_per_read
+                if self._target_samples is not None:
+                    remaining = self._target_samples - self.total_samples_acquired
+                    if remaining <= 0:
+                        break
+                    samples_to_read = min(samples_to_read, remaining)
+
+                blocks = self._read_blocks_from_devices(samples_to_read)
                 combined = np.concatenate(blocks, axis=0)
+                if self._target_samples is not None:
+                    # Sicherheitsnetz falls ein Geraet trotz angeforderter
+                    # `samples_to_read` mehr liefert - garantiert exakt
+                    # `target_samples`, unabhaengig vom Treiberverhalten.
+                    remaining = self._target_samples - self.total_samples_acquired
+                    combined = combined[:, :remaining]
                 self._ring_buffer.write(combined)
                 self.total_samples_acquired += combined.shape[1]
+
+                if self._target_samples is not None and self.total_samples_acquired >= self._target_samples:
+                    break
         except AcquisitionError as exc:
             logger.error("Fehler im DAQ-Thread: %s", exc)
             self._last_error = exc
@@ -169,7 +204,7 @@ class AcquisitionThread:
             if self._on_error is not None:
                 self._on_error(exc)
 
-    def _read_blocks_from_devices(self) -> list[np.ndarray]:
+    def _read_blocks_from_devices(self, samples_to_read: int) -> list[np.ndarray]:
         """Liest von allen Geräten einen gemeinsamen Datenblock ein."""
         if not self._devices:
             return []
@@ -177,7 +212,7 @@ class AcquisitionThread:
         shared_devices = [device for device in self._devices if getattr(device, "_shared_task", None) is not None]
         if shared_devices:
             shared_block = shared_devices[0].read_shared_block(
-                self._samples_per_read,
+                samples_to_read,
                 timeout=self._read_timeout_seconds,
             )
             return [device.read_from_shared_block(shared_block) for device in self._devices]
@@ -186,7 +221,7 @@ class AcquisitionThread:
             futures = [
                 executor.submit(
                     device.read,
-                    self._samples_per_read,
+                    samples_to_read,
                     timeout=self._read_timeout_seconds,
                 )
                 for device in self._devices

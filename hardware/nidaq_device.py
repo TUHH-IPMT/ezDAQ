@@ -28,7 +28,9 @@ Hinweis zur Entwicklungsumgebung:
 from __future__ import annotations
 
 import logging
+import subprocess
 from abc import abstractmethod
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -37,6 +39,14 @@ from data.models import Channel, DeviceInfo, ModuleType
 from hardware.base_device import AcquisitionError, BaseDevice
 
 logger = logging.getLogger(__name__)
+
+# Registry-Pfad, den der NI-Installer selbst für NI-MAX (Measurement &
+# Automation Explorer) hinterlegt - siehe `find_ni_max_executable()`.
+_NI_MAX_REGISTRY_KEY = r"SOFTWARE\WOW6432Node\National Instruments\Measurement & Automation Explorer"
+_NI_MAX_FALLBACK_PATHS = (
+    Path(r"C:\Program Files (x86)\National Instruments\MAX\NIMax.exe"),
+    Path(r"C:\Program Files\National Instruments\MAX\NIMax.exe"),
+)
 
 try:
     import nidaqmx
@@ -71,17 +81,26 @@ def discover_devices() -> list[DeviceInfo]:
     verfügbarer Geräte/Module zur Auswahl anzuzeigen.
 
     Returns:
-        Liste erkannter Geräte. Leer, falls `nidaqmx`/der NI-DAQmx-Treiber
-        auf diesem Rechner nicht verfügbar ist - dies wird geloggt, führt
-        aber nicht zum Absturz (z. B. relevant während der GUI-Entwicklung
-        ohne angeschlossene Hardware).
+        Liste erkannter Geräte. Leer, falls der Treiber einwandfrei
+        arbeitet, aber schlicht keine Hardware angeschlossen ist - das
+        ist ein normales, kein fehlerhaftes Ergebnis.
+
+    Raises:
+        RuntimeError: falls `nidaqmx`/der NI-DAQmx-Treiber auf diesem
+            Rechner NICHT verfügbar ist, oder die Geräteerkennung selbst
+            fehlschlägt (z. B. Treiber-/Systemfehler). Wird bewusst NICHT
+            mehr stillschweigend zu einer leeren Liste - `gui/main_window.py`
+            fängt dies über den `BackgroundWorker` ab und zeigt die Ursache
+            direkt im Gerätebrowser der Setup-Ansicht an (siehe
+            `SetupView.show_discovery_error`), statt sie nur zu loggen.
     """
     if not NIDAQMX_AVAILABLE:
-        logger.warning(
-            "nidaqmx/NI-DAQmx-Treiber nicht verfügbar - Geräteerkennung "
-            "liefert eine leere Liste."
+        message = (
+            "NI-DAQmx-Treiber (oder das Python-Paket 'nidaqmx') ist auf "
+            "diesem Rechner nicht installiert."
         )
-        return []
+        logger.warning(message)
+        raise RuntimeError(message)
 
     devices: list[DeviceInfo] = []
     try:
@@ -105,8 +124,65 @@ def discover_devices() -> list[DeviceInfo]:
             )
     except DaqmxError as exc:
         logger.error("Fehler bei der Geräteerkennung: %s", exc)
+        raise RuntimeError(str(exc)) from exc
 
     return devices
+
+
+def find_ni_max_executable() -> Optional[Path]:
+    """Sucht den Installationspfad von NI-MAX (Measurement & Automation
+    Explorer) auf diesem Rechner.
+
+    Bevorzugt den `Command`-Registry-Wert, den der NI-Installer selbst
+    unter `_NI_MAX_REGISTRY_KEY` hinterlegt - robuster als ein fest
+    codierter Pfad, da er auch bei abweichendem Installationsort oder
+    künftigen NI-MAX-Versionen stimmt. Fällt bei fehlendem
+    Registry-Eintrag auf die beiden üblichen Standardpfade zurück.
+
+    Returns:
+        Pfad zu `NIMax.exe`, oder None falls NI-MAX auf diesem Rechner
+        nicht gefunden wurde (z. B. NI-DAQmx/NI-MAX nicht installiert).
+    """
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - nur auf Nicht-Windows relevant
+        return None
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _NI_MAX_REGISTRY_KEY) as key:
+            command, _ = winreg.QueryValueEx(key, "Command")
+            path = Path(command)
+            if path.exists():
+                return path
+    except OSError:
+        pass
+
+    for fallback in _NI_MAX_FALLBACK_PATHS:
+        if fallback.exists():
+            return fallback
+
+    return None
+
+
+def open_ni_max() -> None:
+    """Startet NI-MAX (Measurement & Automation Explorer) als separaten
+    Prozess - Schnellzugriff z. B. zum Prüfen/Umbenennen von Geräten,
+    ohne die eigentliche Anwendung zu verlassen.
+
+    Raises:
+        RuntimeError: falls NI-MAX auf diesem Rechner nicht gefunden
+            wurde, oder der Startversuch selbst fehlschlägt.
+    """
+    path = find_ni_max_executable()
+    if path is None:
+        raise RuntimeError(
+            "NI-MAX (Measurement & Automation Explorer) wurde auf diesem "
+            "Rechner nicht gefunden. Ist der NI-DAQmx-Treiber installiert?"
+        )
+    try:
+        subprocess.Popen([str(path)])
+    except OSError as exc:
+        raise RuntimeError(f"NI-MAX konnte nicht gestartet werden: {exc}") from exc
 
 
 def _map_product_type(product_type: str) -> Optional[ModuleType]:

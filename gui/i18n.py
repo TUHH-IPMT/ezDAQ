@@ -45,6 +45,8 @@ _translations = {
         # Setup View
         "connected_devices": "Angeschlossene Geräte",
         "search_devices": "Geräte suchen",
+        "open_ni_max_button": "NI-MAX öffnen",
+        "ni_max_open_failed": "NI-MAX konnte nicht geöffnet werden",
         "channel_configuration": "Kanalkonfiguration",
         "measurement_settings": "Messeinstellungen",
         "storage_settings": "Speichereinstellungen",
@@ -118,10 +120,10 @@ _translations = {
 
         # Analysis View
         "analysis": "Analyse",
-        "drag_drop_files": "Messdateien (.parquet/.csv) hierher ziehen oder über den Button auswählen",
+        "drag_drop_files": "Messdateien (.parquet/.csv) hierher ziehen oder über Datei → Messung laden auswählen",
         "load_measurement": "Messung laden",
-        "browse_file_button": "Datei auswählen...",
         "loaded_files_channels": "Geladene Dateien / Kanäle",
+        "search_files_placeholder": "Dateien/Kanäle durchsuchen...",
         "tree_header_name": "Name",
         "remove_file_action": "Datei aus Analyse löschen",
         "unsupported_format_title": "Nicht unterstütztes Format",
@@ -350,6 +352,8 @@ _translations = {
         # Setup View
         "connected_devices": "Connected Devices",
         "search_devices": "Search Devices",
+        "open_ni_max_button": "Open NI-MAX",
+        "ni_max_open_failed": "Could not open NI-MAX",
         "channel_configuration": "Channel Configuration",
         "measurement_settings": "Measurement Settings",
         "storage_settings": "Storage Settings",
@@ -423,10 +427,10 @@ _translations = {
 
         # Analysis View
         "analysis": "Analysis",
-        "drag_drop_files": "Drag measurement files (.parquet/.csv) here or use the button",
+        "drag_drop_files": "Drag measurement files (.parquet/.csv) here or use File → Load Measurement",
         "load_measurement": "Load Measurement",
-        "browse_file_button": "Select File...",
         "loaded_files_channels": "Loaded Files / Channels",
+        "search_files_placeholder": "Search files/channels...",
         "tree_header_name": "Name",
         "remove_file_action": "Remove File from Analysis",
         "unsupported_format_title": "Unsupported Format",

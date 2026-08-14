@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
 
         # Signalverbindungen der Ansichten
         self._setup_view.discover_hardware_requested.connect(self._on_discover_hardware)
+        self._setup_view.open_ni_max_requested.connect(self._on_open_ni_max)
         self._setup_view.start_measurement_requested.connect(self._on_start_measurement)
         self._setup_view.storage_path_requested.connect(self._on_choose_storage_path)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
@@ -166,7 +167,12 @@ class MainWindow(QMainWindow):
         # damit Icon+Text immer exakt mittig bleiben (kein Verschieben).
         nav_container.setStyleSheet(
             "QToolButton {"
-            "   border: 2px outset palette(mid);"
+            # palette(dark) statt palette(mid): "mid" liegt in beiden
+            # Themes zu nah am Hintergrund (Kontrastdifferenz ~13-40) und
+            # der Rahmen war dadurch kaum sichtbar - "dark" verdoppelt den
+            # Kontrast (~33-80) und bleibt in beiden Themes gut erkennbar,
+            # ohne die 3D-Bevel-Optik selbst zu verändern.
+            "   border: 2px outset palette(dark);"
             "   border-radius: 8px;"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             "                                stop:0 palette(light), stop:1 palette(button));"
@@ -304,6 +310,9 @@ class MainWindow(QMainWindow):
         self._load_config_action = self._file_menu.addAction(f"{t('menu_load_config')}...")
         self._load_config_action.triggered.connect(self._on_load_config)
         self._file_menu.addSeparator()
+        self._load_measurement_action = self._file_menu.addAction(f"{t('load_measurement')}...")
+        self._load_measurement_action.triggered.connect(self._on_load_measurement)
+        self._file_menu.addSeparator()
         self._quit_action = self._file_menu.addAction(t("menu_quit"))
         self._quit_action.triggered.connect(self.close)
 
@@ -420,6 +429,7 @@ class MainWindow(QMainWindow):
         self._file_menu.setTitle(f"&{t('menu_file')}")
         self._save_config_action.setText(f"{t('menu_save_config')}...")
         self._load_config_action.setText(f"{t('menu_load_config')}...")
+        self._load_measurement_action.setText(f"{t('load_measurement')}...")
         self._quit_action.setText(t("menu_quit"))
 
         self._settings_menu.setTitle(f"&{t('menu_settings')}")
@@ -495,6 +505,15 @@ class MainWindow(QMainWindow):
         self._setup_view.apply_config(config)
         self._status_label.setText(t("status_config_loaded", filename=file_path.name))
 
+    def _on_load_measurement(self) -> None:
+        """Lässt den Nutzer eine abgeschlossene Messung auswählen und
+        springt bei Auswahl direkt in den Analyse-Tab (siehe
+        `AnalysisView.prompt_and_load_file` - ehemals ein Button direkt in
+        der Analyse-Ansicht, jetzt aus jeder Ansicht heraus erreichbar).
+        """
+        if self._analysis_view.prompt_and_load_file():
+            self._set_nav_index(_VIEW_ANALYSIS)
+
     # ------------------------------------------------------------------ #
     # Navigation
     # ------------------------------------------------------------------ #
@@ -569,6 +588,18 @@ class MainWindow(QMainWindow):
         self._setup_view.set_discovery_in_progress(False)
         logger.error("Geräteerkennung fehlgeschlagen: %s", message)
         self._status_label.setText(t("device_discovery_failed"))
+        # Ursache (z. B. "NI-DAQmx-Treiber nicht installiert") sichtbar im
+        # Gerätebrowser selbst, nicht nur in Statusleiste/Log - dort schaut
+        # der Nutzer als nächstes hin.
+        self._setup_view.show_discovery_error(message)
+
+    def _on_open_ni_max(self) -> None:
+        """Öffnet NI-MAX (Measurement & Automation Explorer) als separates
+        Programm (siehe `hardware/nidaq_device.py::open_ni_max`)."""
+        try:
+            self._controller.open_ni_max()
+        except Exception as exc:
+            QMessageBox.warning(self, t("error"), f"{t('ni_max_open_failed')}:\n{exc}")
 
     def _forget_background_worker(self, worker: BackgroundWorker) -> None:
         """Entfernt eine abgeschlossene `BackgroundWorker`-Referenz, damit
@@ -606,7 +637,13 @@ class MainWindow(QMainWindow):
                 config.name = resolved_name
 
         try:
-            session = self._controller.start_measurement(config)
+            # Die zuletzt erkannte Geräteliste wiederverwenden statt bei
+            # jedem Messstart erneut zu erkennen (siehe
+            # `SetupView.get_discovered_devices`) - spart die bei mehreren
+            # Chassis/Modulen spürbar langsame Rediscovery.
+            session = self._controller.start_measurement(
+                config, discovered_devices=self._setup_view.get_discovered_devices()
+            )
         except Exception as exc:  # MeasurementConfigError, AcquisitionError, RuntimeError
             logger.exception("Messung konnte nicht gestartet werden")
             self._setup_view.show_error(f"{t('cannot_start_measurement')}:\n{exc}")

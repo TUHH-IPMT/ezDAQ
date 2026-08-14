@@ -41,11 +41,11 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QTreeWidget,
     QTreeWidgetItem,
     QMenu,
     QMessageBox,
-    QPushButton,
     QSizePolicy,
     QSpinBox,
     QToolButton,
@@ -106,9 +106,67 @@ _LAYOUT_SPECS = {
 
 
 class ChannelTreeWidget(QTreeWidget):
-    """Tree mit explizitem Drag-Payload für Kanal-Zuordnung auf Plot-Ziele."""
+    """Tree mit explizitem Drag-Payload für Kanal-Zuordnung auf Plot-Ziele.
+
+    Übernimmt zusätzlich das Datei-Drag&Drop (Laden per Ziehen aus dem
+    Datei-Explorer) und dessen Leerzustand-Hinweistext - bewusst hier und
+    NICHT auf der gesamten `AnalysisView`, damit die Drop-Zone optisch UND
+    funktional exakt auf diesen Baum begrenzt bleibt.
+    """
 
     delete_key_pressed = pyqtSignal()
+    file_dropped = pyqtSignal(object)  # Path
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.setAcceptDrops(True)
+
+        # Leerzustand-Hinweis als Overlay auf dem Viewport (QTreeWidget
+        # kennt anders als z. B. QLineEdit kein natives `placeholderText`)
+        # - sichtbar nur solange keine Datei geladen ist, automatisch über
+        # die Modell-Signale synchron gehalten statt an jeder einzelnen
+        # Stelle in AnalysisView manuell aktualisiert werden zu müssen.
+        self._empty_hint_label = QLabel(self.viewport())
+        self._empty_hint_label.setWordWrap(True)
+        self._empty_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint_label.setStyleSheet("QLabel { color: palette(foreground); }")
+        self._empty_hint_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.model().rowsInserted.connect(self._update_empty_hint_visibility)
+        self.model().rowsRemoved.connect(self._update_empty_hint_visibility)
+        self.model().modelReset.connect(self._update_empty_hint_visibility)
+        self._update_empty_hint_visibility()
+
+    def set_empty_hint_text(self, text: str) -> None:
+        self._empty_hint_label.setText(text)
+
+    def retheme_empty_hint(self) -> None:
+        """Erzwingt ein Repolish des Hinweistexts nach einem Theme-Wechsel
+        (eigenes Stylesheet wird von Qt sonst nicht automatisch neu
+        ausgewertet, siehe gleiches Problem bei den Nav-Kacheln in
+        `gui/main_window.py::_retheme_nav_icons`)."""
+        self._empty_hint_label.style().unpolish(self._empty_hint_label)
+        self._empty_hint_label.style().polish(self._empty_hint_label)
+        self._empty_hint_label.update()
+
+    def _update_empty_hint_visibility(self, *_args) -> None:
+        self._empty_hint_label.setVisible(self.topLevelItemCount() == 0)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._empty_hint_label.setGeometry(self.viewport().rect())
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802 (Qt API)
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802 (Qt API)
+        urls = event.mimeData().urls()
+        if urls:
+            self.file_dropped.emit(Path(urls[0].toLocalFile()))
+            return
+        super().dropEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802 (Qt API)
         if event.key() == Qt.Key.Key_Delete:
@@ -314,7 +372,6 @@ class AnalysisView(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setAcceptDrops(True)
 
         self._loaded_measurement: LoadedMeasurement | None = None
         self._curves: list = []
@@ -413,24 +470,12 @@ class AnalysisView(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(6)
 
-        files_header_row = QHBoxLayout()
-        files_header_row.setContentsMargins(0, 0, 0, 0)
-        files_header_row.setSpacing(8)
         self._files_category_label = QLabel(t("analysis_category_files"))
-        self._browse_button = QPushButton(t("browse_file_button"))
-        self._browse_button.clicked.connect(self._on_browse_clicked)
-        files_header_row.addWidget(self._files_category_label)
-        files_header_row.addStretch(1)
-        files_header_row.addWidget(self._browse_button)
-        right_layout.addLayout(files_header_row)
-
-        self._files_drop_hint = QLabel(t("drag_drop_files"))
-        self._files_drop_hint.setWordWrap(True)
-        self._files_drop_hint.setStyleSheet("QLabel { color: palette(foreground); }")
-        right_layout.addWidget(self._files_drop_hint)
+        right_layout.addWidget(self._files_category_label)
 
         self._tree = ChannelTreeWidget()
         self._tree.setHeaderLabels([t("tree_header_name")])
+        self._tree.set_empty_hint_text(t("drag_drop_files"))
         self._tree.itemChanged.connect(self._on_tree_item_changed)
         self._tree.setDragEnabled(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -438,8 +483,28 @@ class AnalysisView(QWidget):
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._tree.delete_key_pressed.connect(self._on_delete_key_pressed)
+        # Datei per Ziehen aus dem Datei-Explorer laden - Drop-Zone bewusst
+        # auf den Baum begrenzt (siehe ChannelTreeWidget-Klassendoc), nicht
+        # auf die gesamte Ansicht.
+        self._tree.file_dropped.connect(self._load_file)
         self._files_label = QLabel(t("loaded_files_channels"))
         right_layout.addWidget(self._files_label)
+
+        # Such-/Filterfeld: blendet Datei-/Kanalzeilen aus, die weder
+        # selbst noch (bei einer Datei) über ein passendes Kind zum
+        # Suchtext passen - reine Sichtbarkeitsfilterung, verändert nichts
+        # an den geladenen Daten. Wird nach jeder Strukturänderung des
+        # Baums automatisch neu angewendet (siehe Model-Signal-Verbindungen
+        # unten), damit z. B. neu geladene Dateien einen aktiven Filter
+        # nicht umgehen.
+        self._tree_search_edit = QLineEdit()
+        self._tree_search_edit.setPlaceholderText(t("search_files_placeholder"))
+        self._tree_search_edit.setClearButtonEnabled(True)
+        self._tree_search_edit.textChanged.connect(self._apply_tree_filter)
+        right_layout.addWidget(self._tree_search_edit)
+        self._tree.model().rowsInserted.connect(self._apply_tree_filter)
+        self._tree.model().rowsRemoved.connect(self._apply_tree_filter)
+
         right_layout.addWidget(self._tree, stretch=1)
         content_row.addWidget(right_panel)
 
@@ -478,24 +543,16 @@ class AnalysisView(QWidget):
             if button is not None:
                 button.setIcon(QIcon(icon_fn(32)))
 
-        # Eigenes Stylesheet (`color: palette(foreground)`) auf einem
-        # QLabel wird von Qt nach einem Palettenwechsel nicht automatisch
-        # neu ausgewertet - ohne explizites Repolish bleibt der Text in der
-        # Farbe des Themes haengen, mit dem das Label urspruenglich erzeugt
-        # wurde (siehe gleiches Problem/Fix bei den Nav-Kacheln in
-        # gui/main_window.py::_retheme_nav_icons).
-        self._files_drop_hint.style().unpolish(self._files_drop_hint)
-        self._files_drop_hint.style().polish(self._files_drop_hint)
-        self._files_drop_hint.update()
+        self._tree.retheme_empty_hint()
 
     def retranslate_ui(self) -> None:
         """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
-        self._browse_button.setText(t("browse_file_button"))
         self._layout_category_label.setText(t("analysis_category_layout"))
         for category_key, category_label in self._function_category_labels.items():
             category_label.setText(t(category_key))
         self._files_category_label.setText(t("analysis_category_files"))
-        self._files_drop_hint.setText(t("drag_drop_files"))
+        self._tree.set_empty_hint_text(t("drag_drop_files"))
+        self._tree_search_edit.setPlaceholderText(t("search_files_placeholder"))
         self._files_label.setText(t("loaded_files_channels"))
         self._layout_label.setText(t("analysis_layout"))
         self._populate_layout_combo()
@@ -526,34 +583,64 @@ class AnalysisView(QWidget):
         else:
             self._files_label.setText(t("loaded_files_channels"))
 
+    def _apply_tree_filter(self, *_args) -> None:
+        """Blendet Datei-/Kanalzeilen aus, die nicht zum Suchtext passen
+        (Groß-/Kleinschreibung ignoriert).
+
+        Eine Datei bleibt sichtbar, wenn IHR Name passt (dann auch alle
+        ihre Kinder, ungefiltert) ODER mindestens ein Kanal-/
+        Ergebnis-Kind passt (dann nur die passenden Kinder). `*_args`
+        nimmt die von `QLineEdit.textChanged`
+        (str) UND den Model-Signalen `rowsInserted`/`rowsRemoved`
+        (QModelIndex, int, int) übergebenen, hier ungenutzten Argumente
+        gleichermaßen entgegen - der Suchtext wird immer frisch aus
+        `self._tree_search_edit` gelesen.
+        """
+        query = self._tree_search_edit.text().strip().lower()
+        for i in range(self._tree.topLevelItemCount()):
+            file_item = self._tree.topLevelItem(i)
+            file_matches = not query or query in file_item.text(0).lower()
+            any_child_visible = False
+            for j in range(file_item.childCount()):
+                child = file_item.child(j)
+                child_matches = not query or query in child.text(0).lower()
+                show_child = file_matches or child_matches
+                child.setHidden(not show_child)
+                if show_child:
+                    any_child_visible = True
+            show_file = file_matches or any_child_visible
+            file_item.setHidden(not show_file)
+            if query and show_file:
+                file_item.setExpanded(True)
+
     # ------------------------------------------------------------------ #
-    # Drag & Drop
+    # Öffentliche API (von gui/main_window.py aufgerufen)
     # ------------------------------------------------------------------ #
 
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+    def prompt_and_load_file(self) -> bool:
+        """Öffnet einen Datei-Dialog zum Laden einer Messung und startet
+        bei Auswahl den (Hintergrund-)Ladevorgang, siehe `_load_file`.
 
-    def dropEvent(self, event: QDropEvent) -> None:
-        urls = event.mimeData().urls()
-        if not urls:
-            return
-        path = Path(urls[0].toLocalFile())
-        self._load_file(path)
-
-    # ------------------------------------------------------------------ #
-    # Interna
-    # ------------------------------------------------------------------ #
-
-    def _on_browse_clicked(self) -> None:
+        Wird vom "Messung laden..."-Menüeintrag in `gui/main_window.py`
+        aufgerufen (ehemals ein Button direkt in dieser Ansicht - jetzt
+        aus jeder Ansicht heraus erreichbar). Gibt True zurück, wenn eine
+        Datei ausgewählt wurde (main_window navigiert dann zum
+        Analyse-Tab), False bei Abbruch des Dialogs.
+        """
         filename, _ = QFileDialog.getOpenFileName(
             self,
             t("load_measurement_dialog_title"),
             "",
             t("measurement_files_filter"),
         )
-        if filename:
-            self._load_file(Path(filename))
+        if not filename:
+            return False
+        self._load_file(Path(filename))
+        return True
+
+    # ------------------------------------------------------------------ #
+    # Interna
+    # ------------------------------------------------------------------ #
 
     def _set_busy(self, busy: bool) -> None:
         """Sperrt die Bedienelemente, deren Aktionen im Hintergrund laufen
@@ -562,7 +649,6 @@ class AnalysisView(QWidget):
         Operationen gleichzeitig gestartet werden, während der Nutzer
         über den Fortschritt im Bilde bleibt.
         """
-        self._browse_button.setEnabled(not busy)
         for button in self._function_buttons.values():
             button.setEnabled(not busy)
         if busy:

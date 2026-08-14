@@ -327,22 +327,34 @@ class MeasurementConfig:
         """Gibt nur die aktivierten Kanäle zurück."""
         return [ch for ch in self.channels if ch.enabled]
 
-    def is_recording_limit_reached(self, elapsed_seconds: float, samples_acquired: int) -> bool:
+    def target_recording_stop_samples(self) -> int:
+        """Rechnet das konfigurierte Limit (Messwerte oder Zeit) einmalig in
+        eine Ziel-Samplezahl bezogen auf `sample_rate_hz` um.
+
+        Samples sind die zuverlässigste Bezugsgröße für ein Aufnahme-Limit:
+        sie werden vom Hardware-Sample-Clock des DAQ-Moduls getaktet, nicht
+        softwareseitig per Wanduhrzeit (`datetime.now()`) - ein Grenzwert
+        lässt sich damit unabhängig von GUI-/Thread-Verzögerungen zuverlässig
+        auswerten (siehe `is_recording_limit_reached`).
+        """
+        if self.recording_stop_unit == RecordingStopUnit.SAMPLES:
+            return int(round(self.recording_stop_value))
+        seconds_per_unit = _RECORDING_STOP_UNIT_TO_SECONDS[self.recording_stop_unit]
+        return int(round(self.recording_stop_value * seconds_per_unit * self.sample_rate_hz))
+
+    def is_recording_limit_reached(self, samples_acquired: int) -> bool:
         """Prüft, ob das konfigurierte Aufnahme-Limit erreicht ist.
 
-        Zentrale Stelle für die Grenzwert-Logik (Messwerte vs. Zeiteinheiten),
-        damit `gui/live_view.py` nur noch den aktuellen Fortschritt liefern
-        muss, statt die Umrechnung selbst zu kennen. Gibt bei
+        Zentrale Stelle für die Grenzwert-Logik (Messwerte vs. Zeiteinheiten,
+        siehe `target_recording_stop_samples`), damit `gui/live_view.py` nur
+        noch die tatsächlich erfasste Samplezahl liefern muss. Gibt bei
         `recording_unlimited=True` immer False zurück (bisheriges
         Standardverhalten: laufen, bis manuell gestoppt oder die Festplatte
         voll ist).
         """
         if self.recording_unlimited:
             return False
-        if self.recording_stop_unit == RecordingStopUnit.SAMPLES:
-            return samples_acquired >= self.recording_stop_value
-        seconds_per_unit = _RECORDING_STOP_UNIT_TO_SECONDS[self.recording_stop_unit]
-        return elapsed_seconds >= self.recording_stop_value * seconds_per_unit
+        return samples_acquired >= self.target_recording_stop_samples()
 
     def to_dict(self) -> dict:
         """Serialisiert die Konfiguration in ein JSON-kompatibles Dictionary."""
