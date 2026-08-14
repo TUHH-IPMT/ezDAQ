@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLineEdit, QTreeWidgetItem
 
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
@@ -24,6 +24,7 @@ from data.models import (
 from data.sensor_models import SensorEntry
 from gui.live_view import ChannelDisplayDialog, LiveView
 from gui.analysis_view import AnalysisView
+from gui.analysis_view import ChannelTreeWidget
 from gui.setup_view import SetupView
 from gui.widgets.channel_table import ChannelTableWidget
 
@@ -70,6 +71,31 @@ class TriggerModelTests(unittest.TestCase):
 
         setup_view._discovered_devices = []
         self.assertEqual(setup_view.get_discovered_devices(), [])
+
+    def test_analysis_filter_shows_no_results_hint(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        analysis_view = AnalysisView.__new__(AnalysisView)
+        analysis_view._tree = ChannelTreeWidget()
+        analysis_view._tree_search_edit = QLineEdit()
+        analysis_view._tree.addTopLevelItem(QTreeWidgetItem(["measurement.csv"]))
+        analysis_view._tree_search_edit.setText("missing")
+
+        analysis_view._apply_tree_filter()
+
+        self.assertFalse(analysis_view._tree._empty_hint_label.isHidden())
+        self.assertEqual(
+            analysis_view._tree._empty_hint_label.text(),
+            "Keine Treffer für diese Suche.",
+        )
+
+        analysis_view._tree.takeTopLevelItem(0)
+        analysis_view._tree_search_edit.clear()
+        analysis_view._apply_tree_filter()
+        self.assertFalse(analysis_view._tree._empty_hint_label.isHidden())
+
+        analysis_view._tree.deleteLater()
+        analysis_view._tree_search_edit.deleteLater()
+        app.processEvents()
 
     def test_channel_table_syncs_adc_timing_mode_per_ni9213_module(self) -> None:
         app = QApplication.instance() or QApplication([])

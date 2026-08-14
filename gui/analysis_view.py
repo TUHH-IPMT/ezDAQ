@@ -139,6 +139,9 @@ class ChannelTreeWidget(QTreeWidget):
     def set_empty_hint_text(self, text: str) -> None:
         self._empty_hint_label.setText(text)
 
+    def set_empty_hint_visible(self, visible: bool) -> None:
+        self._empty_hint_label.setVisible(visible)
+
     def retheme_empty_hint(self) -> None:
         """Erzwingt ein Repolish des Hinweistexts nach einem Theme-Wechsel
         (eigenes Stylesheet wird von Qt sonst nicht automatisch neu
@@ -565,6 +568,7 @@ class AnalysisView(QWidget):
                 button.setToolTip(f"{t(label_key)} — {t(tooltip_key)}")
         self._refresh_plot_axis_labels()
         self._update_files_label_count()
+        self._apply_tree_filter()
 
     def _refresh_plot_axis_labels(self) -> None:
         """Setzt die x-Achsen-Beschriftung je Plot passend zu den dort
@@ -614,6 +618,17 @@ class AnalysisView(QWidget):
             file_item.setHidden(not show_file)
             if query and show_file:
                 file_item.setExpanded(True)
+
+        visible_files = any(
+            not self._tree.topLevelItem(index).isHidden()
+            for index in range(self._tree.topLevelItemCount())
+        )
+        if query and self._tree.topLevelItemCount() > 0 and not visible_files:
+            self._tree.set_empty_hint_text(t("search_no_results"))
+            self._tree.set_empty_hint_visible(True)
+        else:
+            self._tree.set_empty_hint_text(t("drag_drop_files"))
+            self._tree.set_empty_hint_visible(self._tree.topLevelItemCount() == 0)
 
     # ------------------------------------------------------------------ #
     # Öffentliche API (von gui/main_window.py aufgerufen)
