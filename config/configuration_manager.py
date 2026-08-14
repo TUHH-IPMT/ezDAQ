@@ -23,6 +23,7 @@ from config.settings import (
     CONFIG_FILE_NAME,
     get_config_directory,
 )
+from config.json_helpers import load_json_list
 from data.models import Channel, MeasurementConfig, TriggerConfig
 
 logger = logging.getLogger(__name__)
@@ -230,17 +231,11 @@ class ConfigurationManager:
             )
             return []
 
-        try:
-            with self._channel_config_path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            return [Channel.from_dict(item) for item in data]
-        except (json.JSONDecodeError, OSError, KeyError) as exc:
-            logger.warning(
-                "Kanalkonfiguration konnte nicht geladen werden, "
-                "ignoriere Datei: %s",
-                exc,
-            )
-            return []
+        return load_json_list(
+            self._channel_config_path,
+            Channel.from_dict,
+            logger,
+        )
 
     # ------------------------------------------------------------------ #
     # Gespeicherte Messkonfigurationen

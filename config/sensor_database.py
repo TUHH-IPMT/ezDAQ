@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import SENSOR_DATABASE_FILE_NAME, get_config_directory
+from config.json_helpers import load_json_list
 from data.sensor_models import SensorEntry
 
 logger = logging.getLogger(__name__)
@@ -48,23 +49,12 @@ class SensorDatabaseManager:
         if not self._path.exists():
             logger.info("Keine bestehende Sensor-Datenbank gefunden: %s", self._path)
             return []
-        try:
-            with self._path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-            # Rueckwaertskompatibel mit dem zwischenzeitlichen
-            # Dict-Format (Passwort-Hash+Sensoren) einer frueheren
-            # Session - nur die Sensoren daraus uebernehmen.
-            sensors_data = data.get("sensors", []) if isinstance(data, dict) else data
-            if not isinstance(sensors_data, list):
-                raise ValueError("Sensor-Datenbank muss eine Liste von Sensoren enthalten")
-            return [SensorEntry.from_dict(item) for item in sensors_data]
-        except (json.JSONDecodeError, OSError, KeyError, ValueError, AttributeError, TypeError) as exc:
-            logger.warning(
-                "Sensor-Datenbank konnte nicht gelesen werden (%s), ignoriere Datei: %s",
-                self._path,
-                exc,
-            )
-            return []
+        return load_json_list(
+            self._path,
+            SensorEntry.from_dict,
+            logger,
+            list_key="sensors",
+        )
 
     def _save(self) -> None:
         try:
