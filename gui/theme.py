@@ -30,7 +30,15 @@ from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen, QPixmap,
 _current_theme = "light"
 
 _PLOT_COLORS = {
-    "light": {"background": "w", "foreground": "k", "curve": "#1565c0"},
+    # Bewusst Hex statt PyQtGraph-Kurzformen ("w"/"k"): die werden auch in
+    # echten Qt-Stylesheets verwendet (siehe
+    # `gui/live_view.py::ChannelPopoutWindow._style_value_labels`), wo
+    # "w"/"k" KEIN gueltiges CSS sind und dort still verworfen wurden -
+    # sichtbar als komplett schwarze Messwertanzeige im Light-Theme (die
+    # Kurzformen versteht nur PyQtGraph selbst, nicht Qt's CSS-Parser).
+    # `is_theme_default_plot_background()` erkennt "w" als Altwert
+    # weiterhin (siehe dort), betrifft also nur NEU gespeicherte Werte.
+    "light": {"background": "#ffffff", "foreground": "#000000", "curve": "#1565c0"},
     "dark": {"background": "#232323", "foreground": "#e0e0e0", "curve": "#64b5f6"},
 }
 
