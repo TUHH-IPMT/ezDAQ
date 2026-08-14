@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -115,6 +116,17 @@ class TriggerModelTests(unittest.TestCase):
 
 
 class LiveViewStopTriggerTests(unittest.TestCase):
+    def test_popout_close_clears_y_range_cache(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        live_view._popout_windows = {"ai0": object()}
+        live_view._popout_y_auto_active = {"ai0": False}
+
+        with patch("gui.live_view.sip.isdeleted", return_value=True):
+            live_view._on_popout_window_closed("ai0")
+
+        self.assertNotIn("ai0", live_view._popout_windows)
+        self.assertNotIn("ai0", live_view._popout_y_auto_active)
+
     def _live_view_for_stop_check(self, condition: TriggerCondition) -> LiveView:
         live_view = LiveView.__new__(LiveView)
         live_view._armed = False

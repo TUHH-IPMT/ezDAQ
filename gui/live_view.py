@@ -986,6 +986,7 @@ class LiveView(QWidget):
         bereits abgebautes `self._plot_widget` in `_rebuild_plots()`.
         """
         self._popout_windows.pop(hardware_channel, None)
+        self._popout_y_auto_active.pop(hardware_channel, None)
         if sip.isdeleted(self):
             return
         channel = self._find_channel(hardware_channel)
