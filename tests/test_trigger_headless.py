@@ -7,7 +7,9 @@ from pathlib import Path
 import numpy as np
 
 from config.configuration_manager import ConfigurationManager
+from core.controller import MeasurementController
 from data.models import (
+    MeasurementConfig,
     TriggerCondition,
     TriggerConfig,
     TriggerDirection,
@@ -25,6 +27,15 @@ class _SignalSpy:
 
 
 class TriggerModelTests(unittest.TestCase):
+    def test_controller_rejects_new_measurement_until_session_is_cleaned_up(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            controller = MeasurementController(ConfigurationManager(Path(directory)))
+            controller._session = object()
+            controller._acquisition_thread = None
+
+            with self.assertRaisesRegex(RuntimeError, "stop_measurement"):
+                controller.start_measurement(MeasurementConfig("Test", 1000.0))
+
     def test_trigger_config_round_trip_preserves_start_and_stop(self) -> None:
         config = TriggerConfig(
             start=TriggerCondition(

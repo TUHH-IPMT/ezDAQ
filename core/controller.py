@@ -171,7 +171,10 @@ class MeasurementController:
             AcquisitionError: falls Hardware-Konfiguration/-Start fehlschlägt.
         """
         with self._lock:
-            if self._acquisition_thread is not None and self._acquisition_thread.is_running:
+            # Die Session bleibt bis zum expliziten Cleanup in
+            # `stop_measurement()` gesetzt, auch wenn der DAQ-Thread sein
+            # Sample-Limit bereits selbst erreicht und beendet hat.
+            if self._session is not None:
                 raise RuntimeError(
                     "Es läuft bereits eine Messung. Bitte zuerst stop_measurement() aufrufen."
                 )
