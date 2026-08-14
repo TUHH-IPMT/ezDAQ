@@ -1415,6 +1415,9 @@ class ChannelTableWidget(QWidget):
             plot_y_min=display_settings.get("plot_y_min"),
             plot_y_max=display_settings.get("plot_y_max"),
             plot_autoscale=display_settings.get("plot_autoscale", True),
+            plot_time_window_seconds=max(
+                0.1, float(display_settings.get("plot_time_window_seconds", 5.0))
+            ),
             plot_visible=display_settings.get("plot_visible", True),
             plot_popout=display_settings.get("plot_popout", False),
         )

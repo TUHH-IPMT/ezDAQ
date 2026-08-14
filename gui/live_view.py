@@ -17,7 +17,7 @@ Darstellungsart (Sweep, wie ein Oszilloskop):
     NICHT kontinuierlich mit. Die Kurve zeichnet innerhalb dieses festen
     Fensters von links nach rechts durch; ist das Fenster voll, beginnt
     sofort ein neuer Durchlauf und die alte Kurve verschwindet komplett
-    (siehe `_write_to_display_buffer`/`_get_display_view`). Das
+    (siehe `_write_to_display_buffer`/`_get_channel_display_view`). Das
     unterscheidet sich bewusst von einem scrollenden Ringpuffer, bei dem
     alte Daten langsam am linken Rand herauslaufen.
 
@@ -38,8 +38,8 @@ Architektur-Hinweis (bewusst KEIN Reveal-Pacing):
     das fuehrte bei einem direkten Reiz-Reaktions-Test (Klopftest auf
     einen Beschleunigungssensor waehrend die App laeuft) zu spuerbarer
     zusaetzlicher Latenz. Fuer ein Live-Messinstrument ist Latenz
-    wichtiger als Anzeige-Glaette - `_get_display_view()` zeigt daher
-    IMMER sofort den vollen aktuell eingetroffenen Stand.
+    wichtiger als Anzeige-Glaette - `_get_channel_display_view()` zeigt
+    daher IMMER sofort den vollen aktuell eingetroffenen Stand.
 
 Architektur-Hinweis (Performance):
     Der Anzeigepuffer für das aktuelle Sweep-Fenster ist ein einmalig
@@ -68,6 +68,7 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -217,6 +218,14 @@ class ChannelDisplayDialog(QDialog):
             autoscale_check.setChecked(channel.plot_autoscale)
             row.addWidget(autoscale_check)
 
+            time_window_spin = QDoubleSpinBox()
+            time_window_spin.setRange(0.1, 3600.0)
+            time_window_spin.setDecimals(1)
+            time_window_spin.setSingleStep(0.5)
+            time_window_spin.setValue(channel.plot_time_window_seconds)
+            row.addWidget(QLabel(f"{t('plot_time_window_seconds')}:"))
+            row.addWidget(time_window_spin)
+
             # Betrifft NUR, ob der Kanal als Subplot im Hauptraster
             # erscheint (siehe `LiveView._rebuild_plots`) - Erfassung/
             # Speicherung laufen unabhängig davon unverändert weiter.
@@ -248,6 +257,7 @@ class ChannelDisplayDialog(QDialog):
                 "min": min_spin,
                 "max": max_spin,
                 "autoscale": autoscale_check,
+                "time_window": time_window_spin,
                 "visible": visible_check,
                 "popout": popout_check,
             }
@@ -286,6 +296,7 @@ class ChannelDisplayDialog(QDialog):
                 "plot_y_min": row["min"].value(),
                 "plot_y_max": row["max"].value(),
                 "plot_autoscale": row["autoscale"].isChecked(),
+                "plot_time_window_seconds": row["time_window"].value(),
                 "plot_visible": row["visible"].isChecked(),
                 "plot_popout": row["popout"].isChecked(),
             }
@@ -379,23 +390,27 @@ class LiveView(QWidget):
         # Sweep-Anzeigepuffer für den AKTUELLEN Durchlauf (Oszilloskop-Art:
         # die Kurve zeichnet von links nach rechts durch das Zeitfenster;
         # am rechten Rand beginnt ein neuer Durchlauf bei x=0, die alte
-        # Kurve verschwindet komplett). `_buffer_write_pos` ist zugleich
-        # die Anzahl gültiger Samples im aktuellen Durchlauf (siehe
-        # `_write_to_display_buffer`/`_get_display_view`).
+        # Kurve verschwindet komplett). `_channel_buffer_positions` ist
+        # zugleich die Anzahl gültiger Samples im aktuellen Durchlauf pro
+        # Kanal (siehe `_write_to_display_buffer`/`_get_channel_display_view`).
         self._display_buffer: np.ndarray | None = None
         self._display_capacity_samples: int = 0
         self._buffer_write_pos: int = 0
+        self._channel_buffer_positions: dict[int, int] = {}
         # Absolute Messzeit (Sekunden seit Messstart), bei der der AKTUELLE
-        # Durchlauf begonnen hat - die Achsenbeschriftung soll die echte
-        # Messzeit zeigen (z. B. "40-45s" statt immer "0-5s"), auch wenn
-        # der Sweep selbst weiterhin bei jedem Durchlauf zurücksetzt.
-        # Erhöht sich um `_display_window_seconds`, sobald ein neuer
-        # Durchlauf beginnt (siehe `_write_to_display_buffer`).
-        self._cycle_start_seconds: float = 0.0
-        # Zuletzt auf die Plots angewendeter `_cycle_start_seconds`-Wert
-        # (siehe `_on_timer_tick`) - der X-Bereich wird nur bei einem
-        # tatsächlichen Zyklus-Wechsel neu gesetzt, nicht bei jedem Tick.
-        self._x_range_cycle_start: float | None = None
+        # Durchlauf des jeweiligen Kanals begonnen hat - die
+        # Achsenbeschriftung soll die echte Messzeit zeigen (z. B. "40-45s"
+        # statt immer "0-5s"), auch wenn der Sweep selbst weiterhin bei
+        # jedem Durchlauf zurücksetzt. Pro Kanal, da die Fensterlänge
+        # (`Channel.plot_time_window_seconds`) pro Kanal unterschiedlich
+        # sein kann und die Durchläufe damit unabhängig voneinander enden
+        # (siehe `_write_to_display_buffer`).
+        self._channel_cycle_starts: dict[int, float] = {}
+        # Zuletzt pro Kanal auf die Plots angewendeter
+        # `_channel_cycle_starts`-Wert (siehe `_on_timer_tick`) - der
+        # X-Bereich wird nur bei einem tatsächlichen Zyklus-Wechsel neu
+        # gesetzt, nicht bei jedem Tick.
+        self._channel_x_range_applied: dict[int, float | None] = {}
 
         # Darstellung pro Kanal (Kurvenfarbe, Hintergrund, Y-Bereich,
         # Autoskalierungs-Verhalten) lebt direkt auf den `Channel`-Objekten
@@ -630,8 +645,9 @@ class LiveView(QWidget):
         # Schreibposition (und damit ein Rest alter Messdaten) sichtbar
         # in den neuen Sweep-Durchlauf hineinragen.
         self._buffer_write_pos = 0
-        self._cycle_start_seconds = 0.0
-        self._x_range_cycle_start = None
+        self._channel_buffer_positions = {index: 0 for index in range(len(channels))}
+        self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
+        self._channel_x_range_applied = {index: None for index in range(len(channels))}
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -911,6 +927,7 @@ class LiveView(QWidget):
             return
         changed = False
         visibility_changed = False
+        time_window_changed = False
         for channel in self._channels:
             values = settings.get(channel.hardware_channel)
             if values is None:
@@ -920,6 +937,12 @@ class LiveView(QWidget):
             channel.plot_y_min = values.get("plot_y_min")
             channel.plot_y_max = values.get("plot_y_max")
             channel.plot_autoscale = values.get("plot_autoscale", True)
+            new_time_window = max(
+                0.1, float(values.get("plot_time_window_seconds", 5.0))
+            )
+            if new_time_window != channel.plot_time_window_seconds:
+                time_window_changed = True
+            channel.plot_time_window_seconds = new_time_window
             new_visible = values.get("plot_visible", True)
             new_popout = values.get("plot_popout", False)
             if new_visible != channel.plot_visible or new_popout != channel.plot_popout:
@@ -927,7 +950,15 @@ class LiveView(QWidget):
             channel.plot_visible = new_visible
             channel.plot_popout = new_popout
             changed = True
-        if visibility_changed:
+        if visibility_changed or time_window_changed:
+            if time_window_changed:
+                # Puffer ist auf das breiteste Zeitfenster ueber alle
+                # Kanaele dimensioniert (siehe `_ensure_display_buffer`) -
+                # bei einer waehrend der Messung vergroesserten Zeitspanne
+                # muss er neu allokiert werden, sonst wuerde `cap` in
+                # `_write_to_display_buffer` weiterhin auf die alte,
+                # kleinere Kapazitaet gedeckelt.
+                self._ensure_display_buffer(len(self._channels))
             # Welche Kanäle überhaupt einen Subplot bekommen, hat sich
             # geändert - Farb-/Bereichs-Anwendung ist Teil von
             # `_rebuild_plots()` und muss daher nicht separat erfolgen.
@@ -952,9 +983,11 @@ class LiveView(QWidget):
             return
 
         window = ChannelPopoutWindow(channel, self)
+        channel_index = self._channels.index(channel)
+        x_min = self._channel_cycle_starts.get(channel_index, 0.0)
         window.plot_item.setXRange(
-            self._cycle_start_seconds,
-            self._cycle_start_seconds + self._display_window_seconds,
+            x_min,
+            x_min + channel.plot_time_window_seconds,
             padding=0,
         )
         self._apply_channel_curve_style(window.plot_item, window.curve, channel)
@@ -1030,9 +1063,11 @@ class LiveView(QWidget):
         self._plot_items = []
         self._curves = []
         self._curve_channel_indices = []
+        self._channel_buffer_positions = {index: 0 for index in range(len(self._channels))}
+        self._channel_cycle_starts = {index: 0.0 for index in range(len(self._channels))}
+        self._channel_x_range_applied = {index: None for index in range(len(self._channels))}
         self._channel_y_auto_active = {}
 
-        previous_plot_item = None
         for index, channel in enumerate(self._channels):
             if not channel.plot_visible or channel.plot_popout:
                 continue
@@ -1041,8 +1076,11 @@ class LiveView(QWidget):
             plot_item.showGrid(x=True, y=True, alpha=0.3)
             plot_item.setLabel("bottom", t("axis_time"), units="s")
             style_plot_item(plot_item)
-            if previous_plot_item is not None:
-                plot_item.setXLink(previous_plot_item)
+            # KEIN `setXLink` zwischen den Subplots: jeder Kanal hat sein
+            # eigenes, unabhaengig konfigurierbares Zeitfenster
+            # (`Channel.plot_time_window_seconds`) - eine verlinkte X-Achse
+            # wuerde den zuletzt gesetzten Bereich auf alle anderen Subplots
+            # erzwingen und die Einstellung pro Kanal wirkungslos machen.
             curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
             curve.setDownsampling(auto=True, method="mean")
             curve.setClipToView(True)
@@ -1052,13 +1090,12 @@ class LiveView(QWidget):
             # NICHT mit, die Kurve selbst laeuft innerhalb dieses festen
             # Fensters von links nach rechts durch.
             plot_item.enableAutoRange(x=False)
-            plot_item.setXRange(0.0, self._display_window_seconds, padding=0)
+            plot_item.setXRange(0.0, channel.plot_time_window_seconds, padding=0)
 
             self._plot_widget.nextRow()
             self._plot_items.append(plot_item)
             self._curves.append(curve)
             self._curve_channel_indices.append(index)
-            previous_plot_item = plot_item
 
         # Eigene Fenster (siehe `ChannelPopoutWindow`) für Kanäle
         # schliessen, die es nach dieser Kanalkonfiguration nicht mehr
@@ -1297,22 +1334,29 @@ class LiveView(QWidget):
         self._check_stop_threshold_trigger(scaled)
         self._write_to_display_buffer(scaled)
 
-        times, all_values = self._get_display_view()
-        if all_values.size == 0:
+        channel_views = {
+            index: self._get_channel_display_view(index)
+            for index in range(len(self._channels))
+        }
+        if not any(values.size for _times, values in channel_views.values()):
             return
 
         for pos, curve in enumerate(self._curves):
-            curve.setData(times, all_values[self._curve_channel_indices[pos]])
+            channel_index = self._curve_channel_indices[pos]
+            times, values = channel_views[channel_index]
+            curve.setData(times, values)
 
         # Hybrid-Autoskalierung pro Kanal (fester Bereich, bis Messwerte
         # ihn über-/unterschreiten - siehe `_apply_channel_y_range`) mit
         # den JETZT tatsächlich angezeigten Werten neu bewerten.
         for pos, plot_item in enumerate(self._plot_items):
             channel_index = self._curve_channel_indices[pos]
-            self._apply_channel_y_range(plot_item, self._channels[channel_index], all_values[channel_index])
+            self._apply_channel_y_range(
+                plot_item, self._channels[channel_index], channel_views[channel_index][1]
+            )
 
         # Eigene Fenster (siehe `ChannelPopoutWindow`) unabhängig vom
-        # Hauptraster mit denselben Werten aktualisieren - `all_values`
+        # Hauptraster mit denselben Werten aktualisieren - `channel_views`
         # ist immer nach `self._channels` indiziert (siehe `apply_scaling`),
         # unabhängig von `plot_visible`, daher hier per Index statt Position.
         if self._popout_windows:
@@ -1320,28 +1364,47 @@ class LiveView(QWidget):
                 window = self._popout_windows.get(channel.hardware_channel)
                 if window is None:
                     continue
-                window.curve.setData(times, all_values[index])
+                times, values = channel_views[index]
+                window.curve.setData(times, values)
                 self._apply_channel_y_range(
-                    window.plot_item, channel, all_values[index], self._popout_y_auto_active
+                    window.plot_item, channel, values, self._popout_y_auto_active
                 )
 
         # X-Bereich selbst bleibt fensterbreit fest (Sweep scrollt nicht) -
         # nur bei einem tatsächlichen Zyklus-Wechsel (neuer Durchlauf
         # begonnen) auf die neue absolute Zeitspanne verschieben, damit die
         # Achsenbeschriftung die echte Messzeit zeigt (siehe
-        # `_cycle_start_seconds`). Bewusst nicht bei jedem Tick gesetzt.
-        if self._cycle_start_seconds != self._x_range_cycle_start:
-            self._x_range_cycle_start = self._cycle_start_seconds
-            x_min = self._cycle_start_seconds
-            x_max = self._cycle_start_seconds + self._display_window_seconds
-            for plot_item in self._plot_items:
-                plot_item.setXRange(x_min, x_max, padding=0)
-            for window in self._popout_windows.values():
-                window.plot_item.setXRange(x_min, x_max, padding=0)
+        # `_channel_cycle_starts`). Bewusst nicht bei jedem Tick gesetzt -
+        # pro Kanal, da die Fensterlänge (und damit der Zyklus-Rhythmus)
+        # pro Kanal unterschiedlich sein kann.
+        for pos, plot_item in enumerate(self._plot_items):
+            channel_index = self._curve_channel_indices[pos]
+            x_min = self._channel_cycle_starts.get(channel_index, 0.0)
+            if self._channel_x_range_applied.get(channel_index) == x_min:
+                continue
+            self._channel_x_range_applied[channel_index] = x_min
+            x_max = x_min + self._channels[channel_index].plot_time_window_seconds
+            plot_item.setXRange(x_min, x_max, padding=0)
+        for hw, window in self._popout_windows.items():
+            channel = self._find_channel(hw)
+            if channel is None:
+                continue
+            channel_index = self._channels.index(channel)
+            x_min = self._channel_cycle_starts.get(channel_index, 0.0)
+            if self._channel_x_range_applied.get(channel_index) == x_min:
+                continue
+            self._channel_x_range_applied[channel_index] = x_min
+            window.plot_item.setXRange(
+                x_min, x_min + channel.plot_time_window_seconds, padding=0
+            )
 
     def _ensure_display_buffer(self, num_channels: int) -> None:
         """Initialisiert oder passt den internen Sweep-Anzeigepuffer an."""
-        capacity = max(1, int(self._sample_rate_hz * self._display_window_seconds))
+        max_window = max(
+            [channel.plot_time_window_seconds for channel in self._channels],
+            default=self._display_window_seconds,
+        )
+        capacity = max(1, int(self._sample_rate_hz * max_window))
         if self._display_buffer is None or self._display_buffer.shape != (num_channels, capacity):
             self._display_capacity_samples = capacity
             self._display_buffer = np.zeros((num_channels, capacity), dtype=np.float64)
@@ -1360,36 +1423,43 @@ class LiveView(QWidget):
         """
         if self._display_buffer is None:
             return
-        cap = self._display_capacity_samples
-        remaining = scaled_block
+        for channel_index in range(scaled_block.shape[0]):
+            cap = max(
+                1,
+                min(
+                    self._display_capacity_samples,
+                    int(
+                        self._sample_rate_hz
+                        * self._channels[channel_index].plot_time_window_seconds
+                    ),
+                ),
+            )
+            pos = self._channel_buffer_positions.get(channel_index, 0)
+            start = 0
+            while start < scaled_block.shape[1]:
+                if pos >= cap:
+                    pos = 0
+                    self._channel_cycle_starts[channel_index] = (
+                        self._channel_cycle_starts.get(channel_index, 0.0)
+                        + cap / self._sample_rate_hz
+                    )
+                take = min(cap - pos, scaled_block.shape[1] - start)
+                self._display_buffer[channel_index, pos:pos + take] = scaled_block[
+                    channel_index, start:start + take
+                ]
+                pos += take
+                start += take
+            self._channel_buffer_positions[channel_index] = pos
+        self._buffer_write_pos = max(self._channel_buffer_positions.values(), default=0)
 
-        while remaining.shape[1] > 0:
-            pos = self._buffer_write_pos
-            if pos >= cap:
-                # Voriger Durchlauf war exakt voll (siehe unten) - der
-                # volle letzte Frame wurde bereits einmal angezeigt
-                # (`_get_display_view` zeigt `_buffer_write_pos == cap`
-                # korrekt als volles Fenster); jetzt beginnt der naechste
-                # Durchlauf bei 0. Absolute Startzeit des neuen Durchlaufs
-                # fuer die Achsenbeschriftung mitfuehren (siehe
-                # `_cycle_start_seconds`).
-                pos = 0
-                self._cycle_start_seconds += cap / self._sample_rate_hz
-            space = cap - pos
-            take = min(space, remaining.shape[1])
-            self._display_buffer[:, pos:pos + take] = remaining[:, :take]
-            pos += take
-            remaining = remaining[:, take:]
-            self._buffer_write_pos = pos
+    def _get_channel_display_view(self, channel_index: int) -> tuple[np.ndarray, np.ndarray]:
+        """Gibt den aktuellen Durchlauf für einen einzelnen Kanal zurück.
 
-    def _get_display_view(self) -> tuple[np.ndarray, np.ndarray]:
-        """Gibt den aktuellen Durchlauf zurück.
-
-        Die Zeitwerte sind um `_cycle_start_seconds` verschoben, zeigen
-        also die tatsächliche Messzeit (z. B. "40-45s" im 9. Durchlauf
-        eines 5s-Fensters) statt immer bei 0 zu beginnen - der Sweep
-        selbst (Kurve läuft im festen Fenster durch, setzt zurück) bleibt
-        davon unverändert.
+        Die Zeitwerte sind um `_channel_cycle_starts[channel_index]`
+        verschoben, zeigen also die tatsächliche Messzeit (z. B. "40-45s"
+        im 9. Durchlauf eines 5s-Fensters) statt immer bei 0 zu beginnen -
+        der Sweep selbst (Kurve läuft im festen, pro Kanal konfigurierbaren
+        Fenster durch, setzt zurück) bleibt davon unverändert.
 
         Rückgabe wächst mit der Sweep-Position (statt einer konstanten,
         NaN-gepolsterten Fensterlänge - das wurde ausprobiert, machte die
@@ -1398,19 +1468,23 @@ class LiveView(QWidget):
         wenn erst wenige Punkte echte Daten sind).
 
         Zeigt IMMER den vollen aktuell eingetroffenen Stand
-        (`_buffer_write_pos`) - bewusst OHNE künstliches Nachzieh-Tempo:
-        ein frueherer Versuch, neu eingetroffene ~25ms-Bloecke (siehe
-        `gui/setup_view.py::_calculate_samples_per_read`) ueber mehrere
-        Ticks zu "verschmieren", hat zwar das sichtbare Blockweise-
-        Wachstum der Kurve geglaettet, dabei aber spuerbare zusaetzliche
-        Latenz eingefuehrt - bei einem direkten Reiz-Reaktions-Test (Klopf-
-        test auf einen Beschleunigungssensor) war das inakzeptabel: Latenz
-        ist fuer ein Live-Messinstrument wichtiger als Anzeige-Glaette.
+        (`_channel_buffer_positions`) - bewusst OHNE künstliches
+        Nachzieh-Tempo: ein frueherer Versuch, neu eingetroffene ~25ms-
+        Bloecke (siehe `gui/setup_view.py::_calculate_samples_per_read`)
+        ueber mehrere Ticks zu "verschmieren", hat zwar das sichtbare
+        Blockweise-Wachstum der Kurve geglaettet, dabei aber spuerbare
+        zusaetzliche Latenz eingefuehrt - bei einem direkten
+        Reiz-Reaktions-Test (Klopftest auf einen Beschleunigungssensor)
+        war das inakzeptabel: Latenz ist fuer ein Live-Messinstrument
+        wichtiger als Anzeige-Glaette.
         """
-        m = self._buffer_write_pos
-        if self._display_buffer is None or m == 0:
-            return np.array([]), np.empty((0, 0))
-
-        view = self._display_buffer[:, :m]
-        times = self._cycle_start_seconds + np.arange(m) / self._sample_rate_hz
-        return times, view
+        if self._display_buffer is None:
+            return np.array([]), np.empty((0,))
+        position = self._channel_buffer_positions.get(channel_index, 0)
+        if position == 0:
+            return np.array([]), np.empty((0,))
+        values = self._display_buffer[channel_index, :position]
+        times = self._channel_cycle_starts.get(channel_index, 0.0) + (
+            np.arange(position) / self._sample_rate_hz
+        )
+        return times, values

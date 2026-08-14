@@ -326,6 +326,7 @@ class Channel:
     plot_y_min: Optional[float] = None
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
+    plot_time_window_seconds: float = 5.0
     plot_visible: bool = True
     # Zeigt den Kanal (statt im Hauptraster der Live View) in einem
     # eigenen Fenster an (siehe `gui/live_view.py::ChannelPopoutWindow`) -
@@ -364,6 +365,7 @@ class Channel:
             "plot_y_min": self.plot_y_min,
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
+            "plot_time_window_seconds": self.plot_time_window_seconds,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
         }
@@ -394,6 +396,9 @@ class Channel:
             plot_y_min=data.get("plot_y_min"),
             plot_y_max=data.get("plot_y_max"),
             plot_autoscale=data.get("plot_autoscale", True),
+            plot_time_window_seconds=max(
+                0.1, float(data.get("plot_time_window_seconds", 5.0))
+            ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),
         )
