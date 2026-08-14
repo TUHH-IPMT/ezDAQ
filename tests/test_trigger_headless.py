@@ -19,6 +19,7 @@ from data.models import (
 )
 from data.sensor_models import SensorEntry
 from gui.live_view import LiveView
+from gui.setup_view import SetupView
 
 
 class _SignalSpy:
@@ -30,6 +31,15 @@ class _SignalSpy:
 
 
 class TriggerModelTests(unittest.TestCase):
+    def test_setup_view_preserves_discovery_sentinel(self) -> None:
+        setup_view = SetupView.__new__(SetupView)
+
+        setup_view._discovered_devices = None
+        self.assertIsNone(setup_view.get_discovered_devices())
+
+        setup_view._discovered_devices = []
+        self.assertEqual(setup_view.get_discovered_devices(), [])
+
     def test_controller_rejects_new_measurement_until_session_is_cleaned_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             controller = MeasurementController(ConfigurationManager(Path(directory)))

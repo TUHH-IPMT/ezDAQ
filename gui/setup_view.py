@@ -126,7 +126,10 @@ class SetupView(QWidget):
     ) -> None:
         super().__init__(parent)
         self._configuration_manager = configuration_manager
-        self._discovered_devices: list[DeviceInfo] = []
+        # None bedeutet: seit dem letzten Reset gab es noch keine
+        # erfolgreiche Geräteerkennung. Eine leere Liste dagegen ist ein
+        # gültiges Ergebnis einer erfolgreichen Suche ohne nutzbare Module.
+        self._discovered_devices: list[DeviceInfo] | None = None
         self._storage_path_is_set = False
         self._status_reason_key = ""
         self._discovery_in_progress = False
@@ -457,7 +460,7 @@ class SetupView(QWidget):
             t("searching_devices") if in_progress else t("search_devices")
         )
 
-    def get_discovered_devices(self) -> list[DeviceInfo]:
+    def get_discovered_devices(self) -> list[DeviceInfo] | None:
         """Gibt die zuletzt erkannten Geräte zurück (siehe
         `set_discovered_devices`).
 
@@ -517,7 +520,7 @@ class SetupView(QWidget):
         anstelle von `set_discovered_devices` auf).
         """
         self._device_list.clear()
-        self._discovered_devices = []
+        self._discovered_devices = None
         self._channel_table.set_available_devices([])
         self._device_list.addTopLevelItem(
             QTreeWidgetItem([f"{t('device_discovery_failed')}: {message}"])
