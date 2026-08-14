@@ -32,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, pyqtSignal, Qt
-from PyQt6.QtGui import QActionGroup, QIcon
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -148,6 +148,7 @@ class MainWindow(QMainWindow):
 
         self._build_navigation_and_workspace()
         self._build_menu()
+        self._build_shortcuts()
         self._build_status_bar()
 
         if self._storage_path is not None:
@@ -395,6 +396,29 @@ class MainWindow(QMainWindow):
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
         self._about_action = self._help_menu.addAction(t("menu_about"))
         self._about_action.triggered.connect(self._on_about)
+
+    def _build_shortcuts(self) -> None:
+        """Globale Tastenkürzel für Messung Start/Stopp - funktionieren
+        unabhängig davon, welcher Tab (Konfiguration/Live-Ansicht/Analyse)
+        gerade aktiv ist, da über `self.addAction()` am Hauptfenster selbst
+        registriert statt an einem einzelnen Button/View.
+
+        Rufen dieselben Handler wie die Start-/Stopp-Buttons auf (siehe
+        `_on_start_measurement_from_live`/`_on_stop_measurement`) - beide
+        sind bereits dagegen abgesichert, wenn keine Messung läuft
+        (Stopp) bzw. bereits eine läuft (Start meldet dann den bestehenden
+        `MeasurementController`-Fehler wie ein doppelter Klick auf den
+        Start-Button auch).
+        """
+        self._start_shortcut_action = QAction(self)
+        self._start_shortcut_action.setShortcut(QKeySequence("F5"))
+        self._start_shortcut_action.triggered.connect(self._on_start_measurement_from_live)
+        self.addAction(self._start_shortcut_action)
+
+        self._stop_shortcut_action = QAction(self)
+        self._stop_shortcut_action.setShortcut(QKeySequence("F8"))
+        self._stop_shortcut_action.triggered.connect(self._on_stop_measurement)
+        self.addAction(self._stop_shortcut_action)
 
     def _on_language_action_triggered(self, action) -> None:
         """Wird ausgelöst, wenn der Nutzer im Menü Einstellungen -> Sprache

@@ -1368,6 +1368,9 @@ class ChannelTableWidget(QWidget):
                 "plot_y_min": channel.plot_y_min,
                 "plot_y_max": channel.plot_y_max,
                 "plot_autoscale": channel.plot_autoscale,
+                "plot_time_window_seconds": channel.plot_time_window_seconds,
+                "plot_show_value": channel.plot_show_value,
+                "plot_value_integer_digits": channel.plot_value_integer_digits,
                 "plot_visible": channel.plot_visible,
                 "plot_popout": channel.plot_popout,
             }
@@ -1417,6 +1420,10 @@ class ChannelTableWidget(QWidget):
             plot_autoscale=display_settings.get("plot_autoscale", True),
             plot_time_window_seconds=max(
                 0.1, float(display_settings.get("plot_time_window_seconds", 5.0))
+            ),
+            plot_show_value=display_settings.get("plot_show_value", True),
+            plot_value_integer_digits=max(
+                1, int(display_settings.get("plot_value_integer_digits", 3))
             ),
             plot_visible=display_settings.get("plot_visible", True),
             plot_popout=display_settings.get("plot_popout", False),

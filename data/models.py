@@ -327,6 +327,16 @@ class Channel:
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
     plot_time_window_seconds: float = 5.0
+    # Grosse, aktuelle Messwertanzeige neben dem Subplot im Hauptraster
+    # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
+    # pro Kanal abschaltbar, da sie bei vielen Kanälen unnötig Platz kostet.
+    plot_show_value: bool = True
+    # Anzahl Vorkommastellen fuer `plot_show_value` (Nachkommastellen sind
+    # fest 3, siehe `gui/live_view.py::_format_channel_value`) - passt ein
+    # Messwert NICHT hinein, wird statt einer irrefuehrend abgeschnittenen
+    # Zahl ein Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-
+    # Digitalanzeigen), statt die Anzeigebreite laufend nachzuziehen.
+    plot_value_integer_digits: int = 3
     plot_visible: bool = True
     # Zeigt den Kanal (statt im Hauptraster der Live View) in einem
     # eigenen Fenster an (siehe `gui/live_view.py::ChannelPopoutWindow`) -
@@ -366,6 +376,8 @@ class Channel:
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
             "plot_time_window_seconds": self.plot_time_window_seconds,
+            "plot_show_value": self.plot_show_value,
+            "plot_value_integer_digits": self.plot_value_integer_digits,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
         }
@@ -398,6 +410,10 @@ class Channel:
             plot_autoscale=data.get("plot_autoscale", True),
             plot_time_window_seconds=max(
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
+            ),
+            plot_show_value=data.get("plot_show_value", True),
+            plot_value_integer_digits=max(
+                1, int(data.get("plot_value_integer_digits", 3))
             ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),

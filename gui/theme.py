@@ -122,6 +122,11 @@ def curve_color() -> str:
     return _PLOT_COLORS[_current_theme]["curve"]
 
 
+def plot_foreground_color() -> str:
+    """Standard-Vordergrundfarbe (Achsen/Text) im aktuellen Theme."""
+    return _PLOT_COLORS[_current_theme]["foreground"]
+
+
 def plot_background_color() -> str:
     """Standard-Hintergrundfarbe für neue Plots im aktuellen Theme.
 

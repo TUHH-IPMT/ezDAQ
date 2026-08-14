@@ -148,6 +148,18 @@ _translations = {
             "Hauptfenster noch in einem eigenen Fenster) - die Aufzeichnung "
             "selbst ist davon nicht betroffen."
         ),
+        "plot_show_value_checkbox": "Messwert anzeigen",
+        "plot_show_value_checkbox_tooltip": (
+            "Zeigt den aktuellen Messwert gross neben dem Kurvenverlauf an "
+            "(Hauptraster und eigenes Fenster)."
+        ),
+        "plot_value_integer_digits": "Vorkommastellen",
+        "plot_value_integer_digits_tooltip": (
+            "Anzahl der Vorkommastellen der Messwertanzeige (3 "
+            "Nachkommastellen sind fest). Passt ein Wert nicht hinein, "
+            "erscheinen statt einer abgeschnittenen Zahl Rauten (#) - wie "
+            "bei einer DIAdem/LabVIEW-Digitalanzeige."
+        ),
         "popout_button": "Eigenes Fenster",
         "popout_button_tooltip": (
             "Zeigt diesen Kanal statt im Hauptraster in einem eigenen, frei "
@@ -498,6 +510,18 @@ _translations = {
             "Disabled channels are no longer plotted (neither in the main "
             "window nor in a popout window) - recording itself is not "
             "affected."
+        ),
+        "plot_show_value_checkbox": "Show current value",
+        "plot_show_value_checkbox_tooltip": (
+            "Shows the current measured value in large text next to the "
+            "curve (main grid and popout window)."
+        ),
+        "plot_value_integer_digits": "Integer digits",
+        "plot_value_integer_digits_tooltip": (
+            "Number of integer digits in the value display (3 decimal "
+            "places are fixed). If a value doesn't fit, hash signs (#) "
+            "are shown instead of a truncated number - like a "
+            "DIAdem/LabVIEW digital display."
         ),
         "popout_button": "Popout Window",
         "popout_button_tooltip": (
