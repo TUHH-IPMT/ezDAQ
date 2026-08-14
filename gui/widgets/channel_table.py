@@ -783,6 +783,32 @@ class ChannelTableWidget(QWidget):
         # entsprechend nachziehen.
         self._apply_module_signal_constraint(row)
 
+        if ModuleType(module_value) == ModuleType.NI9213:
+            param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
+            if param_widget is not None:
+                timing_mode = str(
+                    param_widget.property("adc_timing_mode") or "AUTOMATIC"
+                )
+                device_name = self._device_name_from_hw_channel(hw_channel)
+                for other_row in range(self._table.rowCount()):
+                    if other_row == row:
+                        continue
+                    other_hw_widget = self._table.cellWidget(other_row, _COL_HW_CHANNEL)
+                    if self._device_name_from_hw_channel(
+                        self._get_hw_channel_text_from_widget(other_hw_widget)
+                    ) != device_name:
+                        continue
+                    other_param_widget = self._table.cellWidget(other_row, _COL_PARAMETERS)
+                    if other_param_widget is not None:
+                        timing_mode = str(
+                            other_param_widget.property("adc_timing_mode") or "AUTOMATIC"
+                        )
+                        break
+                param_widget.setProperty("adc_timing_mode", timing_mode)
+                self._apply_adc_timing_mode_to_module(
+                    hw_widget, timing_mode, exclude_row=row
+                )
+
     def _apply_module_signal_constraint(self, row: int) -> None:
         """Schränkt die Signaltyp-Auswahl einer Zeile auf das gewählte Modul ein.
 

@@ -15,6 +15,7 @@ from core.controller import MeasurementController
 from data.models import (
     Channel,
     MeasurementConfig,
+    ModuleType,
     TriggerCondition,
     TriggerConfig,
     TriggerDirection,
@@ -24,6 +25,7 @@ from data.sensor_models import SensorEntry
 from gui.live_view import ChannelDisplayDialog, LiveView
 from gui.analysis_view import AnalysisView
 from gui.setup_view import SetupView
+from gui.widgets.channel_table import ChannelTableWidget
 
 
 class _SignalSpy:
@@ -68,6 +70,34 @@ class TriggerModelTests(unittest.TestCase):
 
         setup_view._discovered_devices = []
         self.assertEqual(setup_view.get_discovered_devices(), [])
+
+    def test_channel_table_syncs_adc_timing_mode_per_ni9213_module(self) -> None:
+        app = QApplication.instance() or QApplication([])
+        table = ChannelTableWidget()
+        table.set_channels(
+            [
+                Channel(
+                    "cDAQ1Mod1/ai0",
+                    "Channel 1",
+                    module_type=ModuleType.NI9213,
+                    adc_timing_mode="HIGH_SPEED",
+                ),
+                Channel(
+                    "cDAQ1Mod1/ai1",
+                    "Channel 2",
+                    module_type=ModuleType.NI9213,
+                    adc_timing_mode="AUTOMATIC",
+                ),
+            ]
+        )
+
+        self.assertEqual(
+            [channel.adc_timing_mode for channel in table.get_channels()],
+            ["HIGH_SPEED", "HIGH_SPEED"],
+        )
+
+        table.deleteLater()
+        app.processEvents()
 
     def test_controller_rejects_new_measurement_until_session_is_cleaned_up(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
