@@ -56,10 +56,9 @@ from data.models import (
 )
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
-    ACTION_BUTTON_STYLE,
     PLAY_ICON_COLOR,
     RECORD_ICON_COLOR,
-    TRIGGER_ARM_BUTTON_STYLE,
+    action_button_style,
     connect_theme_changed,
     draw_play_icon,
     draw_record_icon,
@@ -67,6 +66,7 @@ from gui.theme import (
     draw_trigger_icon,
     fix_toggle_button_width,
     repolish,
+    trigger_arm_button_style,
 )
 from gui.widgets.channel_table import ChannelTableWidget
 from gui.widgets.spinbox import (
@@ -370,19 +370,19 @@ class SetupView(QWidget):
 
         self._play_button = QPushButton()
         self._play_button.setIconSize(QSize(24, 24))
-        self._play_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._play_button.setStyleSheet(action_button_style())
         self._play_button.clicked.connect(self._on_play_clicked)
         start_row.addWidget(self._play_button)
 
         self._record_button = QPushButton()
         self._record_button.setIconSize(QSize(24, 24))
-        self._record_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._record_button.setStyleSheet(action_button_style())
         self._record_button.clicked.connect(self._on_record_clicked)
         start_row.addWidget(self._record_button)
 
         self._stop_button = QPushButton()
         self._stop_button.setIconSize(QSize(24, 24))
-        self._stop_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._stop_button.setStyleSheet(action_button_style())
         self._stop_button.setEnabled(False)
         self._stop_button.clicked.connect(self.stop_requested.emit)
         start_row.addWidget(self._stop_button)
@@ -402,7 +402,7 @@ class SetupView(QWidget):
         self._trigger_arm_button.setCheckable(True)
         self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._retheme_trigger_arm_button_icon()
-        self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
+        self._trigger_arm_button.setStyleSheet(trigger_arm_button_style())
         # ERST NACH Icon/Stylesheet setzen: `_set_trigger_arm_button_text()`
         # fixiert ueber `fix_toggle_button_width()` die Buttonbreite anhand
         # von `sizeHint()`, der Icon UND Stylesheet-Padding braucht, um

@@ -342,6 +342,13 @@ class Channel:
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
     plot_time_window_seconds: float = 5.0
+    # Ob der eigentliche Kurvenverlauf angezeigt wird (Hauptraster UND
+    # eigenes Fenster) - unabhaengig von `plot_show_value` unten: beide
+    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer),
+    # beide zusammen angeschaltet ist der Standard, NUR dieses Feld aus
+    # zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
+    # `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`).
+    plot_show_graph: bool = True
     # Grosse, aktuelle Messwertanzeige neben dem Subplot im Hauptraster
     # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
     # pro Kanal abschaltbar, da sie bei vielen Kanälen unnötig Platz kostet.
@@ -410,6 +417,7 @@ class Channel:
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
             "plot_time_window_seconds": self.plot_time_window_seconds,
+            "plot_show_graph": self.plot_show_graph,
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
             "plot_value_decimal_digits": self.plot_value_decimal_digits,
@@ -451,6 +459,7 @@ class Channel:
             plot_time_window_seconds=max(
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
             ),
+            plot_show_graph=data.get("plot_show_graph", True),
             plot_show_value=data.get("plot_show_value", True),
             plot_value_integer_digits=max(
                 1, int(data.get("plot_value_integer_digits", 3))

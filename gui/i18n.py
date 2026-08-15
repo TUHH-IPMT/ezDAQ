@@ -136,8 +136,8 @@ _translations = {
         "storage_buffer_group": "Speicherpuffer (Schreib-Rückstand)",
         "duration_value": "Dauer: {value}",
         "sample_rate_value": "Abtastrate: {value}",
-        "menu_channel_display": "Kanal-Darstellung festlegen",
-        "channel_display_dialog_title": "Kanal-Darstellung",
+        "menu_channel_display": "Live-View-Darstellung festlegen",
+        "channel_display_dialog_title": "Live-View-Darstellung",
         "channel_display_no_channels": "Keine Kanäle konfiguriert.",
         "plot_color": "Kurvenfarbe",
         "plot_background": "Hintergrund",
@@ -154,11 +154,24 @@ _translations = {
             "Hauptfenster noch in einem eigenen Fenster) - die Aufzeichnung "
             "selbst ist davon nicht betroffen."
         ),
-        "plot_show_value_checkbox": "Messwert anzeigen",
+        "plot_show_graph_checkbox_tooltip": (
+            "Zeigt den Kurvenverlauf an (Hauptraster und eigenes Fenster) - "
+            "z. B. zusammen mit der Messwertanzeige deaktivierbar, um nur "
+            "die Zahl ohne Diagramm zu sehen."
+        ),
+        "plot_settings_button": "Plot",
+        "plot_settings_button_tooltip": (
+            "Einstellungen für die Plotfläche: Kurven-/Hintergrund-/"
+            "Gitterlinienfarbe, Y-Bereich, Autoskalierung, Zeitspanne."
+        ),
+        "plot_settings_dialog_title": "Plot-Einstellungen",
         "plot_show_value_checkbox_tooltip": (
             "Zeigt den aktuellen Messwert gross neben dem Kurvenverlauf an "
             "(Hauptraster und eigenes Fenster)."
         ),
+        "value_settings_button": "Zahlenwert",
+        "value_settings_button_tooltip": "Einstellungen für die Messwertanzeige: Zahlenformat.",
+        "value_settings_dialog_title": "Zahlenwert-Einstellungen",
         "plot_value_integer_digits": "Zahlenformat",
         "plot_value_integer_digits_tooltip": (
             "Format der Messwertanzeige, z. B. \"000.0000\" (Nullen vor "
@@ -507,8 +520,8 @@ _translations = {
         "storage_buffer_group": "Storage Buffer (Write Backlog)",
         "duration_value": "Duration: {value}",
         "sample_rate_value": "Sample Rate: {value}",
-        "menu_channel_display": "Set Channel Display",
-        "channel_display_dialog_title": "Channel Display",
+        "menu_channel_display": "Set Live View Display",
+        "channel_display_dialog_title": "Live View Display",
         "channel_display_no_channels": "No channels configured.",
         "plot_color": "Curve Color",
         "plot_background": "Background",
@@ -525,11 +538,24 @@ _translations = {
             "window nor in a popout window) - recording itself is not "
             "affected."
         ),
-        "plot_show_value_checkbox": "Show current value",
+        "plot_show_graph_checkbox_tooltip": (
+            "Shows the curve (main grid and popout window) - can be "
+            "disabled together with the value display, e.g. to show only "
+            "the number without a chart."
+        ),
+        "plot_settings_button": "Plot",
+        "plot_settings_button_tooltip": (
+            "Plot area settings: curve/background/grid line color, Y "
+            "range, autoscale, time span."
+        ),
+        "plot_settings_dialog_title": "Plot Settings",
         "plot_show_value_checkbox_tooltip": (
             "Shows the current measured value in large text next to the "
             "curve (main grid and popout window)."
         ),
+        "value_settings_button": "Value",
+        "value_settings_button_tooltip": "Value display settings: number format.",
+        "value_settings_dialog_title": "Value Display Settings",
         "plot_value_integer_digits": "Number Format",
         "plot_value_integer_digits_tooltip": (
             "Format of the value display, e.g. \"000.0000\" (zeros before "

@@ -63,6 +63,17 @@ _PLOT_COLORS = {
 # statt wie ein eigenstaendiges weisses/schwarzes Rechteck zu wirken.
 _PLOT_CONTAINER_COLORS = {"light": "#f0f0f0", "dark": "#353535"}
 
+# Relativ zur App-Standardschriftgroesse (nicht fest codiert, siehe
+# `_AXIS_TICK_FONT_SIZE_INCREASE` fuer denselben Grundsatz) - Play/
+# Aufnahme/Stop/Scharf-Button wirken bei der Standardgroesse etwas klein
+# fuer derart praesente Aktions-Buttons.
+_ACTION_BUTTON_FONT_SIZE_INCREASE = 1
+
+
+def _action_button_font_size_pt() -> int:
+    return QFont().pointSize() + _ACTION_BUTTON_FONT_SIZE_INCREASE
+
+
 # Gemeinsamer Grundstil fuer Play/Aufnahme/Stop UND den Trigger-Scharf-
 # Button (`_trigger_arm_button`) in BEIDEN Ansichten (`gui/setup_view.py`/
 # `gui/live_view.py`) - An einer Stelle definiert, damit sie nicht
@@ -80,40 +91,54 @@ _PLOT_CONTAINER_COLORS = {"light": "#f0f0f0", "dark": "#353535"}
 # dezenten Effekt ueber `palette(midlight)`/`palette(mid)`.
 # Grosszuegigeres Padding als Qt's Standard macht die Buttons insgesamt
 # etwas hoeher/praesenter.
-ACTION_BUTTON_STYLE = (
-    "QPushButton {"
-    "   border: 1px solid palette(dark);"
-    "   border-radius: 4px;"
-    "   padding: 8px 18px;"
-    "   background-color: palette(button);"
-    "   color: palette(button-text);"
-    "}"
-    "QPushButton:hover { background-color: palette(midlight); }"
-    "QPushButton:pressed { background-color: palette(mid); }"
-)
+#
+# ALS FUNKTION statt fester String-Konstante (anders vor dieser Aenderung):
+# `QFont()` (fuer die Schriftgroesse, siehe `_action_button_font_size_pt`)
+# darf erst NACH `QApplication`-Erzeugung aufgerufen werden - `gui/theme.py`
+# wird aber teils schon davor importiert (siehe `gui/i18n.py`-Kommentar
+# zum selben Problem). Aufrufer verwenden daher `action_button_style()`
+# statt einer Modulebene-Konstante.
+def action_button_style() -> str:
+    size = _action_button_font_size_pt()
+    return (
+        "QPushButton {"
+        "   border: 1px solid palette(dark);"
+        "   border-radius: 4px;"
+        "   padding: 8px 18px;"
+        "   background-color: palette(button);"
+        "   color: palette(button-text);"
+        f"   font-size: {size}pt;"
+        "}"
+        "QPushButton:hover { background-color: palette(midlight); }"
+        "QPushButton:pressed { background-color: palette(mid); }"
+    )
 
-# Wie `ACTION_BUTTON_STYLE`, aber zusaetzlich mit einem deutlich sichtbaren
-# "scharf/aktiv"-Zustand (`:checked`, bleibt gedrueckt bis erneut
-# geklickt) - dafuer `palette(highlight)`/`palette(highlighted-text)`
+
+# Wie `action_button_style()`, aber zusaetzlich mit einem deutlich
+# sichtbaren "scharf/aktiv"-Zustand (`:checked`, bleibt gedrueckt bis
+# erneut geklickt) - dafuer `palette(highlight)`/`palette(highlighted-text)`
 # (Qt's dedizierte Rollen fuer genau diesen Zweck: ein hervorgehobenes
 # Element mit garantiert lesbarem Text darauf, in beiden Themes ein
 # kraeftiger Akzentton statt eines neutralen Grautons).
-TRIGGER_ARM_BUTTON_STYLE = (
-    "QPushButton {"
-    "   border: 1px solid palette(dark);"
-    "   border-radius: 4px;"
-    "   padding: 8px 18px;"
-    "   background-color: palette(button);"
-    "   color: palette(button-text);"
-    "}"
-    "QPushButton:hover:!checked { background-color: palette(midlight); }"
-    "QPushButton:pressed:!checked { background-color: palette(mid); }"
-    "QPushButton:checked {"
-    "   background-color: palette(highlight);"
-    "   color: palette(highlighted-text);"
-    "   border-color: palette(highlight);"
-    "}"
-)
+def trigger_arm_button_style() -> str:
+    size = _action_button_font_size_pt()
+    return (
+        "QPushButton {"
+        "   border: 1px solid palette(dark);"
+        "   border-radius: 4px;"
+        "   padding: 8px 18px;"
+        "   background-color: palette(button);"
+        "   color: palette(button-text);"
+        f"   font-size: {size}pt;"
+        "}"
+        "QPushButton:hover:!checked { background-color: palette(midlight); }"
+        "QPushButton:pressed:!checked { background-color: palette(mid); }"
+        "QPushButton:checked {"
+        "   background-color: palette(highlight);"
+        "   color: palette(highlighted-text);"
+        "   border-color: palette(highlight);"
+        "}"
+    )
 
 # Feste (theme-unabhaengige) Symbolfarben fuer die Play-/Aufnahme-Buttons
 # (siehe `draw_play_icon`/`draw_record_icon` unten sowie
