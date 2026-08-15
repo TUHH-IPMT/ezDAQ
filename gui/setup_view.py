@@ -175,7 +175,7 @@ class SetupView(QWidget):
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
         scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        outer_layout.addWidget(scroll_area)
+        outer_layout.addWidget(scroll_area, stretch=1)
 
         content = QWidget()
         scroll_area.setWidget(content)
@@ -413,7 +413,22 @@ class SetupView(QWidget):
         start_row.addWidget(self._trigger_arm_button)
 
         start_row.addWidget(self._status_label, stretch=1)
-        layout.addLayout(start_row)
+        # BEWUSST nicht Teil von `layout` (das scrollt mit dem restlichen
+        # Inhalt) - direkt in `outer_layout`, damit die Buttons IMMER
+        # sichtbar UND an einer festen Position bleiben, unabhaengig vom
+        # Scroll-Zustand/der Menge an Kanaelen/Einstellungen darueber. Als
+        # Nebeneffekt fluchtet die Unterkante dadurch zuverlaessig mit der
+        # Unterkante des Navigationsbereichs links (siehe
+        # `gui/main_window.py::_build_navigation_and_workspace` - beide
+        # sind Geschwister im selben `root_layout` mit gemeinsamem
+        # Rand) - deckungsgleich mit `LiveView`, deren Button-Zeile aus
+        # demselben Grund ganz oben (statt in einem scrollenden Bereich)
+        # sitzt und so mit der Oberkante des Navigationsbereichs fluchtet.
+        # Seitliche/obere Polsterung passend zu `content`s eigenem
+        # Standardrand, aber KEIN unterer Rand - der wuerde die
+        # Flucht-Garantie sonst wieder zunichtemachen.
+        start_row.setContentsMargins(9, 8, 9, 0)
+        outer_layout.addLayout(start_row)
 
         self._apply_section_header_emphasis()
 
