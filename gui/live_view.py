@@ -98,6 +98,7 @@ from gui.theme import (
     draw_record_icon,
     draw_stop_icon,
     draw_trigger_icon,
+    fix_toggle_button_width,
     is_theme_default_plot_background,
     plot_background_color,
     plot_container_background_color,
@@ -904,7 +905,6 @@ class LiveView(QWidget):
         # ist (siehe `set_trigger_arm_available`).
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
-        self._set_trigger_arm_button_text()
         self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
         self._trigger_arm_button.setVisible(False)
@@ -938,6 +938,11 @@ class LiveView(QWidget):
 
         self._retheme_action_button_icons()
         self._update_action_button_labels()
+        # ERST NACH Icon/Stylesheet setzen: `_set_trigger_arm_button_text()`
+        # fixiert ueber `fix_toggle_button_width()` die Buttonbreite anhand
+        # von `sizeHint()`, der Icon UND Stylesheet-Padding braucht, um
+        # korrekt zu messen.
+        self._set_trigger_arm_button_text()
 
         # Play/Aufnahme/Stop (+ Scharf-Button) links, die laufenden
         # Messwerte (Dauer/Abtastrate) direkt daneben - vorher rechts vom
@@ -1330,6 +1335,11 @@ class LiveView(QWidget):
     def _set_trigger_arm_button_text(self) -> None:
         key = "trigger_disarm_button" if self._trigger_arm_button.isChecked() else "trigger_arm_button"
         self._trigger_arm_button.setText(f"  {t(key)}")
+        fix_toggle_button_width(
+            self._trigger_arm_button,
+            f"  {t('trigger_arm_button')}",
+            f"  {t('trigger_disarm_button')}",
+        )
 
     def _on_trigger_arm_button_toggled(self, checked: bool) -> None:
         self._set_trigger_arm_button_text()

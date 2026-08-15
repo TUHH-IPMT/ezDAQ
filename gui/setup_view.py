@@ -65,6 +65,7 @@ from gui.theme import (
     draw_record_icon,
     draw_stop_icon,
     draw_trigger_icon,
+    fix_toggle_button_width,
     repolish,
 )
 from gui.widgets.channel_table import ChannelTableWidget
@@ -399,10 +400,14 @@ class SetupView(QWidget):
         # `set_trigger_arm_available`).
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
-        self._set_trigger_arm_button_text()
         self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._retheme_trigger_arm_button_icon()
         self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
+        # ERST NACH Icon/Stylesheet setzen: `_set_trigger_arm_button_text()`
+        # fixiert ueber `fix_toggle_button_width()` die Buttonbreite anhand
+        # von `sizeHint()`, der Icon UND Stylesheet-Padding braucht, um
+        # korrekt zu messen.
+        self._set_trigger_arm_button_text()
         self._trigger_arm_button.setVisible(False)
         self._trigger_arm_button.toggled.connect(self._on_trigger_arm_button_toggled)
         start_row.addWidget(self._trigger_arm_button)
@@ -819,6 +824,11 @@ class SetupView(QWidget):
     def _set_trigger_arm_button_text(self) -> None:
         key = "trigger_disarm_button" if self._trigger_arm_button.isChecked() else "trigger_arm_button"
         self._trigger_arm_button.setText(f"  {t(key)}")
+        fix_toggle_button_width(
+            self._trigger_arm_button,
+            f"  {t('trigger_arm_button')}",
+            f"  {t('trigger_disarm_button')}",
+        )
 
     def _retheme_start_button_icons(self) -> None:
         # Play/Aufnahme haben feste, theme-unabhaengige Symbolfarben (siehe

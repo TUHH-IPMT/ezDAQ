@@ -303,6 +303,30 @@ def repolish(widget) -> None:
     widget.update()
 
 
+def fix_toggle_button_width(button, *texts: str) -> None:
+    """Verhindert eine Breitenaenderung eines Buttons, dessen Text sich zur
+    Laufzeit aendert (z. B. der Trigger-Scharf-Button - "Trigger scharf
+    schalten" vs. "Trigger entschärfen" sind unterschiedlich lang, ein
+    Umschalten liess den Button bisher sichtbar in der Breite springen).
+
+    Setzt testweise JEDEN uebergebenen Text, misst dabei `sizeHint()`
+    (beruecksichtigt automatisch Icon/Padding/Rahmen aus dem aktuell
+    gesetzten Stylesheet, statt diese Werte hier per Hand nachzubilden)
+    und fixiert die Breite auf den breitesten Kandidaten. `texts` muessen
+    bereits fertig formatiert sein (inkl. z. B. fuehrender Leerzeichen fuer
+    den Icon-Abstand) - der Aufrufer ruft dies nach JEDER Textaenderung
+    erneut auf (auch nach einem Sprachwechsel), da sich die Breite pro
+    Sprache unterscheidet.
+    """
+    original_text = button.text()
+    widest = 0
+    for text in texts:
+        button.setText(text)
+        widest = max(widest, button.sizeHint().width())
+    button.setText(original_text)
+    button.setFixedWidth(widest)
+
+
 # ---------------------------------------------------------------------- #
 # Einfache, selbst gezeichnete Navigations-Icons
 # ---------------------------------------------------------------------- #
