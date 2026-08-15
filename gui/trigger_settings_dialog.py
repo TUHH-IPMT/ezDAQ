@@ -44,7 +44,7 @@ from PyQt6.QtWidgets import (
 from data.models import Channel, TriggerCondition, TriggerConfig, TriggerDirection, TriggerKind
 from gui.i18n import t
 from gui.serial_trigger import SerialTriggerListener
-from gui.widgets.spinbox import PrecisionDoubleSpinBox
+from gui.widgets.spinbox import NoWheelDoubleSpinBox, PrecisionDoubleSpinBox
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,18 @@ class TriggerSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(t("trigger_settings_dialog_title"))
         self._channels = channels
+        # `auto_rearm` wird nicht mehr hier im Dialog gesteuert, sondern
+        # über den Scharf-Button neben "Messung starten" (siehe
+        # `gui/setup_view.py::_trigger_arm_button`/
+        # `gui/main_window.py::_on_trigger_arm_toggled`) - dieser Dialog
+        # reicht den beim Öffnen aktuellen Wert unverändert durch, damit
+        # ein Speichern anderer Trigger-Einstellungen ihn nicht überschreibt.
+        self._auto_rearm = trigger_config.auto_rearm
         self._test_listener: SerialTriggerListener | None = None
+        # (label, port, baud_rate, message) des laufenden Tests - erlaubt
+        # `_rearm_test_listener()` nach einem Treffer einen frischen
+        # Listener mit denselben Parametern zu starten, siehe dort.
+        self._active_test_condition: tuple[str, str, int, str] | None = None
         self._result: TriggerConfig | None = None
 
         layout = QVBoxLayout(self)
@@ -209,7 +220,7 @@ class TriggerSettingsDialog(QDialog):
         threshold_form.addRow(f"{t('trigger_direction_label')}:", direction_combo)
         pretrigger_spin: QDoubleSpinBox | None = None
         if show_pretrigger:
-            pretrigger_spin = QDoubleSpinBox()
+            pretrigger_spin = NoWheelDoubleSpinBox()
             pretrigger_spin.setRange(0.0, 3600.0)
             pretrigger_spin.setDecimals(1)
             threshold_form.addRow(
@@ -349,6 +360,14 @@ class TriggerSettingsDialog(QDialog):
             self._append_log(t("error_trigger_serial_invalid_baud"))
             return
 
+        self._active_test_condition = (label, port, baud_rate, message)
+        self._append_log(f"--- {label}: {port} @ {baud_rate} ---")
+        self._start_test_listener()
+
+    def _start_test_listener(self) -> None:
+        """Startet einen frischen `SerialTriggerListener` für
+        `self._active_test_condition` (muss vorher gesetzt sein)."""
+        _label, port, baud_rate, message = self._active_test_condition
         listener = SerialTriggerListener(port, baud_rate, message.encode("utf-8"))
         listener.data_received.connect(self._on_test_data_received)
         listener.message_matched.connect(self._on_test_message_matched)
@@ -356,13 +375,13 @@ class TriggerSettingsDialog(QDialog):
         self._test_listener = listener
         listener.start()
         self._test_toggle_button.setText(t("trigger_test_stop_button"))
-        self._append_log(f"--- {label}: {port} @ {baud_rate} ---")
 
     def _stop_test_listener(self) -> None:
         if self._test_listener is not None:
             self._test_listener.stop()
             self._test_listener.deleteLater()
             self._test_listener = None
+        self._active_test_condition = None
         self._test_toggle_button.setText(t("trigger_test_start_button"))
 
     def _on_test_data_received(self, chunk: bytes) -> None:
@@ -370,6 +389,24 @@ class TriggerSettingsDialog(QDialog):
 
     def _on_test_message_matched(self) -> None:
         self._append_log(f"*** {t('trigger_test_matched_log')} ***")
+        self._rearm_test_listener()
+
+    def _rearm_test_listener(self) -> None:
+        """Baut nach einem Treffer automatisch einen frischen Listener auf.
+
+        `SerialTriggerListener` ist bewusst Single-Shot (siehe
+        `gui/serial_trigger.py`) - für eine echte Messung ist das richtig
+        (einmal ausgelöst, fertig). Im Testbereich soll man dagegen die
+        Überbrückung beliebig oft hintereinander auslösen können, ohne
+        "Test starten" jedes Mal erneut klicken zu müssen.
+        """
+        old_listener = self._test_listener
+        self._test_listener = None
+        if old_listener is not None:
+            old_listener.stop()
+            old_listener.deleteLater()
+        if self._active_test_condition is not None:
+            self._start_test_listener()
 
     def _on_test_connection_failed(self, message: str) -> None:
         self._append_log(f"!!! {message} !!!")
@@ -400,7 +437,12 @@ class TriggerSettingsDialog(QDialog):
             if self._start_widgets.pretrigger_spin is not None
             else 5.0
         )
-        self._result = TriggerConfig(start=start, stop=stop, pretrigger_seconds=pretrigger_seconds)
+        self._result = TriggerConfig(
+            start=start,
+            stop=stop,
+            pretrigger_seconds=pretrigger_seconds,
+            auto_rearm=self._auto_rearm,
+        )
         self._stop_test_listener()
         super().accept()
 

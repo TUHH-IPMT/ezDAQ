@@ -55,9 +55,18 @@ from data.models import (
     StorageFormat,
 )
 from gui.i18n import connect_language_changed, t
-from gui.theme import connect_theme_changed, draw_play_icon
+from gui.theme import (
+    TRIGGER_ARM_BUTTON_STYLE,
+    connect_theme_changed,
+    draw_play_icon,
+    draw_trigger_icon,
+)
 from gui.widgets.channel_table import ChannelTableWidget
-from gui.widgets.spinbox import PrecisionDoubleSpinBox
+from gui.widgets.spinbox import (
+    GroupedDoubleSpinBox,
+    NoWheelSpinBox,
+    PrecisionDoubleSpinBox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +128,9 @@ class SetupView(QWidget):
     open_ni_max_requested = pyqtSignal()
     start_measurement_requested = pyqtSignal(object)  # MeasurementConfig
     storage_path_requested = pyqtSignal()
+    # Nutzer hat den Scharf-Button geklickt (siehe `_trigger_arm_button`) -
+    # bool = neuer Zustand (True = scharf schalten, False = entschärfen).
+    trigger_arm_toggled = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -197,7 +209,7 @@ class SetupView(QWidget):
         self._measurement_group = QGroupBox()
         self._measurement_layout = QFormLayout(self._measurement_group)
 
-        self._sample_rate_spin = QDoubleSpinBox()
+        self._sample_rate_spin = GroupedDoubleSpinBox()
         self._sample_rate_spin.setRange(1.0, 100_000.0)
         self._sample_rate_spin.setDecimals(1)
         self._sample_rate_spin.setSingleStep(100.0)
@@ -262,7 +274,7 @@ class SetupView(QWidget):
         self._naming_number_checkbox = QCheckBox(t("naming_number_suffix"))
         self._naming_number_checkbox.setChecked(settings.name_use_number_suffix)
         self._naming_digits_label = QLabel(f"{t('naming_digits')}:")
-        self._naming_digits_spin = QSpinBox()
+        self._naming_digits_spin = NoWheelSpinBox()
         self._naming_digits_spin.setRange(1, 6)
         self._naming_digits_spin.setValue(settings.name_number_suffix_digits)
         self._naming_digits_spin.setEnabled(settings.name_use_number_suffix)
@@ -302,7 +314,7 @@ class SetupView(QWidget):
         self._storage_layout.addRow("", self._recording_unlimited_checkbox)
 
         recording_limit_row = QHBoxLayout()
-        self._recording_stop_spin = QSpinBox()
+        self._recording_stop_spin = NoWheelSpinBox()
         self._recording_stop_spin.setRange(1, 1_000_000_000)
         self._recording_stop_spin.setValue(
             max(1, int(configuration_manager.settings.last_recording_stop_value))
@@ -343,6 +355,25 @@ class SetupView(QWidget):
         )
         self._start_button.clicked.connect(self._on_start_clicked)
         start_row.addWidget(self._start_button)
+
+        # Scharf-Button: aktiviert den unbeaufsichtigten Trigger-Zyklus
+        # (scharf schalten -> warten -> aufzeichnen -> Stopp -> automatisch
+        # wieder scharf schalten, siehe `TriggerConfig.auto_rearm` und
+        # `gui/main_window.py::_on_trigger_arm_toggled`) - bleibt gedrückt,
+        # bis er erneut geklickt wird ("entschärfen"), unabhängig davon wie
+        # oft der Zyklus zwischenzeitlich automatisch durchläuft. Nur
+        # sichtbar, wenn tatsächlich ein Trigger konfiguriert ist (siehe
+        # `set_trigger_arm_available`).
+        self._trigger_arm_button = QPushButton()
+        self._trigger_arm_button.setCheckable(True)
+        self._set_trigger_arm_button_text()
+        self._trigger_arm_button.setIconSize(QSize(18, 18))
+        self._retheme_trigger_arm_button_icon()
+        self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
+        self._trigger_arm_button.setVisible(False)
+        self._trigger_arm_button.toggled.connect(self._on_trigger_arm_button_toggled)
+        start_row.addWidget(self._trigger_arm_button)
+
         start_row.addWidget(self._status_label, stretch=1)
         layout.addLayout(start_row)
 
@@ -355,6 +386,7 @@ class SetupView(QWidget):
 
         connect_language_changed(self.retranslate_ui)
         connect_theme_changed(self._retheme_start_button_icon)
+        connect_theme_changed(self._retheme_trigger_arm_button_icon)
 
     # ------------------------------------------------------------------ #
     # Öffentliche API (von main_window.py aufgerufen)
@@ -386,6 +418,7 @@ class SetupView(QWidget):
         if not self._storage_path_is_set:
             self._storage_path_label.setText(t("no_storage_location"))
         self._set_start_button_text()
+        self._set_trigger_arm_button_text()
         self._status_label.setText(t(self._status_reason_key))
         self._populate_storage_format_combo(self._storage_format_combo.currentData())
 
@@ -535,8 +568,39 @@ class SetupView(QWidget):
         einen Sprachwechsel übersteht (siehe `retranslate_ui`).
         """
         self._start_button.setEnabled(enabled)
+        # Der Scharf-Button folgt demselben Enabled-Zustand wie der
+        # Start-Button - AUSSER er ist selbst gerade aktiv (durchlaeuft
+        # einen automatischen Zyklus, siehe `trigger_arm_toggled`): dann
+        # muss er immer klickbar bleiben, damit "entschärfen" jederzeit
+        # funktioniert, auch während die Messung läuft.
+        if not self._trigger_arm_button.isChecked():
+            self._trigger_arm_button.setEnabled(enabled)
         self._status_reason_key = reason
         self._status_label.setText(t(reason))
+
+    def set_trigger_arm_available(self, available: bool) -> None:
+        """Blendet den Scharf-Button ein/aus (siehe `main_window.py`, nach
+        jeder Änderung der Trigger-Einstellungen aufgerufen) - ohne
+        konfigurierten Start- oder Stopp-Trigger gäbe es nichts zum
+        Scharfschalten. Wird der Button dabei ausgeblendet, während er
+        noch gedrückt war, wird er zusätzlich sauber zurückgesetzt (ohne
+        das `trigger_arm_toggled`-Signal erneut auszulösen)."""
+        self._trigger_arm_button.setVisible(available)
+        if not available and self._trigger_arm_button.isChecked():
+            self.set_trigger_armed(False)
+
+    def set_trigger_armed(self, armed: bool) -> None:
+        """Setzt den Scharf-Button-Zustand PROGRAMMATISCH (z. B. wenn
+        `main_window.py` wegen eines Fehlers entschärft) - blockt dabei
+        `toggled`, damit das nicht fälschlich als erneuter Nutzerklick
+        (`trigger_arm_toggled`) interpretiert wird."""
+        self._trigger_arm_button.blockSignals(True)
+        self._trigger_arm_button.setChecked(armed)
+        self._trigger_arm_button.blockSignals(False)
+        self._set_trigger_arm_button_text()
+
+    def is_trigger_armed(self) -> bool:
+        return self._trigger_arm_button.isChecked()
 
     def set_storage_path(self, path: str | None) -> None:
         self._storage_path_is_set = bool(path)
@@ -704,6 +768,14 @@ class SetupView(QWidget):
             return
         self.start_measurement_requested.emit(config)
 
+    def _on_trigger_arm_button_toggled(self, checked: bool) -> None:
+        self._set_trigger_arm_button_text()
+        self.trigger_arm_toggled.emit(checked)
+
+    def _set_trigger_arm_button_text(self) -> None:
+        key = "trigger_disarm_button" if self._trigger_arm_button.isChecked() else "trigger_arm_button"
+        self._trigger_arm_button.setText(f"  {t(key)}")
+
     def _retheme_start_button_icon(self) -> None:
         # Fester Hintergrund (Dunkelgruen, siehe Stylesheet oben) unabhaengig
         # vom Theme - das Icon braucht daher IMMER Weiss statt der sonst
@@ -711,6 +783,13 @@ class SetupView(QWidget):
         # und auf dem dunkelgruenen Grund kaum zu erkennen).
         self._start_button.setIcon(
             QIcon(draw_play_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
+        )
+
+    def _retheme_trigger_arm_button_icon(self) -> None:
+        # Gleicher Grund wie beim Start-Button: fester grauer Hintergrund,
+        # Icon daher immer Weiss (siehe `_retheme_start_button_icon`).
+        self._trigger_arm_button.setIcon(
+            QIcon(draw_trigger_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
         )
 
     def _set_start_button_text(self) -> None:

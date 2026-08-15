@@ -68,6 +68,8 @@ _translations = {
         "trigger_direction_falls_below": "Fällt unter Schwelle",
         "trigger_direction_abs_exceeds": "Betrag überschreitet Schwelle",
         "trigger_pretrigger_seconds_label": "Vorlaufzeit [s]",
+        "trigger_arm_button": "Trigger scharf schalten",
+        "trigger_disarm_button": "Trigger entschärfen",
         "trigger_serial_port_label": "COM-Port",
         "trigger_serial_refresh_button": "Aktualisieren",
         "trigger_serial_baud_label": "Baudrate",
@@ -136,6 +138,7 @@ _translations = {
         "channel_display_no_channels": "Keine Kanäle konfiguriert.",
         "plot_color": "Kurvenfarbe",
         "plot_background": "Hintergrund",
+        "plot_grid_color": "Gitterlinien",
         "autoscale_checkbox": "Autoskalierung",
         "autoscale_checkbox_tooltip": (
             "Nutzt den festgelegten Bereich, solange die Messwerte darin "
@@ -153,10 +156,12 @@ _translations = {
             "Zeigt den aktuellen Messwert gross neben dem Kurvenverlauf an "
             "(Hauptraster und eigenes Fenster)."
         ),
-        "plot_value_integer_digits": "Vorkommastellen",
+        "plot_value_integer_digits": "Zahlenformat",
         "plot_value_integer_digits_tooltip": (
-            "Anzahl der Vorkommastellen der Messwertanzeige (3 "
-            "Nachkommastellen sind fest). Passt ein Wert nicht hinein, "
+            "Format der Messwertanzeige, z. B. \"000.0000\" (Nullen vor "
+            "dem Punkt = Vorkommastellen, danach = Nachkommastellen - der "
+            "Punkt inkl. Nachkommastellen kann auch ganz weggelassen "
+            "werden). Passt ein Wert nicht in die Vorkommastellen, "
             "erscheinen statt einer abgeschnittenen Zahl Rauten (#) - wie "
             "bei einer DIAdem/LabVIEW-Digitalanzeige."
         ),
@@ -431,6 +436,8 @@ _translations = {
         "trigger_direction_falls_below": "Falls below threshold",
         "trigger_direction_abs_exceeds": "Magnitude exceeds threshold",
         "trigger_pretrigger_seconds_label": "Pre-Trigger Time [s]",
+        "trigger_arm_button": "Arm Trigger",
+        "trigger_disarm_button": "Disarm Trigger",
         "trigger_serial_port_label": "COM Port",
         "trigger_serial_refresh_button": "Refresh",
         "trigger_serial_baud_label": "Baud Rate",
@@ -499,6 +506,7 @@ _translations = {
         "channel_display_no_channels": "No channels configured.",
         "plot_color": "Curve Color",
         "plot_background": "Background",
+        "plot_grid_color": "Grid Lines",
         "autoscale_checkbox": "Autoscale",
         "autoscale_checkbox_tooltip": (
             "Uses the configured range as long as the measured values stay "
@@ -516,12 +524,14 @@ _translations = {
             "Shows the current measured value in large text next to the "
             "curve (main grid and popout window)."
         ),
-        "plot_value_integer_digits": "Integer digits",
+        "plot_value_integer_digits": "Number Format",
         "plot_value_integer_digits_tooltip": (
-            "Number of integer digits in the value display (3 decimal "
-            "places are fixed). If a value doesn't fit, hash signs (#) "
-            "are shown instead of a truncated number - like a "
-            "DIAdem/LabVIEW digital display."
+            "Format of the value display, e.g. \"000.0000\" (zeros before "
+            "the dot = integer digits, after = decimal digits - the dot "
+            "plus decimal digits can also be left out entirely). If a "
+            "value doesn't fit the integer digits, hash signs (#) are "
+            "shown instead of a truncated number - like a DIAdem/LabVIEW "
+            "digital display."
         ),
         "popout_button": "Popout Window",
         "popout_button_tooltip": (

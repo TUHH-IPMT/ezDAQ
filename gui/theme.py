@@ -25,7 +25,7 @@ from typing import Callable, Optional
 
 import pyqtgraph as pg
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
 
 _current_theme = "light"
 
@@ -41,6 +41,29 @@ _PLOT_COLORS = {
     "light": {"background": "#ffffff", "foreground": "#000000", "curve": "#1565c0"},
     "dark": {"background": "#232323", "foreground": "#e0e0e0", "curve": "#64b5f6"},
 }
+
+# Hintergrundfarbe des Plot-CONTAINERS (Achsentick-Rand, Zwischenraeume
+# zwischen Subplots, Messwertanzeige-Boxen) - bewusst NICHT dieselbe wie
+# `_PLOT_COLORS[...]["background"]` (das bleibt reserviert fuer die
+# eigentliche Plotflaeche, wo Daten/Kurven landen, siehe
+# `_channel_background_color` in gui/live_view.py). Entspricht exakt
+# `QPalette.ColorRole.Window` aus `_build_light_palette`/
+# `_build_dark_palette` unten, damit der Rand der Plot-Widgets optisch mit
+# dem Rest der App-Oberflaeche (Fenster-/Panel-Hintergrund) verschmilzt,
+# statt wie ein eigenstaendiges weisses/schwarzes Rechteck zu wirken.
+_PLOT_CONTAINER_COLORS = {"light": "#f0f0f0", "dark": "#353535"}
+
+# Gleiche Form/Padding/Schrift wie der gruene "Messung starten"-Button
+# (siehe `gui/setup_view.py`/`gui/live_view.py`), nur grau statt gruen -
+# fuer den Trigger-Scharf-Button (`_trigger_arm_button`), der in BEIDEN
+# Ansichten identisch aussehen soll. An einer Stelle definiert, damit
+# beide nicht auseinanderlaufen koennen.
+TRIGGER_ARM_BUTTON_STYLE = (
+    "QPushButton { background-color: #5f6368; color: #f9fafb; border: none;"
+    " padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
+    "QPushButton:hover { background-color: #4d5054; }"
+    "QPushButton:pressed, QPushButton:checked { background-color: #3c3f42; }"
+)
 
 
 def _build_light_palette() -> QPalette:
@@ -116,7 +139,10 @@ def init_theme(app) -> None:
     """
     app.setStyle("Fusion")
     app.setPalette(_PALETTES[_current_theme]())
-    pg.setConfigOption("background", _PLOT_COLORS[_current_theme]["background"])
+    # Globaler PyQtGraph-Default fuer neu erzeugte Widgets, BEVOR
+    # `style_plot_container()` explizit greift - Fenster-Hintergrundfarbe
+    # (siehe dort), nicht die Plotflaechen-Farbe.
+    pg.setConfigOption("background", _PLOT_CONTAINER_COLORS[_current_theme])
     pg.setConfigOption("foreground", _PLOT_COLORS[_current_theme]["foreground"])
 
 
@@ -144,6 +170,13 @@ def plot_background_color() -> str:
     return _PLOT_COLORS[_current_theme]["background"]
 
 
+def plot_container_background_color() -> str:
+    """Hintergrundfarbe für den Plot-CONTAINER (alles außer der eigentlichen
+    Plotfläche, siehe `_PLOT_CONTAINER_COLORS`) - für die Messwertanzeige-
+    Boxen (siehe `gui/live_view.py`) UND `style_plot_container()`."""
+    return _PLOT_CONTAINER_COLORS[_current_theme]
+
+
 def is_theme_default_plot_background(color: str | None) -> bool:
     """Erkennt gespeicherte Plot-Hintergründe aus einem Theme-Default.
 
@@ -157,13 +190,30 @@ def is_theme_default_plot_background(color: str | None) -> bool:
 
 def style_plot_container(widget) -> None:
     """Setzt den Hintergrund eines PyQtGraph-Containers (`PlotWidget` oder
-    `GraphicsLayoutWidget`) auf die aktuelle Theme-Hintergrundfarbe."""
-    widget.setBackground(_PLOT_COLORS[_current_theme]["background"])
+    `GraphicsLayoutWidget`) auf die Fenster-Hintergrundfarbe (siehe
+    `plot_container_background_color()`) - NICHT auf die Plotflächen-Farbe,
+    die bleibt der eigentlichen Datenfläche (ViewBox) vorbehalten."""
+    widget.setBackground(_PLOT_CONTAINER_COLORS[_current_theme])
+
+
+# PyQtGraph rendert Achsenticks standardmaessig in der App-Standard-
+# Schriftgroesse - auf den eng gepackten Achsen der Live-/Analyse-Plots
+# wirkt das unnoetig klein. `+2pt` relativ zur Standardgroesse (statt
+# einer festen Punktgroesse), damit eine System-Schriftgroessen-Aenderung
+# weiterhin respektiert wird.
+_AXIS_TICK_FONT_SIZE_INCREASE = 2
+
+
+def _axis_tick_font() -> QFont:
+    font = QFont()
+    font.setPointSize(font.pointSize() + _AXIS_TICK_FONT_SIZE_INCREASE)
+    return font
 
 
 def style_plot_item(plot_item) -> None:
     """Färbt Achsen und Titel eines einzelnen PyQtGraph-`PlotItem` im
-    aktuellen Theme.
+    aktuellen Theme und vergrössert die Achsentick-Beschriftung leicht
+    (siehe `_axis_tick_font`).
 
     Nötig, weil bereits erzeugte `PlotItem`s die globalen
     `pg.setConfigOption(...)`-Werte NICHT rückwirkend übernehmen - nur neu
@@ -173,11 +223,13 @@ def style_plot_item(plot_item) -> None:
     Achsen bereits per `axis.setTextPen(...)` umgefärbt wurden.
     """
     foreground = _PLOT_COLORS[_current_theme]["foreground"]
+    tick_font = _axis_tick_font()
     for axis_name in ("left", "bottom", "right", "top"):
         axis = plot_item.getAxis(axis_name)
         if axis is not None:
             axis.setPen(foreground)
             axis.setTextPen(foreground)
+            axis.setTickFont(tick_font)
     if plot_item.titleLabel.text:
         plot_item.setTitle(plot_item.titleLabel.text, color=foreground)
 
@@ -293,6 +345,38 @@ def draw_play_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None =
         ]
     )
     painter.drawPolygon(triangle)
+    painter.end()
+    return pixmap
+
+
+def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
+    """Blitz-Symbol für den Trigger-Scharf-Button (`_trigger_arm_button` in
+    `gui/setup_view.py`/`gui/live_view.py`) - das gebräuchliche Zeichen für
+    "Trigger" (z. B. auch bei Oszilloskopen).
+
+    `y_offset`/`color` wie bei `draw_play_icon` - der Button hat einen fest
+    codierten grauen Hintergrund unabhängig vom Theme, das Icon braucht
+    daher ebenso IMMER Weiß statt der sonst theme-abhängigen
+    `nav_icon_color()`.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color if color is not None else nav_icon_color())
+    m = size * 0.14
+    w = size - 2 * m
+    h = size - 2 * m
+    y = float(y_offset)
+    bolt = QPolygonF(
+        [
+            QPointF(m + w * 0.58, m + y),
+            QPointF(m + w * 0.14, m + h * 0.58 + y),
+            QPointF(m + w * 0.42, m + h * 0.58 + y),
+            QPointF(m + w * 0.32, m + h * 1.0 + y),
+            QPointF(m + w * 0.86, m + h * 0.38 + y),
+            QPointF(m + w * 0.55, m + h * 0.38 + y),
+        ]
+    )
+    painter.drawPolygon(bolt)
     painter.end()
     return pixmap
 
@@ -547,7 +631,7 @@ def set_theme(theme: str) -> None:
     if app is not None:
         app.setPalette(_PALETTES[theme]())
 
-    pg.setConfigOption("background", _PLOT_COLORS[theme]["background"])
+    pg.setConfigOption("background", _PLOT_CONTAINER_COLORS[theme])
     pg.setConfigOption("foreground", _PLOT_COLORS[theme]["foreground"])
 
     _get_signals().theme_changed.emit(theme)

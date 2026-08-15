@@ -118,6 +118,10 @@ class MainWindow(QMainWindow):
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
+        # Verhindert, dass eine automatische Neubewaffnung
+        # (`TriggerConfig.auto_rearm`) beim Schließen der App eine neue
+        # Messung startet (siehe `closeEvent`/`_on_stop_measurement`).
+        self._closing = False
 
         # Zustand fuer automatische Mess-Trigger (siehe
         # `data/models.py::TriggerConfig`, `_on_start_measurement`). Besitzt
@@ -159,9 +163,17 @@ class MainWindow(QMainWindow):
         self._setup_view.open_ni_max_requested.connect(self._on_open_ni_max)
         self._setup_view.start_measurement_requested.connect(self._on_start_measurement)
         self._setup_view.storage_path_requested.connect(self._on_choose_storage_path)
+        self._setup_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
         self._live_view.stop_requested.connect(self._on_stop_measurement)
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
+        self._live_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
+
+        # Scharf-Button (Setup UND Live-Ansicht) nur sichtbar, wenn beim
+        # Start bereits ein Trigger konfiguriert/geladen ist (siehe
+        # `_on_open_trigger_settings_dialog` für Aktualisierung nach einer
+        # Änderung).
+        self._update_trigger_arm_available()
 
         # DAQ-Thread-Fehler thread-sicher in den GUI-Thread bringen
         self._acquisition_error_signal.connect(self._on_acquisition_error_gui)
@@ -444,7 +456,9 @@ class MainWindow(QMainWindow):
         Argument: die Live View kennt ihre Kanäle erst, sobald eine
         Messung tatsächlich läuft (`start_display()`) - die Darstellung
         soll aber schon vorher, direkt nach dem Konfigurieren im Setup,
-        einstellbar sein.
+        einstellbar sein - AUCH für Kanäle, die noch keinen zugewiesenen
+        Hardwarekanal haben (siehe `gui/live_view.py::_channel_display_key`
+        für die dafür nötige Schlüssel-Behandlung).
         """
         channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
         settings = self._live_view.open_channel_display_dialog(channels)
@@ -476,6 +490,18 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._trigger_config = dialog.results()
             self._configuration_manager.update_last_trigger_settings(self._trigger_config)
+            self._update_trigger_arm_available()
+
+    def _update_trigger_arm_available(self) -> None:
+        """Blendet den Scharf-Button in BEIDEN Ansichten (Setup und Live)
+        synchron ein/aus - siehe `SetupView.set_trigger_arm_available`/
+        `LiveView.set_trigger_arm_available`."""
+        available = (
+            self._trigger_config.start.kind != TriggerKind.NONE
+            or self._trigger_config.stop.kind != TriggerKind.NONE
+        )
+        self._setup_view.set_trigger_arm_available(available)
+        self._live_view.set_trigger_arm_available(available)
 
     def _build_status_bar(self) -> None:
         self._status_label = QLabel(t("ready"))
@@ -598,7 +624,9 @@ class MainWindow(QMainWindow):
         # Live View schon beim Wechsel dorthin mit den aktuell im Setup
         # konfigurierten Kanälen "vorbelegen" (Plot-Fenster stehen dann
         # schon bereit, statt erst nach dem Messstart) - nur ohne laufende
-        # Messung, siehe `LiveView.preview_channels`.
+        # Messung, siehe `LiveView.preview_channels`. Funktioniert
+        # ausdrücklich AUCH für Kanäle ohne zugewiesenen Hardwarekanal
+        # (noch keine Hardware angeschlossen).
         if row == _VIEW_LIVE and not self._controller.is_running:
             channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
             self._live_view.preview_channels(channels)
@@ -729,6 +757,12 @@ class MainWindow(QMainWindow):
             logger.exception("Messung konnte nicht gestartet werden")
             self._setup_view.show_error(f"{t('cannot_start_measurement')}:\n{exc}")
             return
+
+        logger.info(
+            "_on_start_measurement: %d aktive Kanaele vom Controller nach Start: %s",
+            len(self._controller.active_channels),
+            [c.hardware_channel for c in self._controller.active_channels],
+        )
 
         self._configuration_manager.update_last_measurement_parameters(
             measurement_name=requested_measurement_name,
@@ -906,6 +940,11 @@ class MainWindow(QMainWindow):
         self._recording_started = False
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
+        # Scharf-Button darf nicht gedrueckt bleiben - es wird nichts mehr
+        # automatisch neu versucht (ein kaputter Port bliebe sonst kaputt).
+        self._setup_view.set_trigger_armed(False)
+        self._live_view.set_trigger_armed(False)
+        self._trigger_config.auto_rearm = False
         self._status_label.setText(t("ready"))
         QMessageBox.warning(self, t("trigger_connection_failed_title"), message)
         self._set_nav_index(_VIEW_SETUP)
@@ -934,6 +973,48 @@ class MainWindow(QMainWindow):
         if config is None:
             return
         self._on_start_measurement(config)
+
+    def _on_trigger_arm_toggled(self, checked: bool) -> None:
+        """Reagiert auf den Scharf-Button (Setup- UND Live-Ansicht besitzen
+        je ein eigenes, aber gleichbedeutendes Exemplar - siehe
+        `gui/setup_view.py`/`gui/live_view.py::_trigger_arm_button`).
+
+        Scharf schalten (checked=True) startet SOFORT den ersten Zyklus UND
+        setzt `TriggerConfig.auto_rearm`, sodass `_on_stop_measurement`
+        nach JEDEM Stopp (manuell, per Trigger oder Aufnahme-Limit)
+        automatisch neu startet - beide Buttons bleiben dabei die ganze
+        Zeit gedrückt, unabhängig davon wie oft der Zyklus zwischenzeitlich
+        automatisch durchläuft. Entschärfen (checked=False) beendet die
+        automatische Neubewaffnung UND eine gerade laufende/scharfe
+        Messung sofort - das ist der einzige Weg, den Zyklus wirklich zu
+        beenden (ein einzelner manueller Stopp reicht dafür bewusst NICHT,
+        siehe `_on_stop_measurement`).
+        """
+        self._trigger_config.auto_rearm = checked
+        # Beide Buttons synchron halten, egal welcher den Klick ausgelöst
+        # hat - `set_trigger_armed()` blockt dabei `toggled`, damit kein
+        # Rueckkopplungs-Loop entsteht (siehe dortige Doku).
+        self._setup_view.set_trigger_armed(checked)
+        self._live_view.set_trigger_armed(checked)
+
+        if checked:
+            config = self._setup_view.build_current_config()
+            if config is None:
+                # Ungueltige Konfiguration (z. B. kein aktiver Kanal) -
+                # Button darf nicht gedrueckt bleiben, es passiert ja nichts.
+                self._setup_view.set_trigger_armed(False)
+                self._live_view.set_trigger_armed(False)
+                self._trigger_config.auto_rearm = False
+                return
+            self._on_start_measurement(config)
+            if not self._controller.is_running:
+                # Start ist synchron fehlgeschlagen (siehe Fehlerbehandlung
+                # in `_on_start_measurement`) - Button nicht gedrueckt lassen.
+                self._setup_view.set_trigger_armed(False)
+                self._live_view.set_trigger_armed(False)
+                self._trigger_config.auto_rearm = False
+        elif self._controller.is_running:
+            self._on_stop_measurement()
 
     def _resolve_measurement_name(
         self,
@@ -1053,6 +1134,24 @@ class MainWindow(QMainWindow):
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
 
+        # Automatische Neubewaffnung (siehe `TriggerConfig.auto_rearm`):
+        # OHNE das waere ein Start-/Stopp-Trigger kein echter Trigger,
+        # sondern nur eine einmalige Bedingung - nach JEDEM Stopp (egal ob
+        # manuell, per Trigger oder Aufnahme-Limit; dieser Codepfad ist der
+        # gemeinsame Endpunkt aller drei, siehe Aufrufstellen) sofort wieder
+        # scharf schalten, statt auf einen erneuten manuellen Klick auf
+        # "Messung starten" zu warten. Nur relevant, wenn ueberhaupt ein
+        # Trigger konfiguriert ist (sonst waere "neu scharf schalten"
+        # bedeutungslos) - siehe auch
+        # `gui/trigger_settings_dialog.py::_update_auto_rearm_visibility`.
+        if not self._closing and self._trigger_config.auto_rearm and (
+            self._trigger_config.start.kind != TriggerKind.NONE
+            or self._trigger_config.stop.kind != TriggerKind.NONE
+        ):
+            next_config = self._setup_view.build_current_config()
+            if next_config is not None:
+                self._on_start_measurement(next_config)
+
     def _finalize_measurement(
         self, session: MeasurementSession, device_infos: list[DeviceInfo]
     ) -> None:
@@ -1076,6 +1175,12 @@ class MainWindow(QMainWindow):
         self._controller.stop_measurement()
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
+        # Scharf-Button darf bei einem Hardware-Fehler nicht gedrueckt
+        # bleiben - sonst wuerde die (kaputte) Messung sofort wieder
+        # automatisch neu versucht.
+        self._setup_view.set_trigger_armed(False)
+        self._live_view.set_trigger_armed(False)
+        self._trigger_config.auto_rearm = False
         self._status_label.setText(t("ready"))
         QMessageBox.critical(
             self,
@@ -1102,6 +1207,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Speichert Fenstergeometrie und stoppt eine ggf. laufende Messung."""
+        # MUSS vor `_on_stop_measurement()` gesetzt werden: sonst würde eine
+        # aktive automatische Neubewaffnung (`TriggerConfig.auto_rearm`)
+        # beim Schließen sofort eine neue Messung starten, während das
+        # Fenster gerade abgebaut wird (siehe dortige Prüfung).
+        self._closing = True
         if self._controller.is_running:
             self._on_stop_measurement()
 

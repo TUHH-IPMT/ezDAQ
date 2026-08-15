@@ -34,10 +34,61 @@ from __future__ import annotations
 
 from PyQt6.QtCore import QLocale
 from PyQt6.QtGui import QValidator
-from PyQt6.QtWidgets import QDoubleSpinBox, QWidget
+from PyQt6.QtWidgets import QDoubleSpinBox, QSpinBox, QWidget
 
 
-class PrecisionDoubleSpinBox(QDoubleSpinBox):
+class _NoWheelMixin:
+    """Ignoriert Mausrad-Ereignisse, statt den Wert zu ändern.
+
+    Ein Spinbox-Feld reagiert bei Qt standardmäßig auch OHNE Fokus auf das
+    Mausrad - scrollt man z. B. über ein längeres Formular hinweg und der
+    Mauszeiger streift dabei zufällig über ein Zahlenfeld, ändert sich
+    dessen Wert unbemerkt mit, statt dass die Seite weiterscrollt. Das
+    Ereignis wird hier bewusst ignoriert (nicht nur "nichts tun"), damit es
+    an das umgebende Scroll-Widget (z. B. `QScrollArea`) durchgereicht
+    wird und die Seite normal weiterscrollt.
+    """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt-API
+        event.ignore()
+
+
+class NoWheelSpinBox(_NoWheelMixin, QSpinBox):
+    """`QSpinBox`, die Mausrad-Ereignisse ignoriert - siehe `_NoWheelMixin`."""
+
+
+class NoWheelDoubleSpinBox(_NoWheelMixin, QDoubleSpinBox):
+    """`QDoubleSpinBox`, die Mausrad-Ereignisse ignoriert - siehe `_NoWheelMixin`."""
+
+
+class GroupedDoubleSpinBox(NoWheelDoubleSpinBox):
+    """`QDoubleSpinBox` mit Tausendertrennzeichen-Anzeige
+    (`setGroupSeparatorShown(True)`), die sich beim Löschen einzelner
+    Ziffern normal bearbeiten lässt.
+
+    Qt's Standard-Validator lehnt bei aktivierter Trennzeichen-Anzeige
+    manche Zwischenzustände beim Editieren komplett ab (nicht nur als
+    unvollständig), statt sie als gültigen Zwischenschritt zu werten -
+    z. B. wird aus "1.000,0" nach Löschen der führenden "1" der Text
+    ".000,0" (ein "verwaistes" Trennzeichen direkt am Anfang), den Qt
+    als `Invalid` zurückweist. Der Nutzer kann die Ziffer dadurch
+    scheinbar nicht löschen - jeder Löschversuch wird stillschweigend
+    verworfen. Entfernt daher vor der eigentlichen Prüfung erst alle
+    Trennzeichen aus dem Zwischentext - die korrekte Gruppierung stellt
+    Qt beim nächsten Commit (z. B. Fokusverlust) über `textFromValue()`
+    ohnehin automatisch wieder her.
+    """
+
+    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:  # noqa: N802
+        separator = self.locale().groupSeparator()
+        if not separator or separator not in text:
+            return super().validate(text, pos)
+        removed_before_pos = text[:pos].count(separator)
+        cleaned = text.replace(separator, "")
+        return super().validate(cleaned, max(0, pos - removed_before_pos))
+
+
+class PrecisionDoubleSpinBox(NoWheelDoubleSpinBox):
     """`QDoubleSpinBox` mit hoher Eingabepräzision, sauberer Anzeige und
     Punkt ODER Komma als Dezimaltrennzeichen beim Eintippen/Einfügen,
     unabhängig von der System-Locale (Anzeige selbst immer mit Punkt).

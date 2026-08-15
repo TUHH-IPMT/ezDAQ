@@ -710,13 +710,17 @@ class ChannelTableWidget(QWidget):
         self._hw_channel_to_module: dict[str, ModuleType] = {}
 
         # Live-View-Darstellung (Kurvenfarbe, Hintergrund, Y-Bereich,
-        # Autoskalierung) pro Hardwarekanal - die Tabelle hat dafür keine
-        # eigenen Spalten (wird über den "Kanal-Darstellung"-Dialog in
+        # Autoskalierung) pro Kanal - die Tabelle hat dafür keine eigenen
+        # Spalten (wird über den "Kanal-Darstellung"-Dialog in
         # gui/live_view.py gesetzt, siehe `apply_display_settings`), muss
         # die Werte aber beim Auslesen (`_read_row`) mit an den `Channel`
         # zurückgeben, damit sie beim Speichern der Konfiguration erhalten
-        # bleiben.
-        self._display_settings: dict[str, dict] = {}
+        # bleiben. Schlüssel ist (hardware_channel, display_name), NICHT
+        # `hardware_channel` allein - siehe
+        # `gui/live_view.py::_channel_display_key` für die Begründung
+        # (mehrere noch unzugewiesene Kanäle hätten sonst denselben
+        # leeren Schlüssel).
+        self._display_settings: dict[tuple[str, str], dict] = {}
 
         button_row = QHBoxLayout()
         self._add_button = QPushButton(t("add_channel_button"))
@@ -1360,20 +1364,27 @@ class ChannelTableWidget(QWidget):
 
         # Live-View-Darstellung des übergebenen Kanals übernehmen (z. B.
         # beim Laden einer gespeicherten Konfiguration) - siehe
-        # `_display_settings`/`_read_row`.
-        if channel.hardware_channel:
-            self._display_settings[channel.hardware_channel] = {
-                "plot_color": channel.plot_color,
-                "plot_background": channel.plot_background,
-                "plot_y_min": channel.plot_y_min,
-                "plot_y_max": channel.plot_y_max,
-                "plot_autoscale": channel.plot_autoscale,
-                "plot_time_window_seconds": channel.plot_time_window_seconds,
-                "plot_show_value": channel.plot_show_value,
-                "plot_value_integer_digits": channel.plot_value_integer_digits,
-                "plot_visible": channel.plot_visible,
-                "plot_popout": channel.plot_popout,
-            }
+        # `_display_settings`/`_read_row`. Schlüssel ist (hardware_channel,
+        # display_name), NICHT `hardware_channel` allein: mehrere noch
+        # unzugewiesene Kanäle (leerer `hardware_channel`, z. B. vor dem
+        # Anschließen der Hardware) hätten sonst alle denselben Schlüssel
+        # und würden sich gegenseitig überschreiben - siehe
+        # `gui/live_view.py::_channel_display_key` für dieselbe Problematik
+        # dort.
+        self._display_settings[(channel.hardware_channel, channel.display_name)] = {
+            "plot_color": channel.plot_color,
+            "plot_background": channel.plot_background,
+            "plot_grid_color": channel.plot_grid_color,
+            "plot_y_min": channel.plot_y_min,
+            "plot_y_max": channel.plot_y_max,
+            "plot_autoscale": channel.plot_autoscale,
+            "plot_time_window_seconds": channel.plot_time_window_seconds,
+            "plot_show_value": channel.plot_show_value,
+            "plot_value_integer_digits": channel.plot_value_integer_digits,
+            "plot_value_decimal_digits": channel.plot_value_decimal_digits,
+            "plot_visible": channel.plot_visible,
+            "plot_popout": channel.plot_popout,
+        }
 
     def _read_row(self, row: int) -> Channel:
         enabled_widget = self._table.cellWidget(row, _COL_ENABLED)
@@ -1395,7 +1406,7 @@ class ChannelTableWidget(QWidget):
         cal_point1_reference = self._property_float_or_none(param_widget, "cal_point1_reference")
         cal_point2_measured = self._property_float_or_none(param_widget, "cal_point2_measured")
         cal_point2_reference = self._property_float_or_none(param_widget, "cal_point2_reference")
-        display_settings = self._display_settings.get(hardware_channel, {})
+        display_settings = self._display_settings.get((hardware_channel, display_name), {})
 
         return Channel(
             hardware_channel=hardware_channel,
@@ -1415,6 +1426,7 @@ class ChannelTableWidget(QWidget):
             cal_point2_reference=cal_point2_reference,
             plot_color=display_settings.get("plot_color"),
             plot_background=display_settings.get("plot_background"),
+            plot_grid_color=display_settings.get("plot_grid_color"),
             plot_y_min=display_settings.get("plot_y_min"),
             plot_y_max=display_settings.get("plot_y_max"),
             plot_autoscale=display_settings.get("plot_autoscale", True),
@@ -1425,20 +1437,24 @@ class ChannelTableWidget(QWidget):
             plot_value_integer_digits=max(
                 1, int(display_settings.get("plot_value_integer_digits", 3))
             ),
+            plot_value_decimal_digits=max(
+                0, int(display_settings.get("plot_value_decimal_digits", 3))
+            ),
             plot_visible=display_settings.get("plot_visible", True),
             plot_popout=display_settings.get("plot_popout", False),
         )
 
-    def apply_display_settings(self, settings: dict[str, dict]) -> None:
+    def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:
         """Übernimmt vom "Kanal-Darstellung"-Dialog (siehe
         `gui/live_view.py::ChannelDisplayDialog`) gesetzte Werte, damit sie
         beim nächsten Auslesen der Tabelle (`_read_row`, z. B. beim
         Speichern der Konfiguration) erhalten bleiben. `settings` ist nach
-        `hardware_channel` geschlüsselt, siehe `_add_row` für das
-        erwartete Dict-Format je Kanal.
+        (`hardware_channel`, `display_name`) geschlüsselt (siehe
+        `gui/live_view.py::_channel_display_key`), NICHT `hardware_channel`
+        allein, siehe `_add_row` für das erwartete Dict-Format je Kanal.
         """
-        for hw_channel, values in settings.items():
-            self._display_settings[hw_channel] = values
+        for key, values in settings.items():
+            self._display_settings[key] = values
 
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))

@@ -220,17 +220,27 @@ class TriggerConfig:
             relevant, siehe `core/ringbuffer.py::RingBuffer.register_reader`.
             Für den Stopp gibt es bewusst KEINEN Vorlauf - ein Stopp-Trigger
             beendet die Aufzeichnung einfach zum Zeitpunkt des Auslösens.
+        auto_rearm: Ob nach JEDEM Stopp (manuell, per Trigger oder
+            Aufnahme-Limit) automatisch eine neue Messung mit derselben
+            Konfiguration gestartet wird, statt auf einen erneuten
+            manuellen Klick auf "Messung starten" zu warten - macht
+            `start`/`stop` erst zu einem echten, unbeaufsichtigt
+            durchlaufenden Trigger-Zyklus (siehe
+            `gui/main_window.py::_on_stop_measurement`). Nur relevant,
+            wenn mindestens `start.kind` oder `stop.kind` != NONE ist.
     """
 
     start: TriggerCondition = field(default_factory=TriggerCondition)
     stop: TriggerCondition = field(default_factory=TriggerCondition)
     pretrigger_seconds: float = 5.0
+    auto_rearm: bool = False
 
     def to_dict(self) -> dict:
         return {
             "start": self.start.to_dict(),
             "stop": self.stop.to_dict(),
             "pretrigger_seconds": self.pretrigger_seconds,
+            "auto_rearm": self.auto_rearm,
         }
 
     @classmethod
@@ -239,6 +249,7 @@ class TriggerConfig:
             start=TriggerCondition.from_dict(data.get("start", {}) or {}),
             stop=TriggerCondition.from_dict(data.get("stop", {}) or {}),
             pretrigger_seconds=data.get("pretrigger_seconds", 5.0),
+            auto_rearm=data.get("auto_rearm", False),
         )
 
 
@@ -284,6 +295,9 @@ class Channel:
             `gui/live_view.py::ChannelDisplayDialog`).
         plot_background: Individuelle Plot-Hintergrundfarbe, `None` =
             Theme-Standardhintergrund.
+        plot_grid_color: Individuelle Gitterlinienfarbe, `None` =
+            Theme-Standard (Vordergrundfarbe, siehe
+            `gui/live_view.py::_channel_grid_color`).
         plot_y_min: Unterer Y-Achsen-Anzeigebereich der Live View. Anders
             als `min_range`/`max_range` (Hardware-Messbereich) rein eine
             Darstellungseinstellung - `None` fällt auf `min_range` bzw.
@@ -323,6 +337,7 @@ class Channel:
     adc_timing_mode: str = "AUTOMATIC"
     plot_color: Optional[str] = None
     plot_background: Optional[str] = None
+    plot_grid_color: Optional[str] = None
     plot_y_min: Optional[float] = None
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
@@ -331,12 +346,15 @@ class Channel:
     # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
     # pro Kanal abschaltbar, da sie bei vielen Kanälen unnötig Platz kostet.
     plot_show_value: bool = True
-    # Anzahl Vorkommastellen fuer `plot_show_value` (Nachkommastellen sind
-    # fest 3, siehe `gui/live_view.py::_format_channel_value`) - passt ein
-    # Messwert NICHT hinein, wird statt einer irrefuehrend abgeschnittenen
-    # Zahl ein Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-
-    # Digitalanzeigen), statt die Anzeigebreite laufend nachzuziehen.
+    # Anzahl Vorkommastellen fuer `plot_show_value` - passt ein Messwert
+    # NICHT hinein, wird statt einer irrefuehrend abgeschnittenen Zahl ein
+    # Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-Digitalanzeigen),
+    # statt die Anzeigebreite laufend nachzuziehen. Im Dialog gemeinsam mit
+    # `plot_value_decimal_digits` als EIN Format-Muster editierbar (z. B.
+    # "000.0000"), siehe `gui/live_view.py::ChannelDisplayDialog`.
     plot_value_integer_digits: int = 3
+    # Anzahl Nachkommastellen - siehe `plot_value_integer_digits`.
+    plot_value_decimal_digits: int = 3
     plot_visible: bool = True
     # Zeigt den Kanal (statt im Hauptraster der Live View) in einem
     # eigenen Fenster an (siehe `gui/live_view.py::ChannelPopoutWindow`) -
@@ -372,12 +390,14 @@ class Channel:
             "adc_timing_mode": self.adc_timing_mode,
             "plot_color": self.plot_color,
             "plot_background": self.plot_background,
+            "plot_grid_color": self.plot_grid_color,
             "plot_y_min": self.plot_y_min,
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
             "plot_time_window_seconds": self.plot_time_window_seconds,
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
+            "plot_value_decimal_digits": self.plot_value_decimal_digits,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
         }
@@ -405,6 +425,7 @@ class Channel:
             adc_timing_mode=data.get("adc_timing_mode", "AUTOMATIC"),
             plot_color=data.get("plot_color"),
             plot_background=data.get("plot_background"),
+            plot_grid_color=data.get("plot_grid_color"),
             plot_y_min=data.get("plot_y_min"),
             plot_y_max=data.get("plot_y_max"),
             plot_autoscale=data.get("plot_autoscale", True),
@@ -414,6 +435,9 @@ class Channel:
             plot_show_value=data.get("plot_show_value", True),
             plot_value_integer_digits=max(
                 1, int(data.get("plot_value_integer_digits", 3))
+            ),
+            plot_value_decimal_digits=max(
+                0, int(data.get("plot_value_decimal_digits", 3))
             ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),

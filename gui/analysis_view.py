@@ -64,11 +64,12 @@ from gui.theme import (
     draw_highpass_icon,
     draw_lowpass_icon,
     draw_smoothing_icon,
+    plot_background_color,
     repolish,
     style_plot_container,
     style_plot_item,
 )
-from gui.widgets.spinbox import PrecisionDoubleSpinBox
+from gui.widgets.spinbox import NoWheelSpinBox, PrecisionDoubleSpinBox
 from gui.workers import BackgroundWorker
 
 logger = logging.getLogger(__name__)
@@ -327,7 +328,7 @@ class _AnalysisFunctionDialog(QDialog):
             self._cutoff_spin.setSuffix(" Hz")
             form.addRow(t("analysis_cutoff_frequency"), self._cutoff_spin)
         elif kind == "smoothing":
-            self._window_spin = QSpinBox()
+            self._window_spin = NoWheelSpinBox()
             self._window_spin.setRange(2, 1_000_000)
             self._window_spin.setValue(10)
             form.addRow(t("analysis_window_size"), self._window_spin)
@@ -460,10 +461,24 @@ class AnalysisView(QWidget):
         for plot_widget in self._plot_widgets:
             plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             plot_widget.showGrid(x=True, y=True, alpha=0.3)
-            plot_widget.setLabel("bottom", t("axis_time"), units="s")
+            # `units=` NICHT genutzt: PyQtGraph rendert das intern immer in
+            # runden Klammern - fest "[s]" im Text selbst statt dessen,
+            # damit die Zeiteinheit ueberall konsistent in eckigen Klammern
+            # steht (siehe gui/live_view.py).
+            plot_widget.setLabel("bottom", f"{t('axis_time')} [s]")
             plot_widget.addLegend()
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())
+            # OHNE diesen expliziten Aufruf bleibt die ViewBox-Hintergrund-
+            # farbe auf PyQtGraph's Default (transparent) - unter reinem
+            # Software-Rendering unsichtbar (zeigt die Container-Farbe
+            # durch), aber mit `useOpenGL=True` (siehe gui/live_view.py,
+            # global für den Prozess aktiv) faellt eine transparente
+            # ViewBox auf die OpenGL-Standardfarbe statt auf die
+            # Szenenfarbe zurueck - sichtbar als Farbbruch zwischen
+            # Plotflaeche und Achsenbeschriftungs-Rand. Live View setzt das
+            # deshalb ueberall explizit (siehe `_channel_background_color`).
+            plot_widget.getPlotItem().getViewBox().setBackgroundColor(plot_background_color())
             plot_widget.channel_dropped.connect(self._on_channel_dropped_to_plot)
         content_row.addWidget(self._plot_area, stretch=1)
 
@@ -539,6 +554,7 @@ class AnalysisView(QWidget):
         for plot_widget in self._plot_widgets:
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())
+            plot_widget.getPlotItem().getViewBox().setBackgroundColor(plot_background_color())
 
         # Analysefunktions-Icons folgen der WindowText-Farbe (siehe
         # gui/theme.py::nav_icon_color) und müssen daher nach einem
@@ -578,7 +594,9 @@ class AnalysisView(QWidget):
             if self._plot_x_columns.get(plot_index) == _FREQUENCY_X_COLUMN:
                 plot_widget.setLabel("bottom", t("axis_frequency"), units="Hz")
             else:
-                plot_widget.setLabel("bottom", t("axis_time"), units="s")
+                # `units=` NICHT genutzt - Zeiteinheit ueberall konsistent
+                # in eckigen Klammern (siehe gui/live_view.py).
+                plot_widget.setLabel("bottom", f"{t('axis_time')} [s]")
 
     def _update_files_label_count(self) -> None:
         """Aktualisiert die Datei/Kanal-Überschrift inkl. Anzahl geladener Dateien."""
