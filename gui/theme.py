@@ -24,8 +24,18 @@ import math
 from typing import Callable, Optional
 
 import pyqtgraph as pg
-from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen, QPixmap, QPolygonF
+from PyQt6.QtCore import QPoint, QPointF, QRectF, Qt
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QGuiApplication,
+    QPainter,
+    QPainterPath,
+    QPalette,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 
 _current_theme = "light"
 
@@ -325,6 +335,19 @@ def fix_toggle_button_width(button, *texts: str) -> None:
         widest = max(widest, button.sizeHint().width())
     button.setText(original_text)
     button.setFixedWidth(widest)
+
+
+def is_position_on_screen(x: int, y: int) -> bool:
+    """Prueft, ob der Punkt `(x, y)` auf einem AKTUELL angeschlossenen
+    Bildschirm liegt (siehe `QGuiApplication.screenAt`).
+
+    Genutzt beim Wiederherstellen einer gespeicherten Fensterposition
+    (Hauptfenster in `gui/main_window.py`, Kanal-Popout-Fenster in
+    `gui/live_view.py`) - ohne diese Pruefung koennte ein Fenster, das
+    zuletzt auf einem inzwischen abgesteckten zweiten Monitor stand, an
+    einer unerreichbaren Position landen (ausserhalb aller sichtbaren
+    Bildschirme, z. B. mit negativen oder sehr grossen Koordinaten)."""
+    return QGuiApplication.screenAt(QPoint(x, y)) is not None
 
 
 # ---------------------------------------------------------------------- #

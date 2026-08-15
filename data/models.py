@@ -363,6 +363,21 @@ class Channel:
     # oder in seinem eigenen Fenster (plot_popout=True) sichtbar, nie an
     # zwei Stellen gleichzeitig.
     plot_popout: bool = False
+    # Zuletzt bekannte Position/Groesse des eigenen Fensters (siehe
+    # `gui/live_view.py::ChannelPopoutWindow`) - wird kontinuierlich
+    # aktualisiert, waehrend das Fenster offen ist, und beim naechsten
+    # App-Start/Messstart wiederverwendet, damit die Anordnung erhalten
+    # bleibt. `None` (alle vier), solange das Fenster noch nie
+    # verschoben/in der Groesse geaendert wurde - dann gilt die
+    # Standardposition/-groesse aus `ChannelPopoutWindow.__init__`. Wird
+    # beim Wiederherstellen gegen die AKTUELL angeschlossenen Bildschirme
+    # geprueft (siehe `gui/theme.py::is_position_on_screen`), damit ein
+    # Fenster, das zuletzt auf einem inzwischen entfernten zweiten Monitor
+    # stand, nicht unerreichbar wird.
+    plot_popout_x: Optional[int] = None
+    plot_popout_y: Optional[int] = None
+    plot_popout_width: Optional[int] = None
+    plot_popout_height: Optional[int] = None
 
     def to_physical(self, raw_value: float) -> float:
         """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
@@ -400,6 +415,10 @@ class Channel:
             "plot_value_decimal_digits": self.plot_value_decimal_digits,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
+            "plot_popout_x": self.plot_popout_x,
+            "plot_popout_y": self.plot_popout_y,
+            "plot_popout_width": self.plot_popout_width,
+            "plot_popout_height": self.plot_popout_height,
         }
 
     @classmethod
@@ -441,7 +460,19 @@ class Channel:
             ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),
+            plot_popout_x=cls._optional_int(data.get("plot_popout_x")),
+            plot_popout_y=cls._optional_int(data.get("plot_popout_y")),
+            plot_popout_width=cls._optional_int(data.get("plot_popout_width")),
+            plot_popout_height=cls._optional_int(data.get("plot_popout_height")),
         )
+
+    @staticmethod
+    def _optional_int(value) -> Optional[int]:
+        """Wandelt einen aus JSON geladenen Wert (kann `None`, `int` oder
+        `float` sein) robust in `Optional[int]` um - siehe
+        `plot_popout_x`/`plot_popout_y`/`plot_popout_width`/
+        `plot_popout_height`."""
+        return None if value is None else int(value)
 
 
 @dataclass

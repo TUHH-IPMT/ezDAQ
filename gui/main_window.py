@@ -71,6 +71,7 @@ from gui.theme import (
     draw_gear_icon,
     draw_play_icon,
     get_theme,
+    is_position_on_screen,
     repolish,
     set_theme,
 )
@@ -559,6 +560,9 @@ class MainWindow(QMainWindow):
         interner Namens-Katalog) - Konfigurationsdateien sind damit normale
         Dateien, die frei abgelegt/umbenannt/geteilt werden können.
         """
+        # Aktuelle Popout-Fensterposition uebernehmen, BEVOR die Kanäle
+        # ausgelesen werden - siehe `_sync_popout_geometry_to_setup`.
+        self._sync_popout_geometry_to_setup()
         config = self._setup_view.build_current_config()
         if config is None:
             return
@@ -1204,11 +1208,46 @@ class MainWindow(QMainWindow):
     def _restore_window_geometry(self) -> None:
         geom = self._configuration_manager.settings.window
         self.resize(geom.width, geom.height)
-        self.move(geom.pos_x, geom.pos_y)
+        # Nur uebernehmen, wenn die Position noch auf einem AKTUELL
+        # angeschlossenen Bildschirm liegt (siehe
+        # `gui/theme.py::is_position_on_screen`) - sonst z. B. nach dem
+        # Abstecken eines zweiten Monitors, auf dem das Fenster zuletzt
+        # stand, unerreichbar. Ohne `.move()` verwendet Qt/der Fenster-
+        # manager seine eigene Standardplatzierung auf dem verbliebenen
+        # (primaeren) Bildschirm.
+        center_x = geom.pos_x + geom.width // 2
+        center_y = geom.pos_y + geom.height // 2
+        if is_position_on_screen(center_x, center_y):
+            self.move(geom.pos_x, geom.pos_y)
         if geom.maximized:
             # Nur den Zustand vormerken; `main.py` zeigt das vollständig
             # aufgebaute Fenster anschließend genau einmal an.
             self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
+
+    def _sync_popout_geometry_to_setup(self) -> None:
+        """Uebernimmt Position/Groesse aller aktuell offenen Kanal-Popout-
+        Fenster in die Setup-Kanaltabelle (siehe
+        `LiveView.get_open_popout_geometries()`/
+        `SetupView.update_channel_display_setting`), damit sie beim
+        naechsten Speichern der Kanalkonfiguration erhalten bleiben.
+
+        Normalerweise reicht dafuer `core/controller.py`s automatisches
+        `save_channel_configuration()` bei JEDEM Messstart - eine waehrend
+        der laufenden (oder gerade beendeten) Messung verschobene Popout-
+        Position wuerde ohne diesen zusaetzlichen Schritt aber verloren
+        gehen, wenn die App direkt geschlossen oder die Konfiguration
+        explizit gespeichert wird, ohne zwischendurch erneut zu starten.
+        """
+        for key, (x, y, width, height) in self._live_view.get_open_popout_geometries().items():
+            self._setup_view.update_channel_display_setting(
+                key,
+                {
+                    "plot_popout_x": x,
+                    "plot_popout_y": y,
+                    "plot_popout_width": width,
+                    "plot_popout_height": height,
+                },
+            )
 
     def closeEvent(self, event) -> None:
         """Speichert Fenstergeometrie und stoppt eine ggf. laufende Messung."""
@@ -1217,6 +1256,7 @@ class MainWindow(QMainWindow):
         # beim Schließen sofort eine neue Messung starten, während das
         # Fenster gerade abgebaut wird (siehe dortige Prüfung).
         self._closing = True
+        self._sync_popout_geometry_to_setup()
         if self._controller.is_running:
             self._on_stop_measurement()
 
@@ -1244,5 +1284,14 @@ class MainWindow(QMainWindow):
             pos_x=self.x(),
             pos_y=self.y(),
             maximized=self.isMaximized(),
+        )
+        # Schreibt u. a. die soeben synchronisierte Popout-Geometrie auf
+        # die Platte (`last_channel_configuration.json`, siehe
+        # `_sync_popout_geometry_to_setup` oben) - sonst bliebe sie nur im
+        # Speicher und ginge beim Schließen verloren, da
+        # `save_channel_configuration()` sonst nur bei jedem Messstart
+        # aufgerufen wird (siehe `core/controller.py::start_measurement`).
+        self._configuration_manager.save_channel_configuration(
+            self._setup_view.get_configured_channels()
         )
         super().closeEvent(event)

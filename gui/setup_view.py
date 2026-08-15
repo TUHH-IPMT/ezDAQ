@@ -703,6 +703,14 @@ class SetupView(QWidget):
         bleiben (siehe `ChannelTableWidget.apply_display_settings`)."""
         self._channel_table.apply_display_settings(settings)
 
+    def update_channel_display_setting(self, key: tuple[str, str], values: dict) -> None:
+        """Aktualisiert NUR die uebergebenen Felder fuer einen Kanal (siehe
+        `ChannelTableWidget.update_display_settings`) - fuer
+        `gui/main_window.py`, um die aktuelle Popout-Fensterposition beim
+        Schliessen/expliziten Speichern der App zu uebernehmen, ohne die
+        vom Kanal-Darstellung-Dialog gesetzten Werte zu ueberschreiben."""
+        self._channel_table.update_display_settings(key, values)
+
     def build_current_config(self, live_only: bool = False) -> MeasurementConfig | None:
         """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.
 

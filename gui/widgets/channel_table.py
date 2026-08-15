@@ -1384,6 +1384,10 @@ class ChannelTableWidget(QWidget):
             "plot_value_decimal_digits": channel.plot_value_decimal_digits,
             "plot_visible": channel.plot_visible,
             "plot_popout": channel.plot_popout,
+            "plot_popout_x": channel.plot_popout_x,
+            "plot_popout_y": channel.plot_popout_y,
+            "plot_popout_width": channel.plot_popout_width,
+            "plot_popout_height": channel.plot_popout_height,
         }
 
     def _read_row(self, row: int) -> Channel:
@@ -1442,6 +1446,10 @@ class ChannelTableWidget(QWidget):
             ),
             plot_visible=display_settings.get("plot_visible", True),
             plot_popout=display_settings.get("plot_popout", False),
+            plot_popout_x=display_settings.get("plot_popout_x"),
+            plot_popout_y=display_settings.get("plot_popout_y"),
+            plot_popout_width=display_settings.get("plot_popout_width"),
+            plot_popout_height=display_settings.get("plot_popout_height"),
         )
 
     def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:
@@ -1455,6 +1463,17 @@ class ChannelTableWidget(QWidget):
         """
         for key, values in settings.items():
             self._display_settings[key] = values
+
+    def update_display_settings(self, key: tuple[str, str], values: dict) -> None:
+        """Aktualisiert NUR die uebergebenen Felder fuer EINEN Kanal (Merge
+        statt Ersetzen wie `apply_display_settings`) - z. B. fuer die
+        Popout-Fenstergeometrie (siehe `gui/main_window.py`), die
+        unabhaengig vom Kanal-Darstellung-Dialog aktualisiert wird und
+        daher nicht dessen bereits gespeicherte Werte ueberschreiben darf.
+        Legt bei Bedarf einen neuen Eintrag an, falls noch keiner
+        existiert."""
+        existing = self._display_settings.get(key, {})
+        self._display_settings[key] = {**existing, **values}
 
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))

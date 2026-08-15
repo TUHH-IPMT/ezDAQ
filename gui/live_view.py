@@ -99,6 +99,7 @@ from gui.theme import (
     draw_stop_icon,
     draw_trigger_icon,
     fix_toggle_button_width,
+    is_position_on_screen,
     is_theme_default_plot_background,
     plot_background_color,
     plot_container_background_color,
@@ -719,6 +720,23 @@ class ChannelPopoutWindow(QWidget):
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
         self._style_value_labels()
+
+    def moveEvent(self, event) -> None:  # noqa: N802 - Qt-API
+        # Haelt `Channel.plot_popout_x/y` kontinuierlich mit der
+        # tatsaechlichen Fensterposition synchron (nicht nur beim
+        # Schliessen) - `self._channel` ist dieselbe lebende Referenz wie
+        # in `LiveView` (siehe Klassendoc), Aenderungen sind also sofort
+        # auch dort sichtbar. Wird spaeter (z. B. beim App-Beenden, siehe
+        # `gui/main_window.py`) in die Setup-Kanaltabelle uebernommen und
+        # so dauerhaft gespeichert.
+        super().moveEvent(event)
+        self._channel.plot_popout_x = self.x()
+        self._channel.plot_popout_y = self.y()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt-API
+        super().resizeEvent(event)
+        self._channel.plot_popout_width = self.width()
+        self._channel.plot_popout_height = self.height()
 
 
 class LiveView(QWidget):
@@ -1551,22 +1569,60 @@ class LiveView(QWidget):
                 view._on_popout_window_closed(key)
 
         window.destroyed.connect(_on_window_destroyed)
-        # Kaskadierte Position statt Qt's Default-Platzierung: werden
-        # mehrere Kanäle auf einmal per Dialog auf "Eigenes Fenster"
-        # gesetzt (ein OK-Klick löst mehrere `_open_popout_window()`-
-        # Aufrufe direkt hintereinander aus, siehe Aufrufer), platziert Qt
-        # ohne das hier neue Fenster sonst exakt übereinander - sichtbar
-        # wird dann nur das zuletzt geöffnete, die anderen liegen
-        # unsichtbar dahinter und "erscheinen" erst beim Schließen des
-        # jeweils obersten. Versatz relativ zur Position des Hauptfensters,
-        # damit die Fenster in dessen Naehe auftauchen (nicht z. B. auf
-        # einem anderen Bildschirm).
-        main_window = self.window()
-        base = main_window.pos() if main_window is not None else QPoint(80, 80)
-        cascade_offset = 32 * len(self._popout_windows)
-        window.move(base.x() + 60 + cascade_offset, base.y() + 60 + cascade_offset)
+
+        # Zuletzt bekannte Position/Groesse wiederverwenden (siehe
+        # `Channel.plot_popout_x` usw.), sofern vorhanden UND noch auf
+        # einem aktuell angeschlossenen Bildschirm liegt (z. B. NICHT auf
+        # einem inzwischen abgesteckten zweiten Monitor) - sonst wie
+        # bisher kaskadiert relativ zum Hauptfenster platzieren.
+        has_saved_geometry = (
+            channel.plot_popout_x is not None
+            and channel.plot_popout_y is not None
+            and channel.plot_popout_width is not None
+            and channel.plot_popout_height is not None
+        )
+        if has_saved_geometry and is_position_on_screen(
+            channel.plot_popout_x + channel.plot_popout_width // 2,
+            channel.plot_popout_y + channel.plot_popout_height // 2,
+        ):
+            window.setGeometry(
+                channel.plot_popout_x,
+                channel.plot_popout_y,
+                channel.plot_popout_width,
+                channel.plot_popout_height,
+            )
+        else:
+            # Kaskadierte Position statt Qt's Default-Platzierung: werden
+            # mehrere Kanäle auf einmal per Dialog auf "Eigenes Fenster"
+            # gesetzt (ein OK-Klick löst mehrere `_open_popout_window()`-
+            # Aufrufe direkt hintereinander aus, siehe Aufrufer), platziert
+            # Qt ohne das hier neue Fenster sonst exakt übereinander -
+            # sichtbar wird dann nur das zuletzt geöffnete, die anderen
+            # liegen unsichtbar dahinter und "erscheinen" erst beim
+            # Schließen des jeweils obersten. Versatz relativ zur Position
+            # des Hauptfensters, damit die Fenster in dessen Naehe
+            # auftauchen (nicht z. B. auf einem anderen Bildschirm).
+            main_window = self.window()
+            base = main_window.pos() if main_window is not None else QPoint(80, 80)
+            cascade_offset = 32 * len(self._popout_windows)
+            window.move(base.x() + 60 + cascade_offset, base.y() + 60 + cascade_offset)
         self._popout_windows[key] = window
         window.show()
+
+    def get_open_popout_geometries(self) -> dict[tuple[str, str], tuple[int, int, int, int]]:
+        """Liefert Position/Groesse (x, y, width, height) aller aktuell
+        offenen eigenen Fenster - fuer `gui/main_window.py`, um sie beim
+        Schliessen/expliziten Speichern der App in die Setup-Kanaltabelle
+        zu uebernehmen (siehe `Channel.plot_popout_x` usw.). Eigentlich
+        redundant zu den kontinuierlich synchronisierten `Channel`-Feldern
+        (siehe `ChannelPopoutWindow.moveEvent`/`resizeEvent`), liest aber
+        bewusst direkt vom Fenster statt vom Kanal-Objekt - unabhaengig
+        davon, ob dieser Kanal gerade ueberhaupt Teil der live angezeigten
+        `self._channels` ist."""
+        return {
+            key: (window.x(), window.y(), window.width(), window.height())
+            for key, window in self._popout_windows.items()
+        }
 
     def _on_popout_window_closed(self, key: tuple[str, str]) -> None:
         """Räumt die Nachverfolgung eines geschlossenen eigenen Fensters
