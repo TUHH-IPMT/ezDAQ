@@ -162,6 +162,7 @@ class MainWindow(QMainWindow):
         self._setup_view.discover_hardware_requested.connect(self._on_discover_hardware)
         self._setup_view.open_ni_max_requested.connect(self._on_open_ni_max)
         self._setup_view.start_measurement_requested.connect(self._on_start_measurement)
+        self._setup_view.stop_requested.connect(self._on_stop_measurement)
         self._setup_view.storage_path_requested.connect(self._on_choose_storage_path)
         self._setup_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
         self._live_view.start_requested.connect(self._on_start_measurement_from_live)
@@ -424,7 +425,12 @@ class MainWindow(QMainWindow):
         """
         self._start_shortcut_action = QAction(self)
         self._start_shortcut_action.setShortcut(QKeySequence("F5"))
-        self._start_shortcut_action.triggered.connect(self._on_start_measurement_from_live)
+        # F5 startet MIT Speicherung (live_only=False), wie der
+        # Aufnahme-Button - fuer die reine Live-Anzeige gibt es keinen
+        # eigenen Shortcut.
+        self._start_shortcut_action.triggered.connect(
+            lambda: self._on_start_measurement_from_live(False)
+        )
         self.addAction(self._start_shortcut_action)
 
         self._stop_shortcut_action = QAction(self)
@@ -768,7 +774,6 @@ class MainWindow(QMainWindow):
             measurement_name=requested_measurement_name,
             sample_rate_hz=config.sample_rate_hz,
             storage_format=config.storage_format.value,
-            live_only=not config.save_to_disk,
             recording_unlimited=config.recording_unlimited,
             recording_stop_value=config.recording_stop_value,
             recording_stop_unit=config.recording_stop_unit.value,
@@ -968,8 +973,8 @@ class MainWindow(QMainWindow):
             t("error_stop_trigger_connection_failed", message=message),
         )
 
-    def _on_start_measurement_from_live(self) -> None:
-        config = self._setup_view.build_current_config()
+    def _on_start_measurement_from_live(self, live_only: bool) -> None:
+        config = self._setup_view.build_current_config(live_only=live_only)
         if config is None:
             return
         self._on_start_measurement(config)
@@ -1219,7 +1224,6 @@ class MainWindow(QMainWindow):
             measurement_name,
             sample_rate_hz,
             storage_format,
-            live_only,
             recording_unlimited,
             recording_stop_value,
             recording_stop_unit,
@@ -1228,7 +1232,6 @@ class MainWindow(QMainWindow):
             measurement_name=measurement_name,
             sample_rate_hz=sample_rate_hz,
             storage_format=storage_format,
-            live_only=live_only,
             recording_unlimited=recording_unlimited,
             recording_stop_value=recording_stop_value,
             recording_stop_unit=recording_stop_unit,

@@ -56,10 +56,16 @@ from data.models import (
 )
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
+    ACTION_BUTTON_STYLE,
+    PLAY_ICON_COLOR,
+    RECORD_ICON_COLOR,
     TRIGGER_ARM_BUTTON_STYLE,
     connect_theme_changed,
     draw_play_icon,
+    draw_record_icon,
+    draw_stop_icon,
     draw_trigger_icon,
+    repolish,
 )
 from gui.widgets.channel_table import ChannelTableWidget
 from gui.widgets.spinbox import (
@@ -121,12 +127,19 @@ class SetupView(QWidget):
             Automation Explorer) als separates Programm öffnen - z. B. um
             ein Gerät umzubenennen, ohne diese Anwendung zu verlassen.
         start_measurement_requested: Nutzer möchte die Messung mit der
-            übergebenen `MeasurementConfig` starten.
+            übergebenen `MeasurementConfig` starten (Play- ODER
+            Aufnahme-Button - `MeasurementConfig.save_to_disk` ist dabei
+            schon passend gesetzt, siehe `_on_play_clicked`/
+            `_on_record_clicked`).
+        stop_requested: Nutzer möchte die laufende Messung stoppen (nur
+            klickbar, waehrend tatsaechlich eine läuft, siehe
+            `set_start_enabled`).
     """
 
     discover_hardware_requested = pyqtSignal()
     open_ni_max_requested = pyqtSignal()
     start_measurement_requested = pyqtSignal(object)  # MeasurementConfig
+    stop_requested = pyqtSignal()
     storage_path_requested = pyqtSignal()
     # Nutzer hat den Scharf-Button geklickt (siehe `_trigger_arm_button`) -
     # bool = neuer Zustand (True = scharf schalten, False = entschärfen).
@@ -260,10 +273,6 @@ class SetupView(QWidget):
         self._storage_group = QGroupBox()
         self._storage_layout = QFormLayout(self._storage_group)
 
-        self._live_only_checkbox = QCheckBox(t("live_only"))
-        self._live_only_checkbox.setChecked(configuration_manager.settings.last_live_only)
-        self._storage_layout.addRow("", self._live_only_checkbox)
-
         self._name_edit = QLineEdit(
             configuration_manager.settings.last_measurement_name or "Messung"
         )
@@ -342,19 +351,43 @@ class SetupView(QWidget):
         layout.addLayout(storage_row)
 
         # --- Start ---
+        # Drei Buttons mit Icon UND Text statt frueher einem einzelnen
+        # "Start"-Button + "Nur Live-Ansicht"-Haken (siehe `_storage_layout`
+        # oben): Play (gruenes Icon) startet NUR die Live-Anzeige ohne
+        # Speicherung, Aufnahme (rotes Kreis-Icon) startet MIT Speicherung -
+        # welcher Button geklickt wird, legt `MeasurementConfig.save_to_disk`
+        # direkt fest (siehe `_on_play_clicked`/`_on_record_clicked`/
+        # `build_current_config`). Stop bleibt deaktiviert, solange keine
+        # der beiden Varianten laeuft (siehe `set_start_enabled`).
+        # `ACTION_BUTTON_STYLE` setzt bewusst KEINEN `background-color` im
+        # Normalzustand - die Buttons folgen normal der QPalette/dem
+        # aktuellen Theme, nur die Play-/Aufnahme-Icon-Farbe ist fest
+        # (siehe `_retheme_start_button_icons`); Hover/Press bekommen einen
+        # dezenten Palette-basierten Effekt.
         start_row = QHBoxLayout()
         self._status_label = QLabel("")
-        self._start_button = QPushButton()
-        self._set_start_button_text()
-        self._start_button.setIconSize(QSize(18, 18))
-        self._retheme_start_button_icon()
-        self._start_button.setStyleSheet(
-            "QPushButton { background-color: #1f7a36; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
-            "QPushButton:hover { background-color: #1a662e; }"
-            "QPushButton:pressed { background-color: #145125; }"
-        )
-        self._start_button.clicked.connect(self._on_start_clicked)
-        start_row.addWidget(self._start_button)
+
+        self._play_button = QPushButton()
+        self._play_button.setIconSize(QSize(24, 24))
+        self._play_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._play_button.clicked.connect(self._on_play_clicked)
+        start_row.addWidget(self._play_button)
+
+        self._record_button = QPushButton()
+        self._record_button.setIconSize(QSize(24, 24))
+        self._record_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._record_button.clicked.connect(self._on_record_clicked)
+        start_row.addWidget(self._record_button)
+
+        self._stop_button = QPushButton()
+        self._stop_button.setIconSize(QSize(24, 24))
+        self._stop_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._stop_button.setEnabled(False)
+        self._stop_button.clicked.connect(self.stop_requested.emit)
+        start_row.addWidget(self._stop_button)
+
+        self._retheme_start_button_icons()
+        self._update_start_button_labels()
 
         # Scharf-Button: aktiviert den unbeaufsichtigten Trigger-Zyklus
         # (scharf schalten -> warten -> aufzeichnen -> Stopp -> automatisch
@@ -367,7 +400,7 @@ class SetupView(QWidget):
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
         self._set_trigger_arm_button_text()
-        self._trigger_arm_button.setIconSize(QSize(18, 18))
+        self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._retheme_trigger_arm_button_icon()
         self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
         self._trigger_arm_button.setVisible(False)
@@ -385,7 +418,7 @@ class SetupView(QWidget):
             self._channel_table.set_channels(last_channels)
 
         connect_language_changed(self.retranslate_ui)
-        connect_theme_changed(self._retheme_start_button_icon)
+        connect_theme_changed(self._retheme_start_button_icons)
         connect_theme_changed(self._retheme_trigger_arm_button_icon)
 
     # ------------------------------------------------------------------ #
@@ -413,11 +446,10 @@ class SetupView(QWidget):
             if label is not None:
                 label.setText(f"{t(key)}:")
 
-        self._live_only_checkbox.setText(t("live_only"))
         self._storage_button.setText(t("choose_storage_location"))
         if not self._storage_path_is_set:
             self._storage_path_label.setText(t("no_storage_location"))
-        self._set_start_button_text()
+        self._update_start_button_labels()
         self._set_trigger_arm_button_text()
         self._status_label.setText(t(self._status_reason_key))
         self._populate_storage_format_combo(self._storage_format_combo.currentData())
@@ -562,16 +594,21 @@ class SetupView(QWidget):
         )
 
     def set_start_enabled(self, enabled: bool, reason: str = "") -> None:
-        """Aktiviert/deaktiviert den Start-Button (z. B. während eine Messung läuft).
+        """Aktiviert/deaktiviert Play/Aufnahme (z. B. während eine Messung
+        läuft) - der Stop-Button folgt dabei IMMER dem genau umgekehrten
+        Zustand: klickbar nur, waehrend tatsaechlich etwas laeuft (Live-
+        Anzeige oder Aufzeichnung), sonst ausgegraut.
 
         `reason` ist ein i18n-Key (kein fertiger Text), damit der Grund
         einen Sprachwechsel übersteht (siehe `retranslate_ui`).
         """
-        self._start_button.setEnabled(enabled)
-        # Der Scharf-Button folgt demselben Enabled-Zustand wie der
-        # Start-Button - AUSSER er ist selbst gerade aktiv (durchlaeuft
-        # einen automatischen Zyklus, siehe `trigger_arm_toggled`): dann
-        # muss er immer klickbar bleiben, damit "entschärfen" jederzeit
+        self._play_button.setEnabled(enabled)
+        self._record_button.setEnabled(enabled)
+        self._stop_button.setEnabled(not enabled)
+        # Der Scharf-Button folgt demselben Enabled-Zustand wie Play/
+        # Aufnahme - AUSSER er ist selbst gerade aktiv (durchlaeuft einen
+        # automatischen Zyklus, siehe `trigger_arm_toggled`): dann muss er
+        # immer klickbar bleiben, damit "entschärfen" jederzeit
         # funktioniert, auch während die Messung läuft.
         if not self._trigger_arm_button.isChecked():
             self._trigger_arm_button.setEnabled(enabled)
@@ -612,18 +649,17 @@ class SetupView(QWidget):
 
     def get_current_measurement_parameters(
         self,
-    ) -> tuple[str, float, str, bool, bool, float, str]:
+    ) -> tuple[str, float, str, bool, float, str]:
         """Gibt die aktuell im UI eingestellten Messparameter zurück.
 
         Returns:
-            (measurement_name, sample_rate_hz, storage_format, live_only,
+            (measurement_name, sample_rate_hz, storage_format,
             recording_unlimited, recording_stop_value, recording_stop_unit)
         """
         return (
             self._name_edit.text().strip() or "Messung",
             self._sample_rate_spin.value(),
             self._storage_format_combo.currentData(),
-            self._live_only_checkbox.isChecked(),
             self._recording_unlimited_checkbox.isChecked(),
             float(self._recording_stop_spin.value()),
             self._recording_stop_unit_combo.currentData(),
@@ -647,14 +683,17 @@ class SetupView(QWidget):
         bleiben (siehe `ChannelTableWidget.apply_display_settings`)."""
         self._channel_table.apply_display_settings(settings)
 
-    def build_current_config(self) -> MeasurementConfig | None:
+    def build_current_config(self, live_only: bool = False) -> MeasurementConfig | None:
         """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.
 
-        Wird sowohl von `_on_start_clicked` als auch von
-        `gui/main_window.py` für "Konfiguration speichern" verwendet.
-        Zeigt bei unvollständigen Eingaben eine Fehlermeldung und gibt
-        None zurück (kein aktiver Kanal, kein Name, aktiver Kanal ohne
-        zugewiesenen Hardwarekanal).
+        Wird von `_on_play_clicked`/`_on_record_clicked` (jeweils mit
+        explizitem `live_only`), von `gui/main_window.py` für
+        "Konfiguration speichern" sowie für den Scharf-/Auto-Rearm-Zyklus
+        verwendet (dort ohne Angabe - Default `live_only=False`, also MIT
+        Speicherung, entspricht dem frueheren Verhalten bei nicht
+        gesetztem "Nur Live-Ansicht"-Haken). Zeigt bei unvollständigen
+        Eingaben eine Fehlermeldung und gibt None zurück (kein aktiver
+        Kanal, kein Name, aktiver Kanal ohne zugewiesenen Hardwarekanal).
         """
         channels = self._channel_table.get_channels()
         if not any(ch.enabled for ch in channels):
@@ -700,7 +739,7 @@ class SetupView(QWidget):
             storage_format=StorageFormat(self._storage_format_combo.currentData()),
             samples_per_read=samples_per_read,
             ring_buffer_size=ring_buffer_size,
-            save_to_disk=not self._live_only_checkbox.isChecked(),
+            save_to_disk=not live_only,
             recording_unlimited=self._recording_unlimited_checkbox.isChecked(),
             recording_stop_value=float(self._recording_stop_spin.value()),
             recording_stop_unit=RecordingStopUnit(self._recording_stop_unit_combo.currentData()),
@@ -727,7 +766,6 @@ class SetupView(QWidget):
         self._name_edit.setText(config.name)
         self._sample_rate_spin.setValue(config.sample_rate_hz)
         self._populate_storage_format_combo(config.storage_format.value)
-        self._live_only_checkbox.setChecked(not config.save_to_disk)
         self._recording_unlimited_checkbox.setChecked(config.recording_unlimited)
         self._recording_stop_spin.setValue(max(1, int(config.recording_stop_value)))
         self._populate_recording_stop_unit_combo(config.recording_stop_unit.value)
@@ -762,8 +800,14 @@ class SetupView(QWidget):
         self._recording_stop_spin.setEnabled(enabled)
         self._recording_stop_unit_combo.setEnabled(enabled)
 
-    def _on_start_clicked(self) -> None:
-        config = self.build_current_config()
+    def _on_play_clicked(self) -> None:
+        config = self.build_current_config(live_only=True)
+        if config is None:
+            return
+        self.start_measurement_requested.emit(config)
+
+    def _on_record_clicked(self) -> None:
+        config = self.build_current_config(live_only=False)
         if config is None:
             return
         self.start_measurement_requested.emit(config)
@@ -776,25 +820,46 @@ class SetupView(QWidget):
         key = "trigger_disarm_button" if self._trigger_arm_button.isChecked() else "trigger_arm_button"
         self._trigger_arm_button.setText(f"  {t(key)}")
 
-    def _retheme_start_button_icon(self) -> None:
-        # Fester Hintergrund (Dunkelgruen, siehe Stylesheet oben) unabhaengig
-        # vom Theme - das Icon braucht daher IMMER Weiss statt der sonst
-        # theme-abhaengigen nav_icon_color() (waere im Hell-Modus schwarz
-        # und auf dem dunkelgruenen Grund kaum zu erkennen).
-        self._start_button.setIcon(
-            QIcon(draw_play_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
+    def _retheme_start_button_icons(self) -> None:
+        # Play/Aufnahme haben feste, theme-unabhaengige Symbolfarben (siehe
+        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop hat
+        # KEINEN fest codierten Hintergrund (siehe `ACTION_BUTTON_STYLE`)
+        # und bleibt daher bei der normalen theme-abhaengigen
+        # `nav_icon_color()` (kein `color=` uebergeben).
+        self._play_button.setIcon(QIcon(draw_play_icon(24, y_offset=0.6, color=PLAY_ICON_COLOR)))
+        self._record_button.setIcon(
+            QIcon(draw_record_icon(24, y_offset=0.6, color=RECORD_ICON_COLOR))
         )
+        self._stop_button.setIcon(QIcon(draw_stop_icon(24, y_offset=0.6)))
+        # `ACTION_BUTTON_STYLE` referenziert `palette(...)` - ohne manuelles
+        # unpolish()/polish() bleiben Rahmen/Hintergrund nach einem
+        # Live-Theme-Wechsel optisch im alten Theme haengen (gleicher
+        # Befund wie bei den Navigationskacheln, siehe
+        # `gui/main_window.py::_retheme_nav_icons`).
+        for button in (self._play_button, self._record_button, self._stop_button):
+            repolish(button)
 
     def _retheme_trigger_arm_button_icon(self) -> None:
-        # Gleicher Grund wie beim Start-Button: fester grauer Hintergrund,
-        # Icon daher immer Weiss (siehe `_retheme_start_button_icon`).
-        self._trigger_arm_button.setIcon(
-            QIcon(draw_trigger_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
-        )
+        # Kein fest codierter Hintergrund mehr (siehe
+        # `TRIGGER_ARM_BUTTON_STYLE`) - Icon bleibt daher bei der normalen
+        # theme-abhaengigen `nav_icon_color()` (kein `color=` uebergeben).
+        # Das Icon selbst wird NICHT extra fuer den gecheckten (scharfen)
+        # Zustand umgefaerbt (nur der Text via `palette(highlighted-text)`
+        # im Stylesheet) - Schwarz/Weiss bleibt auf dem Akzentton
+        # (`palette(highlight)`) in beiden Themes ausreichend lesbar.
+        self._trigger_arm_button.setIcon(QIcon(draw_trigger_icon(24, y_offset=0.6)))
+        repolish(self._trigger_arm_button)
 
-    def _set_start_button_text(self) -> None:
-        # Fuehrende Leerzeichen vergroessern den Abstand zwischen Icon und Text.
-        self._start_button.setText(f"  {t('start_measurement')}")
+    def _update_start_button_labels(self) -> None:
+        # Kurzer Button-Text (siehe `play_button_label`/`record_button_label`/
+        # `stop_button_label`) UND ausfuehrlicherer Tooltip (bestehende
+        # `live_only`/`start_measurement`/`stop_measurement`-Keys).
+        self._play_button.setText(f"  {t('play_button_label')}")
+        self._play_button.setToolTip(t("live_only"))
+        self._record_button.setText(f"  {t('record_button_label')}")
+        self._record_button.setToolTip(t("start_measurement"))
+        self._stop_button.setText(f"  {t('stop_button_label')}")
+        self._stop_button.setToolTip(t("stop_measurement"))
 
     def _apply_section_header_emphasis(self) -> None:
         """Hebt nur Abschnitts-Labels hervor und bleibt vollständig theme-sicher."""

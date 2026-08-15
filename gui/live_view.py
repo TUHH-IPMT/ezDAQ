@@ -87,16 +87,22 @@ from data.exporter import StorageWriter
 from data.models import Channel, TriggerConfig, TriggerDirection, TriggerKind
 from gui.i18n import connect_language_changed, get_language, t
 from gui.theme import (
+    ACTION_BUTTON_STYLE,
+    PLAY_ICON_COLOR,
+    RECORD_ICON_COLOR,
     TRIGGER_ARM_BUTTON_STYLE,
+    axis_tick_point_size,
     connect_theme_changed,
     curve_color,
     draw_play_icon,
+    draw_record_icon,
     draw_stop_icon,
     draw_trigger_icon,
     is_theme_default_plot_background,
     plot_background_color,
     plot_container_background_color,
     plot_foreground_color,
+    repolish,
     style_plot_container,
     style_plot_item,
 )
@@ -178,6 +184,27 @@ def _channel_grid_color(channel: Channel) -> str:
     eine davon unabhaengige Farbe, ohne die Achsentext-/Tickstrich-Farbe
     selbst zu aendern (siehe `style_plot_item`)."""
     return channel.plot_grid_color or plot_foreground_color()
+
+
+def _axis_label_style() -> dict[str, str]:
+    """CSS-Style-Kwargs fuer `AxisItem.setLabel()` - gleiche Punktgroesse
+    wie die Achsentick-Beschriftung (siehe `gui/theme.py::axis_tick_point_size`),
+    statt PyQtGraph's kleinerem Default fuer Achsentitel. MUSS vor
+    `axis.setPen()`/`style_plot_item()` gesetzt werden: `setLabel(**kwargs)`
+    ERSETZT `labelStyle` komplett, `setPen()` ergaenzt darin nur die Farbe
+    (`labelStyle['color']`) - bei umgekehrter Reihenfolge ginge die Farbe
+    wieder verloren."""
+    return {"font-size": f"{axis_tick_point_size()}pt"}
+
+
+def _channel_axis_label(channel: Channel) -> str:
+    """Y-Achsen-Beschriftung eines Kanals: Anzeigename, plus Einheit in
+    eckigen Klammern falls vorhanden (siehe `axis_time`-Zeitachsen-Label
+    fuer dieselbe Klammer-Konvention) - dieselbe Kombination wie der
+    Plot-Titel (siehe `_rebuild_plots`/`ChannelPopoutWindow.__init__`),
+    hier zusaetzlich direkt an der Achse."""
+    unit_suffix = f" [{channel.unit}]" if channel.unit else ""
+    return f"{channel.display_name}{unit_suffix}"
 
 
 def _channel_display_key(channel: Channel) -> tuple[str, str]:
@@ -629,7 +656,8 @@ class ChannelPopoutWindow(QWidget):
         # `units=` NICHT genutzt: PyQtGraph rendert das intern immer in
         # runden Klammern - fest "[s]" im Text selbst statt dessen, damit
         # die Zeiteinheit ueberall konsistent in eckigen Klammern steht.
-        self.plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+        self.plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
+        self.plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
 
@@ -696,10 +724,13 @@ class LiveView(QWidget):
     """Zeigt Messdaten einer laufenden Messung in Echtzeit an.
 
     Signals:
-        start_requested: Der Nutzer hat auf "Messung starten" geklickt.
+        start_requested: Der Nutzer hat auf Play (nur Live-Anzeige) oder
+            Aufnahme (mit Speicherung) geklickt - bool = `live_only`.
             `gui/main_window.py` startet die Messung dann mit der aktuell
-            konfigurierten Setup-Konfiguration.
-        stop_requested: Der Nutzer hat auf "Messung stoppen" geklickt.
+            konfigurierten Setup-Konfiguration und passend gesetztem
+            `MeasurementConfig.save_to_disk`.
+        stop_requested: Der Nutzer hat auf Stop geklickt (nur klickbar,
+            waehrend tatsaechlich etwas laeuft, siehe `set_start_enabled`).
             `gui/main_window.py` ist dafür zuständig, die Messung über
             den `MeasurementController` tatsächlich zu stoppen.
         trigger_fired: Ein scharf geschalteter Schwellwert-Trigger (siehe
@@ -712,7 +743,7 @@ class LiveView(QWidget):
             gleichzeitig bedienbar sind).
     """
 
-    start_requested = pyqtSignal()
+    start_requested = pyqtSignal(bool)  # live_only
     stop_requested = pyqtSignal()
     trigger_fired = pyqtSignal()
     trigger_arm_toggled = pyqtSignal(bool)
@@ -874,39 +905,50 @@ class LiveView(QWidget):
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
         self._set_trigger_arm_button_text()
-        self._trigger_arm_button.setIconSize(QSize(18, 18))
+        self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._trigger_arm_button.setStyleSheet(TRIGGER_ARM_BUTTON_STYLE)
         self._trigger_arm_button.setVisible(False)
         self._trigger_arm_button.toggled.connect(self._on_trigger_arm_button_toggled)
 
-        self._start_button = QPushButton()
-        self._set_start_button_text()
-        self._start_button.setIconSize(QSize(18, 18))
-        self._start_button.setStyleSheet(
-            "QPushButton { background-color: #1f7a36; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
-            "QPushButton:hover { background-color: #1a662e; }"
-            "QPushButton:pressed { background-color: #145125; }"
-        )
-        self._start_button.clicked.connect(self.start_requested.emit)
+        # Play (gruenes Icon, nur Live-Anzeige)/Aufnahme (rotes Kreis-Icon,
+        # mit Speicherung)/Stop - identisches Gegenstück zu
+        # `gui/setup_view.py` (siehe dort fuer die Begruendung des
+        # Drei-Button-Designs statt frueher einem Start-Button + "Nur
+        # Live-Ansicht"-Haken). `ACTION_BUTTON_STYLE` setzt bewusst KEINEN
+        # `background-color` im Normalzustand (anders als
+        # `_trigger_arm_button`) - folgen normal der QPalette/dem
+        # aktuellen Theme, nur die Play-/Aufnahme-Icon-Farbe ist fest
+        # (siehe `_retheme_action_button_icons`); nur Hover/Press bekommen
+        # einen dezenten Palette-basierten Effekt.
+        self._play_button = QPushButton()
+        self._play_button.setIconSize(QSize(24, 24))
+        self._play_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._play_button.clicked.connect(lambda: self.start_requested.emit(True))
+
+        self._record_button = QPushButton()
+        self._record_button.setIconSize(QSize(24, 24))
+        self._record_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._record_button.clicked.connect(lambda: self.start_requested.emit(False))
 
         self._stop_button = QPushButton()
-        self._set_stop_button_text()
-        self._stop_button.setIconSize(QSize(18, 18))
-        self._stop_button.setStyleSheet(
-            "QPushButton { background-color: #dc3545; color: #f9fafb; border: none; padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
-            "QPushButton:hover { background-color: #c82333; }"
-            "QPushButton:pressed { background-color: #bd2130; }"
-        )
+        self._stop_button.setIconSize(QSize(24, 24))
+        self._stop_button.setStyleSheet(ACTION_BUTTON_STYLE)
+        self._stop_button.setEnabled(False)
         self._stop_button.clicked.connect(self.stop_requested.emit)
 
         self._retheme_action_button_icons()
+        self._update_action_button_labels()
 
+        # Play/Aufnahme/Stop (+ Scharf-Button) links, die laufenden
+        # Messwerte (Dauer/Abtastrate) direkt daneben - vorher rechts vom
+        # Stretch, jetzt zusammen mit den Buttons links gruppiert.
+        info_row.addWidget(self._trigger_arm_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_row.addWidget(self._play_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_row.addWidget(self._record_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        info_row.addWidget(self._stop_button, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addWidget(self._duration_label, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addWidget(self._sample_rate_label, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addStretch(1)
-        info_row.addWidget(self._trigger_arm_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        info_row.addWidget(self._start_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        info_row.addWidget(self._stop_button, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(info_row)
 
         # "Scharf, wartet auf Trigger"-Banner (siehe `enter_armed_state`) -
@@ -1196,8 +1238,7 @@ class LiveView(QWidget):
 
     def retranslate_ui(self) -> None:
         """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
-        self._set_start_button_text()
-        self._set_stop_button_text()
+        self._update_action_button_labels()
         self._set_trigger_arm_button_text()
         self._storage_group.setTitle(t("storage_buffer_group"))
 
@@ -1249,20 +1290,42 @@ class LiveView(QWidget):
         self._apply_channel_appearance()
 
     def _retheme_action_button_icons(self) -> None:
-        self._start_button.setIcon(QIcon(draw_play_icon(20, y_offset=0.6)))
-        self._stop_button.setIcon(QIcon(draw_stop_icon(20, y_offset=0.6)))
-        # Fester grauer Hintergrund (siehe TRIGGER_ARM_BUTTON_STYLE)
-        # unabhaengig vom Theme - Icon daher immer Weiss (siehe
-        # `gui/setup_view.py::_retheme_trigger_arm_button_icon`).
-        self._trigger_arm_button.setIcon(
-            QIcon(draw_trigger_icon(20, y_offset=0.6, color=QColor(255, 255, 255)))
+        # Play/Aufnahme haben feste, theme-unabhaengige Symbolfarben (siehe
+        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop UND
+        # der Scharf-Button haben KEINEN fest codierten Hintergrund mehr
+        # (siehe `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE`) und
+        # bleiben daher bei der normalen theme-abhaengigen
+        # `nav_icon_color()` (kein `color=` uebergeben).
+        self._play_button.setIcon(QIcon(draw_play_icon(24, y_offset=0.6, color=PLAY_ICON_COLOR)))
+        self._record_button.setIcon(
+            QIcon(draw_record_icon(24, y_offset=0.6, color=RECORD_ICON_COLOR))
         )
+        self._stop_button.setIcon(QIcon(draw_stop_icon(24, y_offset=0.6)))
+        self._trigger_arm_button.setIcon(QIcon(draw_trigger_icon(24, y_offset=0.6)))
+        # `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE` referenzieren
+        # `palette(...)` - ohne manuelles unpolish()/polish() bleiben
+        # Rahmen/Hintergrund nach einem Live-Theme-Wechsel optisch im
+        # alten Theme haengen (gleicher Befund wie bei den
+        # Navigationskacheln, siehe
+        # `gui/main_window.py::_retheme_nav_icons`).
+        for button in (
+            self._play_button,
+            self._record_button,
+            self._stop_button,
+            self._trigger_arm_button,
+        ):
+            repolish(button)
 
-    def _set_start_button_text(self) -> None:
-        self._start_button.setText(f"  {t('start_measurement')}")
-
-    def _set_stop_button_text(self) -> None:
-        self._stop_button.setText(f"  {t('stop_measurement')}")
+    def _update_action_button_labels(self) -> None:
+        # Kurzer Button-Text (siehe `play_button_label`/`record_button_label`/
+        # `stop_button_label`) UND ausfuehrlicherer Tooltip (bestehende
+        # `live_only`/`start_measurement`/`stop_measurement`-Keys).
+        self._play_button.setText(f"  {t('play_button_label')}")
+        self._play_button.setToolTip(t("live_only"))
+        self._record_button.setText(f"  {t('record_button_label')}")
+        self._record_button.setToolTip(t("start_measurement"))
+        self._stop_button.setText(f"  {t('stop_button_label')}")
+        self._stop_button.setToolTip(t("stop_measurement"))
 
     def _set_trigger_arm_button_text(self) -> None:
         key = "trigger_disarm_button" if self._trigger_arm_button.isChecked() else "trigger_arm_button"
@@ -1288,7 +1351,12 @@ class LiveView(QWidget):
         self._set_trigger_arm_button_text()
 
     def set_start_enabled(self, enabled: bool) -> None:
-        self._start_button.setEnabled(enabled)
+        """Siehe `gui/setup_view.py::SetupView.set_start_enabled` -
+        identisches Gegenstück hier: Stop folgt IMMER dem umgekehrten
+        Zustand."""
+        self._play_button.setEnabled(enabled)
+        self._record_button.setEnabled(enabled)
+        self._stop_button.setEnabled(not enabled)
         # Siehe `gui/setup_view.py::SetupView.set_start_enabled` - gleiche
         # Ausnahme: waehrend eines eigenen aktiven Zyklus bleibt der
         # Scharf-Button immer klickbar (damit "entschärfen" jederzeit geht).
@@ -1690,7 +1758,8 @@ class LiveView(QWidget):
             plot_item.showGrid(x=True, y=True, alpha=0.3)
             # `units=` NICHT genutzt (siehe `ChannelPopoutWindow.__init__`)
             # - Zeiteinheit ueberall einheitlich in eckigen Klammern.
-            plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+            plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
+            plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
             style_plot_item(plot_item)
             # KEIN `setXLink` zwischen den Subplots: jeder Kanal hat sein
             # eigenes, unabhaengig konfigurierbares Zeitfenster

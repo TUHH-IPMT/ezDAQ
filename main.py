@@ -21,7 +21,7 @@ import time
 # Sensor-Datenbank/Hauptfenster schneller fertig sind - sonst blitzt er auf
 # schnellen Rechnern nur einen Wimpernschlag lang auf und wirkt eher wie
 # ein Grafikfehler als wie absichtliches Startup-Feedback.
-_SPLASH_MIN_SECONDS = 0.7
+_SPLASH_MIN_SECONDS = 1.5
 
 
 def configure_logging() -> None:

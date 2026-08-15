@@ -53,17 +53,70 @@ _PLOT_COLORS = {
 # statt wie ein eigenstaendiges weisses/schwarzes Rechteck zu wirken.
 _PLOT_CONTAINER_COLORS = {"light": "#f0f0f0", "dark": "#353535"}
 
-# Gleiche Form/Padding/Schrift wie der gruene "Messung starten"-Button
-# (siehe `gui/setup_view.py`/`gui/live_view.py`), nur grau statt gruen -
-# fuer den Trigger-Scharf-Button (`_trigger_arm_button`), der in BEIDEN
-# Ansichten identisch aussehen soll. An einer Stelle definiert, damit
-# beide nicht auseinanderlaufen koennen.
-TRIGGER_ARM_BUTTON_STYLE = (
-    "QPushButton { background-color: #5f6368; color: #f9fafb; border: none;"
-    " padding: 6px 16px; border-radius: 4px; font-weight: 700; font-size: 11pt; }"
-    "QPushButton:hover { background-color: #4d5054; }"
-    "QPushButton:pressed, QPushButton:checked { background-color: #3c3f42; }"
+# Gemeinsamer Grundstil fuer Play/Aufnahme/Stop UND den Trigger-Scharf-
+# Button (`_trigger_arm_button`) in BEIDEN Ansichten (`gui/setup_view.py`/
+# `gui/live_view.py`) - An einer Stelle definiert, damit sie nicht
+# auseinanderlaufen koennen. Text-/Hintergrundfarbe kommen bewusst NICHT
+# als Literal, sondern ueber `palette(button-text)`/`palette(button)` -
+# folgen so automatisch dem aktuellen Theme (inkl. automatisch gedimmter
+# Farbe im deaktivierten Zustand, ganz ohne eigene `:disabled`-Regel -
+# das ist der Sinn von `palette(...)` in Qt-Stylesheets). `Button` und
+# `Window` sind in beiden Paletten (siehe `_build_light_palette`/
+# `_build_dark_palette`) bewusst IDENTISCH - ohne eigenen Rahmen waeren
+# die Buttons daher optisch nicht vom Hintergrund zu unterscheiden, daher
+# der sichtbare `border`. `palette(mid)` waere dafuer zu kontrastarm
+# (siehe Kommentar zu den Navigationskacheln in gui/main_window.py -
+# derselbe Befund), daher `palette(dark)`. Hover/Press bekommen einen
+# dezenten Effekt ueber `palette(midlight)`/`palette(mid)`.
+# Grosszuegigeres Padding als Qt's Standard macht die Buttons insgesamt
+# etwas hoeher/praesenter.
+ACTION_BUTTON_STYLE = (
+    "QPushButton {"
+    "   border: 1px solid palette(dark);"
+    "   border-radius: 4px;"
+    "   padding: 8px 18px;"
+    "   background-color: palette(button);"
+    "   color: palette(button-text);"
+    "}"
+    "QPushButton:hover { background-color: palette(midlight); }"
+    "QPushButton:pressed { background-color: palette(mid); }"
 )
+
+# Wie `ACTION_BUTTON_STYLE`, aber zusaetzlich mit einem deutlich sichtbaren
+# "scharf/aktiv"-Zustand (`:checked`, bleibt gedrueckt bis erneut
+# geklickt) - dafuer `palette(highlight)`/`palette(highlighted-text)`
+# (Qt's dedizierte Rollen fuer genau diesen Zweck: ein hervorgehobenes
+# Element mit garantiert lesbarem Text darauf, in beiden Themes ein
+# kraeftiger Akzentton statt eines neutralen Grautons).
+TRIGGER_ARM_BUTTON_STYLE = (
+    "QPushButton {"
+    "   border: 1px solid palette(dark);"
+    "   border-radius: 4px;"
+    "   padding: 8px 18px;"
+    "   background-color: palette(button);"
+    "   color: palette(button-text);"
+    "}"
+    "QPushButton:hover:!checked { background-color: palette(midlight); }"
+    "QPushButton:pressed:!checked { background-color: palette(mid); }"
+    "QPushButton:checked {"
+    "   background-color: palette(highlight);"
+    "   color: palette(highlighted-text);"
+    "   border-color: palette(highlight);"
+    "}"
+)
+
+# Feste (theme-unabhaengige) Symbolfarben fuer die Play-/Aufnahme-Buttons
+# (siehe `draw_play_icon`/`draw_record_icon` unten sowie
+# `gui/setup_view.py`/`gui/live_view.py`) - Gruen = nur Live-Anzeige (kein
+# Speichern), Rot = Aufzeichnung MIT Speicherung. Stop UND der
+# Trigger-Scharf-Button bekommen bewusst KEINE feste Icon-Farbe (bleiben
+# bei der theme-abhaengigen `nav_icon_color()`) - "Rot fuer Stop" ist hier
+# schon durch den Aufnahme-Button belegt, und ein fest weisses Icon waere
+# auf einem hellen Theme-Hintergrund unsichtbar (beide Buttons haben seit
+# `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE` keinen fest dunklen
+# Hintergrund mehr).
+PLAY_ICON_COLOR = QColor(46, 204, 113)
+RECORD_ICON_COLOR = QColor(220, 53, 69)
 
 
 def _build_light_palette() -> QPalette:
@@ -210,6 +263,15 @@ def _axis_tick_font() -> QFont:
     return font
 
 
+def axis_tick_point_size() -> int:
+    """Punktgroesse der Achsentick-Beschriftung (siehe `_axis_tick_font`) -
+    oeffentlich, damit Achsen-LABEL (z. B. "Zeit [s]", Kanalname/Einheit
+    auf der Y-Achse, siehe `gui/live_view.py`) dieselbe Schriftgroesse
+    verwenden koennen wie die Tick-Werte selbst, statt PyQtGraph's
+    kleinerem Default fuer Achsentitel."""
+    return _axis_tick_font().pointSize()
+
+
 def style_plot_item(plot_item) -> None:
     """Färbt Achsen und Titel eines einzelnen PyQtGraph-`PlotItem` im
     aktuellen Theme und vergrössert die Achsentick-Beschriftung leicht
@@ -349,6 +411,24 @@ def draw_play_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None =
     return pixmap
 
 
+def draw_record_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
+    """Gefuellter Kreis - das gebraeuchliche Aufnahme-Symbol (Video-/Audio-
+    Geraete), fuer den Button, der eine Messung MIT Speicherung startet
+    (siehe `gui/setup_view.py`/`gui/live_view.py`) - unterscheidet ihn
+    optisch vom reinen Live-Anzeige-Button (`draw_play_icon`).
+
+    `y_offset`/`color` wie bei `draw_play_icon`.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color if color is not None else nav_icon_color())
+    m = size * 0.2
+    diameter = size - 2 * m
+    painter.drawEllipse(QRectF(m, m + y_offset, diameter, diameter))
+    painter.end()
+    return pixmap
+
+
 def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
     """Blitz-Symbol für den Trigger-Scharf-Button (`_trigger_arm_button` in
     `gui/setup_view.py`/`gui/live_view.py`) - das gebräuchliche Zeichen für
@@ -476,11 +556,18 @@ def draw_minus_icon(size: int = 16) -> QPixmap:
     return pixmap
 
 
-def draw_stop_icon(size: int = 16, y_offset: float = 0.0) -> QPixmap:
-    """Quadratisches Stop-Symbol für Abbruch-/Stop-Aktionen."""
+def draw_stop_icon(size: int = 16, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
+    """Quadratisches Stop-Symbol für Abbruch-/Stop-Aktionen.
+
+    `color` wie bei `draw_play_icon` - fuer Buttons mit fest codiertem
+    (nicht theme-abhaengigem) Hintergrund IMMER Weiss statt der sonst
+    theme-abhaengigen `nav_icon_color()`; ohne Override (z. B. die Stop-
+    Buttons in `gui/setup_view.py`/`gui/live_view.py`, die normal der
+    QPalette folgen) faellt das Icon auf `nav_icon_color()` zurueck.
+    """
     pixmap, painter = _new_icon_pixmap(size)
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(nav_icon_color())
+    painter.setBrush(color if color is not None else nav_icon_color())
     m = size * 0.23
     side = size - 2 * m
     painter.drawRect(QRectF(m, m + y_offset, side, side))

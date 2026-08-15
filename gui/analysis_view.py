@@ -59,6 +59,7 @@ from data.models import Channel
 from gui.i18n import connect_language_changed, t
 from gui.dialogs import confirm_delete
 from gui.theme import (
+    axis_tick_point_size,
     connect_theme_changed,
     draw_fft_icon,
     draw_highpass_icon,
@@ -464,8 +465,16 @@ class AnalysisView(QWidget):
             # `units=` NICHT genutzt: PyQtGraph rendert das intern immer in
             # runden Klammern - fest "[s]" im Text selbst statt dessen,
             # damit die Zeiteinheit ueberall konsistent in eckigen Klammern
-            # steht (siehe gui/live_view.py).
-            plot_widget.setLabel("bottom", f"{t('axis_time')} [s]")
+            # steht (siehe gui/live_view.py). Schriftgroesse explizit wie
+            # die Achsentick-Beschriftung (siehe
+            # gui/theme.py::axis_tick_point_size) - MUSS vor
+            # `style_plot_item()` gesetzt werden, siehe
+            # gui/live_view.py::_axis_label_style fuer die Begruendung.
+            # `_refresh_plot_axis_labels()`/`retranslate_ui()` setzen den
+            # Text spaeter ohne Kwargs neu, das behaelt dieses Style bei.
+            plot_widget.setLabel(
+                "bottom", f"{t('axis_time')} [s]", **{"font-size": f"{axis_tick_point_size()}pt"}
+            )
             plot_widget.addLegend()
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())

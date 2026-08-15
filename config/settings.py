@@ -83,7 +83,6 @@ class AppSettings:
         default_storage_format: Vorbelegtes Speicherformat
             (Wert von ``data.models.StorageFormat``, z. B. "parquet").
         last_measurement_name: Zuletzt verwendeter Messname.
-        last_live_only: Letzte Auswahl fuer "Nur Live anzeigen".
         language: Zuletzt gewählte UI-Sprache ("de"/"en").
         theme: Zuletzt gewähltes Farbschema ("light"/"dark").
         name_use_number_suffix: Ob beim Messstart automatisch ein
@@ -112,7 +111,6 @@ class AppSettings:
     default_sample_rate_hz: float = 1000.0
     default_storage_format: str = "parquet"
     last_measurement_name: str = "Messung"
-    last_live_only: bool = False
     language: str = "de"
     theme: str = "light"
     name_use_number_suffix: bool = True
@@ -152,7 +150,6 @@ class AppSettings:
             default_sample_rate_hz=data.get("default_sample_rate_hz", 1000.0),
             default_storage_format=data.get("default_storage_format", "parquet"),
             last_measurement_name=data.get("last_measurement_name", "Messung"),
-            last_live_only=data.get("last_live_only", False),
             language=data.get("language", "de"),
             theme=data.get("theme", "light"),
             name_use_number_suffix=data.get("name_use_number_suffix", True),
