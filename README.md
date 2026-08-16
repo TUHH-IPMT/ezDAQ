@@ -1,126 +1,142 @@
 # ezDAQ - Easy Data Acquisition
 
-Windows-Desktopanwendung zur Datenerfassung und Analyse von Messdaten mit
-NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213).
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 
-## Funktionsumfang (aktueller Stand)
+*[Deutsche Version](README.de.md)*
 
-**Hardware & Erfassung**
-- Geräteerkennung und -konfiguration für NI 9215 (±10 V Spannung),
-  NI 9234 (Spannung oder IEPE-Beschleunigung/Mikrofon), NI 9210 (4-Kanal
-  Thermoelement) und NI 9213 (16-Kanal Thermoelement, J/K/T/E/N/R/S/B)
-- Synchronisierte Erfassung über mehrere Module hinweg (gemeinsamer
-  nidaqmx-Task)
-- Live-Datenerfassung in einem eigenen DAQ-Thread über einen
-  thread-sicheren Ring Buffer (ausgelegt bis 100 kHz)
-- Speicherung während der Messung als Parquet (bevorzugt) oder CSV,
-  inklusive `metadata`-JSON (Startzeit, Abtastrate, Hardware, Kanäle,
-  Skalierungen, Einheiten)
-- Kanalparameter je nach Signaltyp (Skalierung, Offset, Sensitivität,
-  Thermoelement-Typ) über einen eigenen Einstellungsdialog pro Kanal,
-  inklusive 2-Punkt-Kalibrierung für Thermoelemente
+Windows desktop application for data acquisition and analysis with
+NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213).
+
+## Features (current state)
+
+**Hardware & Acquisition**
+- Device discovery and configuration for NI 9215 (±10 V voltage),
+  NI 9234 (voltage or IEPE acceleration/microphone), NI 9210 (4-channel
+  thermocouple), and NI 9213 (16-channel thermocouple, J/K/T/E/N/R/S/B)
+- Synchronized acquisition across multiple modules (shared nidaqmx task)
+- Live data acquisition on a dedicated DAQ thread via a thread-safe ring
+  buffer (designed for up to 100 kHz)
+- Storage during measurement as Parquet (preferred) or CSV, including a
+  `metadata` JSON file (start time, sample rate, hardware, channels,
+  scaling, units)
+- Per-channel parameters depending on signal type (scaling, offset,
+  sensitivity, thermocouple type) via a dedicated settings dialog per
+  channel, including 2-point calibration for thermocouples
 
 **Live View**
-- Echtzeit-Visualisierung mehrerer Kanäle (PyQtGraph, OpenGL-beschleunigt)
-- Kanal-Darstellung frei konfigurierbar (Kurvenfarbe, Hintergrund,
-  Y-Bereich, hybride Autoskalierung) – Teil der gespeicherten Konfiguration
-- Vorschau der konfigurierten Kanäle bereits vor Messstart
+- Real-time visualization of multiple channels (PyQtGraph,
+  OpenGL-accelerated)
+- Freely configurable channel display (curve color, background, Y range,
+  hybrid autoscaling) – part of the saved configuration
+- Preview of configured channels before a measurement is even started
 
-**Analyse-Ansicht**
-- Laden gespeicherter Messungen (Drag & Drop oder Dateiauswahl),
-  Kanalauswahl per Baumansicht, Zoom/Pan, umschaltbare Plot-Layouts
-- Analysefunktionen: FFT (Frequenzspektrum), Tiefpass-/Hochpassfilter,
-  Glättung (gleitender Mittelwert) – Ergebnisse werden als neue Kanäle
-  unter der Quelldatei abgelegt und lassen sich als CSV/Parquet speichern
-- RMS, Statistik und automatische Reports sind vorbereitet, aber noch
-  nicht implementiert (siehe `analysis/basic_analysis.py`)
+**Analysis View**
+- Loading saved measurements (drag & drop or file picker), channel
+  selection via tree view, zoom/pan, switchable plot layouts
+- Analysis functions: FFT (frequency spectrum), low-pass/high-pass
+  filters, smoothing (moving average) – results are stored as new
+  channels under the source file and can be exported as CSV/Parquet
+- RMS, statistics, and automatic reports are scaffolded but not yet
+  implemented (see `analysis/basic_analysis.py`)
 
-**Sonstiges**
-- Mehrsprachig (Deutsch/Englisch) und Hell/Dunkel-Theme, beides zur
-  Laufzeit umschaltbar
-- Projektverwaltung (ein Projekt gleichzeitig) mit `project.json`,
-  `measurements/` und `metadata/`
-- Persistente Anwendungseinstellungen (Fenstergeometrie, zuletzt
-  verwendete Hardware/Kanäle, Sprache, Theme)
-- Messungen auch ganz ohne GUI aus einem eigenen Python-Skript steuerbar
-  (`core/measurement_runner.py`, siehe `doc/messung_per_skript.md`)
+**Other**
+- Multilingual (German/English) and light/dark theme, both switchable at
+  runtime
+- Project management (one project at a time) with `project.json`,
+  `measurements/`, and `metadata/`
+- Persistent application settings (window geometry, last-used
+  hardware/channels, language, theme)
+- Measurements can also be run entirely without the GUI from a Python
+  script (`core/measurement_runner.py`, see `doc/messung_per_skript.md`)
 
 ## Installation
 
-Empfohlen wird eine virtuelle Umgebung:
+A virtual environment is recommended:
 
     python -m venv .venv
     .venv\Scripts\activate        # Windows
     pip install -r requirements.txt
 
-Für die Kommunikation mit echter Hardware muss zusätzlich der
-**NI-DAQmx-Treiber** von National Instruments installiert sein. Ohne
-Treiber startet die Anwendung dennoch – die Geräteerkennung liefert dann
-eine leere Liste, und ein Messstart meldet einen sauberen Fehler.
+To communicate with real hardware, the **NI-DAQmx driver** from National
+Instruments must also be installed. Without the driver, the application
+still starts – device discovery then returns an empty list, and starting
+a measurement reports a clean error.
 
-## Start
+## Running
 
     python main.py
 
-Alternativ ganz ohne GUI aus einem eigenen Skript heraus steuerbar, siehe
-`doc/messung_per_skript.md`.
+Alternatively, measurements can be run entirely without the GUI from your
+own script, see `doc/messung_per_skript.md`.
 
-## Architektur
+## Architecture
 
-Die Anwendung ist strikt geschichtet; die GUI kommuniziert niemals direkt
-mit `nidaqmx`:
+The application is strictly layered; the GUI never talks to `nidaqmx`
+directly:
 
     GUI  ->  MeasurementController  ->  Hardware Interface  ->  nidaqmx  ->  NI cDAQ
 
-Datenfluss während einer Messung:
+Data flow during a measurement:
 
-    DAQ-Thread  ->  Ring Buffer  ->  Live View
+    DAQ thread  ->  Ring buffer  ->  Live View
                                  ->  Storage Writer
 
-Verzeichnisse:
+Directories:
 
-- `core/` – Ring Buffer, DAQ-Thread, Messcontroller, Kanal-/Geräte-Logik,
-  `MeasurementRunner` für den GUI-losen Skript-Gebrauch
-- `hardware/` – Hardware-Abstraktion und NI-cDAQ-Module (`ni9215.py`,
-  `ni9234.py`, `ni9210.py`, `ni9213.py`) – einzige Stelle mit
-  `nidaqmx`-Zugriff
-- `data/` – Datenmodelle (`models.py`), Metadaten/Projekte, Export
-  (Parquet/CSV), Laden gespeicherter Messungen (`loader.py`, für die
-  Analyse-Ansicht)
-- `gui/` – Hauptfenster und Ansichten (Setup, Live, Analyse), Theming
-  (`theme.py`) und Übersetzungen (`i18n.py`, DE/EN)
-- `analysis/` – Analysefunktionen (`basic_analysis.py`): FFT, Filter,
-  Glättung implementiert; RMS, Statistik, Reports vorbereitet, aber noch
-  nicht implementiert
-- `config/` – persistente Konfiguration
-- `resources/` – Anwendungs-Icon (`icon.png`/`icon.ico`), Zugriff zur
-  Laufzeit über `config.settings.get_resource_path()`
-- `doc/` – ergänzende Dokumentation (aktuell: Messung per Skript steuern)
+- `core/` – ring buffer, DAQ thread, measurement controller,
+  channel/device logic, `MeasurementRunner` for GUI-less scripted use
+- `hardware/` – hardware abstraction and NI cDAQ modules (`ni9215.py`,
+  `ni9234.py`, `ni9210.py`, `ni9213.py`) – the only place that touches
+  `nidaqmx`
+- `data/` – data models (`models.py`), metadata/projects, export
+  (Parquet/CSV), loading saved measurements (`loader.py`, for the
+  Analysis view)
+- `gui/` – main window and views (Setup, Live, Analysis), theming
+  (`theme.py`) and translations (`i18n.py`, DE/EN)
+- `analysis/` – analysis functions (`basic_analysis.py`): FFT, filters,
+  and smoothing are implemented; RMS, statistics, and reports are
+  scaffolded but not yet implemented
+- `config/` – persistent configuration
+- `resources/` – application icon (`icon.png`/`icon.ico`), accessed at
+  runtime via `config.settings.get_resource_path()`
+- `doc/` – supplementary documentation (currently: scripted/headless
+  measurement usage)
 
-## Verpacken als portable Windows-Anwendung (PyInstaller)
+## Packaging as a portable Windows application (PyInstaller)
 
     pip install pyinstaller
     pyinstaller --noconfirm --windowed --name ezDAQ ^
         --icon resources\icon.ico --add-data "resources;resources" main.py
 
-`--icon` setzt das Icon der erzeugten `.exe` (Explorer/Taskbar), `--add-data`
-bündelt den `resources/`-Ordner mit, damit `get_resource_path()` das Icon
-auch im gepackten Programm zur Laufzeit findet (Fenster-/Taskbar-Icon,
-About-Dialog).
+`--icon` sets the icon of the generated `.exe` (Explorer/taskbar),
+`--add-data` bundles the `resources/` folder so `get_resource_path()` can
+still find the icon at runtime in the packaged build (window/taskbar
+icon, About dialog).
 
-Hinweis: `nidaqmx` lädt die native NI-DAQmx-Bibliothek zur Laufzeit vom
-Zielsystem; der NI-DAQmx-Treiber muss daher auch auf dem Zielrechner
-installiert sein. Je nach PyInstaller-Version kann ein zusätzliches
-`--hidden-import nidaqmx` bzw. das Einsammeln von `pyqtgraph`-Ressourcen
-nötig sein.
+Note: `nidaqmx` loads the native NI-DAQmx library from the target system
+at runtime, so the NI-DAQmx driver must also be installed on the target
+machine. Depending on the PyInstaller version, an additional
+`--hidden-import nidaqmx` or collecting `pyqtgraph` resources may be
+necessary.
 
-## Wichtiger Hinweis zum Hardware-Test
+## Important note on hardware testing
 
-Die Hardware-Schicht (`hardware/nidaq_device.py`, `ni9215.py`,
-`ni9234.py`, `ni9210.py`, `ni9213.py`) wurde gegen die offiziellen
-`nidaqmx`-API-Signaturen entwickelt und geprüft, jedoch **nicht
-durchgängig gegen echte Hardware** getestet – NI 9210/NI 9213
-(Thermoelement, inkl. 2-Punkt-Kalibrierung) bislang gar nicht. Ein Test
-mit angeschlossener Hardware wird dringend empfohlen, bevor produktiv
-gemessen wird. Alle übrigen Schichten (Ring Buffer, Controller,
-Speicherung, GUI) wurden mit simulierter Hardware end-to-end getestet.
+The hardware layer (`hardware/nidaq_device.py`, `ni9215.py`, `ni9234.py`,
+`ni9210.py`, `ni9213.py`) was developed and checked against the official
+`nidaqmx` API signatures, but has **not been comprehensively tested
+against real hardware** – NI 9210/NI 9213 (thermocouple, including
+2-point calibration) not at all so far. Testing with connected hardware
+is strongly recommended before relying on this for production
+measurements. All other layers (ring buffer, controller, storage, GUI)
+have been tested end-to-end with simulated hardware.
+
+## Authors
+
+Malte Flehmke, Sebastian Junghans – originally developed at IPMT, TUHH
+(Hamburg University of Technology).
+
+## License
+
+Released under the [GNU General Public License v3](LICENSE) (GPLv3).
