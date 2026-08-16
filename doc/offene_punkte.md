@@ -39,3 +39,102 @@ Formel wie beim NI9234 reicht nicht aus.
 NI-9213-Datenblatts verifiziert werden, um keine falsche Validierung
 einzubauen - analog zur Verifikation der 51200/n-Formel beim NI9234
 vor dessen Umsetzung.
+
+## Gleichzeitige Erfassung mit grundsätzlich inkompatiblen Abtastraten (z. B. NI9210 + NI9234)
+
+Notiert: 2026-08-16
+
+**Ausgangsproblem:** Ein NI9210 (fest 14 S/s, siehe
+`NI9210_FIXED_SAMPLE_RATE_HZ`) lässt sich mit der aktuellen Architektur
+niemals gemeinsam mit einem NI9234 (braucht i. d. R. deutlich höhere
+Raten für Vibrationsmessung, siehe `is_valid_ni9234_sample_rate`) in
+**einer** Messung betreiben. Grund: `core/controller.py` baut immer
+genau einen gemeinsamen Task mit genau einer Abtastrate, sobald mehr
+als ein Gerät aktiv ist (`if len(devices) > 1: shared_task =
+NIDAQSharedTask()`, siehe `start_measurement()`). Es gibt kein Konzept
+von "zwei Geräte, zwei unabhängige Raten, zwei Tasks".
+
+**Aktuelles Verhalten (geprüft):** Die App blockiert diese Kombination
+bereits zuverlässig - für jede denkbare Abtastrate schlägt entweder die
+NI9210- oder die NI9234-Validierung in `MeasurementConfig.__post_init__`
+an, da sich die beiden gültigen Wertebereiche (exakt 14,0 Hz vs.
+1.651,6-51.200 Hz in diskreten Schritten) nirgends überschneiden. Die
+Fehlermeldung nennt aber nie die eigentliche Ursache ("diese Module
+können nicht kombiniert werden"), sondern springt je nach eingegebener
+Rate zwischen den beiden Einzel-Fehlermeldungen hin und her - für
+Nutzer verwirrend, auch wenn funktional nichts falsch gemacht wird.
+
+**Realer Hintergrund (verifiziert):** Die 14 S/s des NI9210 sind eine
+echte physikalische Obergrenze des Delta-Sigma-ADCs (NI-Datenblatt:
+"maximum sample rate of 14 samples per second"), keine willkürliche
+Software-Vorgabe. NI-MAX/DIAdem validieren das allerdings nicht sauber:
+laut NI-Community wird eine zu hoch eingestellte Rate beim NI9210 ohne
+Fehlermeldung still auf 14 S/s gekappt ("NI MAX does not raise an error
+message when you set the Sample Rate too high" -
+[forums.ni.com](https://forums.ni.com/t5/Multifunction-DAQ/NI-9213-Thermocouple-logging-rate/td-p/3795435)).
+Das erklärt vermutlich auch den ursprünglichen Anlass dieser ganzen
+Diskussion: eine frühere DIAdem-Messung, bei der 2000 Hz für ein NI9210
+eingegeben wurde, DIAdem das anstandslos akzeptierte, die Hardware aber
+weiterhin nur mit 14 S/s gewandelt hat, ohne das kenntlich zu machen.
+
+**Wie DAQmx/DIAdem das grundsätzlich lösen:** Ein Task = eine
+gemeinsame Sample-Clock-Rate ist eine generische DAQmx-Regel, die für
+JEDE Gerätekombination gilt - nicht modulspezifisch hartkodiert. Um
+unterschiedliche Raten gleichzeitig zu fahren, nutzt man einfach
+**mehrere Tasks** (NI-Doku: "to acquire from two modules at multiple
+rates you need to use two data acquisition objects"), optional über
+einen gemeinsamen Hardware-Trigger für einen synchronen Start
+verkoppelt. Reale Grenze bei (älteren) Gen-II-cDAQ-Chassis: maximal
+zwei gleichzeitige Sync-Pulse-Signale, d. h. praktisch max. zwei
+unabhängige Taktgruppen pro Chassis - für den Fall "eine langsame
+Gruppe + eine schnelle Gruppe" ausreichend.
+
+**Angedachte Architektur für dieses Tool ("Merge vor Ring Buffer"):**
+
+```
+9210-Task (14 S/s)     ─┐
+                         ├─► Merge/Align (Forward-Fill) ─► Ring Buffer ─► Live View
+schnelle Gruppe (2 kHz)─┘                                              ─► Storage Writer
+```
+
+- Kanäle werden automatisch nach Ratenkompatibilität gruppiert (anhand
+  der bereits vorhandenen Validierungslogik - `NI9210_FIXED_SAMPLE_RATE_HZ`,
+  `is_valid_ni9234_sample_rate`, künftig auch die NI9213-Prüfung von
+  oben) - keine hartkodierte Modul-Kombinationsliste.
+- Es bleibt bei **einem** Eingabefeld für die Abtastrate (wie heute/wie
+  DIAdem). Dieser Zielwert wird pro Taktgruppe unabhängig interpretiert
+  (geclippt/gerundet auf das, was die jeweilige Gruppe tatsächlich
+  kann) - aber anders als DIAdem wird die tatsächlich verwendete Rate
+  je Gruppe hinterher sichtbar zurückgemeldet (Metadaten, Live View),
+  statt es stillschweigend zu verschlucken.
+- Jede Taktgruppe bekommt einen eigenen Hardware-Task und eigenen
+  DAQ-Thread/Reader, läuft mit ihrer eigenen nativen Rate weiter.
+- Ein neuer Merge-Baustein zwischen den Hardware-Tasks und dem
+  bestehenden Ring Buffer führt die Streams auf eine gemeinsame
+  Zeitachse zusammen: pro "Tick" der schnellsten/nominellen Gruppe wird
+  eine Zeile gebaut, langsamere Kanäle liefern dabei ihren zuletzt
+  gültigen Wert erneut (Zero-Order-Hold/Plateau), bis ihr nächster
+  echter Messwert eintrifft.
+- Alles unterhalb des Ring Buffers (Live View, Storage Writer,
+  Analyse-Ansicht) bleibt dadurch konzeptionell unverändert - sieht
+  weiterhin nur "eine Zeile pro Zeitpunkt, alle Kanäle", genau wie bei
+  einer heutigen Single-Rate-Messung.
+
+**Zu beachtende Folgen, bevor das umgesetzt wird:**
+1. Dateigröße: langsame Kanäle bekommen genauso viele Zeilen wie die
+   schnelle Gruppe (viele Wiederholungen) - Parquet komprimiert das
+   gut, CSV nicht.
+2. Analyse-Vorsicht: FFT/Filter dürfen nicht blind auf einer
+   hochgezogenen/forward-gefüllten Spalte laufen (künstliche Stufen im
+   Spektrum) - braucht eine Kennzeichnung je Kanal (native Rate vs.
+   nominelle/gemergte Rate) in den Metadaten, die die Analyse-Ansicht
+   auswerten kann.
+
+**Betroffene Bereiche (grobe Einschätzung, noch kein Umsetzungsplan im
+Detail):** `core/controller.py`/`core/acquisition.py` (Task-Erzeugung
+pro Gruppe statt immer genau ein Shared Task), neuer
+Merge/Forward-Fill-Baustein, `data/models.py` (Metadaten für native
+Rate je Kanal), `analysis/basic_analysis.py` (Rate-Bewusstsein),
+`gui/setup_view.py`/`gui/live_view.py` (Rückmeldung der tatsächlichen
+Rate je Gruppe). Noch nicht begonnen - reine Anforderungs-/
+Architektur-Notiz aus einer längeren Diskussion.
