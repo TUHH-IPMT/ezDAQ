@@ -412,7 +412,9 @@ _translations = {
             "Start- und Stopp-Trigger per Schwellwert oder serieller Schnittstelle.\n\n"
             "Zusätzlich verfügbar: Sensor-Datenbank, FFT und Filteranalyse, "
             "Drag-and-Drop-Import, Mehrsprachigkeit und Hell-/Dunkel-Theme.\n\n"
-            "© 2026 IPMT\n\n"
+            "© 2026 Malte Flehmke, Sebastian Junghans "
+            "(ursprünglich entwickelt am IPMT, TUHH)\n\n"
+            "Lizenziert unter der GNU General Public License v3.\n\n"
             "Verwendete Open-Source-Komponenten:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."
         ),
@@ -802,7 +804,9 @@ _translations = {
             "recording limits, and automatic threshold or serial start/stop triggers.\n\n"
             "Also included: sensor database, FFT and filter analysis, "
             "drag-and-drop import, multilingual UI, and light/dark themes.\n\n"
-            "© 2026 IPMT\n\n"
+            "© 2026 Malte Flehmke, Sebastian Junghans "
+            "(originally developed at IPMT, TUHH)\n\n"
+            "Licensed under the GNU General Public License v3.\n\n"
             "Open-source components used:\n"
             "Python, PyQt6, PyQtGraph, nidaqmx, NumPy, Pandas, PyArrow, psutil."
         ),
