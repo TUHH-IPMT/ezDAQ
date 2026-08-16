@@ -78,7 +78,7 @@ class NI9234(NIDAQDevice):
         max_val = channel.max_range if channel.max_range is not None else NI9234_MAX_VOLTAGE
 
         if channel.signal_type == SignalType.IEPE_ACCELERATION:
-            task.ai_channels.add_ai_accel_chan(
+            ai_channel = task.ai_channels.add_ai_accel_chan(
                 physical_channel=channel.hardware_channel,
                 name_to_assign_to_channel=channel.display_name,
                 terminal_config=TerminalConfiguration.DEFAULT,
@@ -91,7 +91,7 @@ class NI9234(NIDAQDevice):
                 current_excit_val=NI9234_IEPE_EXCITATION_AMPS,
             )
         else:
-            task.ai_channels.add_ai_voltage_chan(
+            ai_channel = task.ai_channels.add_ai_voltage_chan(
                 physical_channel=channel.hardware_channel,
                 name_to_assign_to_channel=channel.display_name,
                 terminal_config=TerminalConfiguration.DEFAULT,
@@ -99,3 +99,20 @@ class NI9234(NIDAQDevice):
                 max_val=max_val,
                 units=VoltageUnits.VOLTS,
             )
+
+        # Das NI9234 hat als Delta-Sigma-ADC eine feste Filterverzögerung
+        # zwischen analogem Abtastzeitpunkt und digital ausgelesenem Sample
+        # (laut Datenblatt ca. 40 Sample-Clock-Perioden + 3,2 µs) - anders
+        # als z. B. das NI9215 (SAR-ADC, praktisch keine Verzögerung).
+        # NI-DAQmx kompensiert das bei C-Series-DSA-Modulen NICHT automatisch,
+        # auch nicht in einem gemeinsamen Task mit anderen Modulen (Channel
+        # Expansion) - ohne diese Property wären NI9234-Kanäle gegenüber
+        # z. B. NI9215-Kanälen im selben Task zeitlich versetzt (~1
+        # Sample-Periode bei niedrigen Abtastraten). Wird unabhängig davon
+        # gesetzt, ob das Modul allein oder zusammen mit anderen läuft - bei
+        # einer reinen NI9234-Messung macht es den gemeldeten Zeitstempel
+        # ebenfalls korrekter und schadet nicht. Quelle: NI-Knowledgebase
+        # "Synchronized Data Delayed When Using NI DAQ Devices with
+        # Delta-Sigma-ADC". NICHT gegen echte Hardware verifiziert (siehe
+        # Hardware-Testvorbehalt in hardware/nidaq_device.py).
+        ai_channel.ai_remove_filter_delay = True
