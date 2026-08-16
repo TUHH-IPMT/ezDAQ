@@ -110,6 +110,11 @@ _translations = {
         "no_storage_location": "Kein Speicherort gewählt",
         "error_no_active_channels": "Bitte mindestens einen aktiven Kanal konfigurieren.",
         "error_ni9210_fixed_sample_rate": "Das NI9210 unterstützt ausschließlich {rate} S/s.",
+        "error_ni9234_invalid_sample_rate": (
+            "Das NI9234 unterstützt nur Abtastraten nach der Formel "
+            "51200 Hz / n (n = 1…31, also 51200, 25600, 17066,7, ... bis "
+            "1651,6 S/s). Nächstgelegener gültiger Wert: {nearest} S/s."
+        ),
         "error_channel_missing_hw_channel": (
             "Folgende(r) aktive Kanal/Kanäle hat/haben noch keinen Hardwarekanal "
             "zugewiesen: {names}. Bitte über \"Kanal zuweisen...\" einen echten "
@@ -494,6 +499,11 @@ _translations = {
         "no_storage_location": "No Storage Location Selected",
         "error_no_active_channels": "Please configure at least one active channel.",
         "error_ni9210_fixed_sample_rate": "The NI9210 only supports {rate} S/s.",
+        "error_ni9234_invalid_sample_rate": (
+            "The NI9234 only supports sample rates following the formula "
+            "51200 Hz / n (n = 1...31, i.e. 51200, 25600, 17066.7, ... down "
+            "to 1651.6 S/s). Nearest valid value: {nearest} S/s."
+        ),
         "error_channel_missing_hw_channel": (
             "The following active channel(s) have no hardware channel assigned "
             "yet: {names}. Please use \"Assign channel...\" to pick a real "

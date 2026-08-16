@@ -37,6 +37,44 @@ class ModuleType(str, Enum):
 
 NI9210_FIXED_SAMPLE_RATE_HZ = 14.0
 
+# Das NI9234 hat (anders als der SAR-ADC des NI9215) einen Delta-Sigma-ADC:
+# die Abtastrate ist nicht frei wählbar, sondern nur als ganzzahliger Teiler
+# des internen Master-Timebase (13,1072 MHz, intern bereits durch 256
+# geteilt) möglich: fs = 51.200 Hz / n, n ganzzahlig 1..31 (51.200 S/s bis
+# ca. 1.651,6 S/s). Quelle: NI 9234 Operating Instructions and
+# Specifications, Abschnitt "Understanding NI 9234 Data Rates". Der
+# NI-DAQmx-Treiber nimmt zwar auch abweichende Werte entgegen (und rundet
+# intern auf die nächste gültige Rate), ohne hier vorab zu validieren würde
+# die App aber weiterhin mit der ungerundeten, tatsächlich nicht
+# gemessenen Rate rechnen (Metadaten, Zeitachse, FFT in der Analyse-Ansicht).
+NI9234_BASE_SAMPLE_RATE_HZ = 51_200.0
+NI9234_MIN_RATE_DIVISOR = 1
+NI9234_MAX_RATE_DIVISOR = 31
+
+
+def ni9234_valid_sample_rates() -> list[float]:
+    """Alle 31 gültigen Abtastraten des NI9234 (absteigend sortiert)."""
+    return [
+        NI9234_BASE_SAMPLE_RATE_HZ / n
+        for n in range(NI9234_MIN_RATE_DIVISOR, NI9234_MAX_RATE_DIVISOR + 1)
+    ]
+
+
+def nearest_ni9234_sample_rate(sample_rate_hz: float) -> float:
+    """Die gültige NI9234-Abtastrate, die `sample_rate_hz` am nächsten liegt."""
+    return min(ni9234_valid_sample_rates(), key=lambda rate: abs(rate - sample_rate_hz))
+
+
+def is_valid_ni9234_sample_rate(sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
+    """Prüft `sample_rate_hz` gegen das NI9234-Raster (fs = 51200 Hz / n).
+
+    `tolerance_hz` deckt die Rundung der GUI-Eingabe ab (Spinbox mit einer
+    Nachkommastelle, siehe `gui/setup_view.py::_sample_rate_spin`) - viele
+    der 31 gültigen Raten (z. B. 51200/3 = 17066,666...) sind mit einer
+    Nachkommastelle ohnehin nicht exakt darstellbar.
+    """
+    return abs(sample_rate_hz - nearest_ni9234_sample_rate(sample_rate_hz)) <= tolerance_hz
+
 
 class SignalType(str, Enum):
     """Physikalischer Signaltyp eines Kanals.
@@ -553,6 +591,16 @@ class MeasurementConfig:
         ):
             raise ValueError(
                 "Das NI9210 unterstützt ausschließlich eine Abtastrate von 14 S/s."
+            )
+        if any(
+            channel.enabled and channel.module_type == ModuleType.NI9234
+            for channel in self.channels
+        ) and not is_valid_ni9234_sample_rate(self.sample_rate_hz):
+            nearest = nearest_ni9234_sample_rate(self.sample_rate_hz)
+            raise ValueError(
+                "Das NI9234 unterstützt nur Abtastraten nach der Formel "
+                f"51200 Hz / n (n = 1..31); nächstgelegener gültiger Wert: "
+                f"{nearest:.1f} S/s."
             )
 
     def active_channels(self) -> list[Channel]:

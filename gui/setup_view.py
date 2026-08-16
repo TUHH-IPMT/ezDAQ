@@ -53,6 +53,8 @@ from data.models import (
     RecordingStopUnit,
     NI9210_FIXED_SAMPLE_RATE_HZ,
     StorageFormat,
+    is_valid_ni9234_sample_rate,
+    nearest_ni9234_sample_rate,
 )
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
@@ -755,6 +757,18 @@ class SetupView(QWidget):
                 )
             )
             return None
+
+        if any(
+            ch.enabled and ch.module_type == ModuleType.NI9234 for ch in channels
+        ) and not is_valid_ni9234_sample_rate(sample_rate):
+            self.show_error(
+                t(
+                    "error_ni9234_invalid_sample_rate",
+                    nearest=f"{nearest_ni9234_sample_rate(sample_rate):.1f}",
+                )
+            )
+            return None
+
         ring_buffer_size = self._calculate_dynamic_buffer_size(
             sample_rate, len([ch for ch in channels if ch.enabled])
         )
