@@ -51,19 +51,20 @@ class TriggerModelTests(unittest.TestCase):
             plot_visible=False,
             plot_popout=True,
         )
-        dialog = ChannelDisplayDialog([channel], "#ffffff", "#000000")
-        row = dialog._rows["ai0"]
+        dialog = ChannelDisplayDialog([channel], "#ffffff", "#000000", "#cccccc")
+        key = (channel.hardware_channel, channel.display_name)
+        row = dialog._rows[key]
         visible_check = row["visible"]
         popout_check = row["popout"]
 
         self.assertFalse(popout_check.isEnabled())
-        self.assertFalse(dialog.results()["ai0"]["plot_popout"])
+        self.assertFalse(dialog.results()[key]["plot_popout"])
 
         visible_check.setChecked(True)
         self.assertTrue(popout_check.isEnabled())
         popout_check.setChecked(True)
         visible_check.setChecked(False)
-        self.assertFalse(dialog.results()["ai0"]["plot_popout"])
+        self.assertFalse(dialog.results()[key]["plot_popout"])
 
         dialog.deleteLater()
         app.processEvents()
