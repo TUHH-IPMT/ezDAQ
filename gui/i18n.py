@@ -293,11 +293,8 @@ _translations = {
         "param_thermocouple_type_label": "Thermoelement-Typ:",
         "param_adc_timing_mode_label": "ADC-Timing-Modus:",
         "param_adc_timing_mode_hint": "Gilt für alle Kanäle dieses Moduls (nur NI9213).",
-        "adc_timing_mode_automatic": "Automatisch",
         "adc_timing_mode_high_resolution": "Hohe Auflösung",
         "adc_timing_mode_high_speed": "Hohe Geschwindigkeit",
-        "adc_timing_mode_50hz": "Beste 50-Hz-Unterdrückung",
-        "adc_timing_mode_60hz": "Beste 60-Hz-Unterdrückung",
         "two_point_cal_button": "2-Punkt-Kalibrierung...",
         "two_point_cal_dialog_title": "2-Punkt-Kalibrierung",
         "two_point_cal_hint": (
@@ -687,11 +684,8 @@ _translations = {
         "param_thermocouple_type_label": "Thermocouple Type:",
         "param_adc_timing_mode_label": "ADC Timing Mode:",
         "param_adc_timing_mode_hint": "Applies to all channels of this module (NI9213 only).",
-        "adc_timing_mode_automatic": "Automatic",
         "adc_timing_mode_high_resolution": "High Resolution",
         "adc_timing_mode_high_speed": "High Speed",
-        "adc_timing_mode_50hz": "Best 50 Hz Rejection",
-        "adc_timing_mode_60hz": "Best 60 Hz Rejection",
         "two_point_cal_button": "2-Point Calibration...",
         "two_point_cal_dialog_title": "2-Point Calibration",
         "two_point_cal_hint": (

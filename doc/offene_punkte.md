@@ -4,7 +4,7 @@ Sammelstelle für erkannte, aber noch nicht umgesetzte Verbesserungen -
 kein vollständiges Bugtracking, sondern Notizen, damit der Kontext nicht
 verloren geht.
 
-## NI9213: Abtastrate wird nicht gegen ADC-Timing-Modus geprüft [TEILWEISE UMGESETZT]
+## NI9213: Abtastrate wird nicht gegen ADC-Timing-Modus geprüft [UMGESETZT]
 
 Notiert: 2026-08-16, umgesetzt: 2026-08-16
 
@@ -50,29 +50,34 @@ physischem Gerät (zwei separate NI9213-Module teilen sich keine
 gemeinsame Wandlerbandbreite), nicht pauschal über die gesamte
 Konfiguration.
 
-**Nur teilweise verifiziert - vor Produktiveinsatz nachprüfen:**
-- `HIGH_RESOLUTION` (55 ms/Kanal) und `HIGH_SPEED` (740 µs/Kanal) sind
-  über mehrere unabhängige NI-Community-Zitate aus dem Datenblatt
-  bestätigt (u. a.
-  [forums.ni.com](https://forums.ni.com/t5/LabVIEW/NI-9213-Not-the-sampling-rate-I-was-expecting/td-p/4053035)).
-- Für `AUTOMATIC`, `BEST_50_HZ_REJECTION` und `BEST_60_HZ_REJECTION`
-  konnte **keine** verifizierte Wandlungszeit gefunden werden - die
-  offiziellen NI-PDF-Datenblätter (Farnell/NI direkt) sind
-  kopiergeschützt, Textextraktion schlägt durchgängig fehl. Für diese
-  drei Modi wird defensiv derselbe (langsamere) Wert wie
-  `HIGH_RESOLUTION` angenommen (sicherer, strengerer Fallback - lieber
-  zu früh ablehnen als eine ungültige Rate durchlassen). Das kann echte,
-  eigentlich gültige `AUTOMATIC`-Konfigurationen unnötig blockieren,
-  falls DAQmx dort intern tatsächlich in den `HIGH_SPEED`-Bereich
-  wechseln würde.
-- Zusätzliche Unsicherheit: Ein Forumsbeitrag deutet an, dass die
-  Kanalzahl in der realen Formel ggf. interne
-  CJC-/Auto-Zero-Hilfskanäle mitzählt, die hier nicht berücksichtigt
-  sind (nur die vom Nutzer aktivierten Kanäle werden gezählt) - die
-  App könnte dadurch etwas zu optimistisch sein.
+**Nachtrag (2026-08-16): `AUTOMATIC`/`BEST_50_HZ_REJECTION`/
+`BEST_60_HZ_REJECTION` komplett entfernt statt defensiv abgesichert.**
+Grund: `ADC_TIMING_MODES` in `data/models.py` bot ursprünglich alle 5
+DAQmx-Modi an (`nidaqmx.constants.ADCTimingMode` kennt tatsächlich alle
+5 + `CUSTOM`, direkt im Paket verifiziert). Weder NI-MAX noch die
+LabVIEW-Projekteigenschaften (und vermutlich auch DIAdem) bieten in
+ihrer Bedienoberfläche aber mehr als `High Resolution`/`High Speed` zur
+Auswahl an (siehe Screenshot-Beleg im
+[NI-Community-Forum](https://forums.ni.com/t5/Multifunction-DAQ/NI-9213-Changing-from-High-Resolution-to-High-Speed-Screen-caps/td-p/2518188))
+- die drei anderen Modi sind offenbar Nischen-/Experten-Optionen ohne
+verlässlich auffindbare Wandlungszeiten. Statt sie mit einem
+unverifizierten defensiven Fallback anzubieten, wurden sie aus
+`ADC_TIMING_MODES`, `NI9213_CONVERSION_TIME_S`, der GUI-Combobox und den
+Übersetzungen entfernt - Auswahl jetzt nur noch `HIGH_RESOLUTION`
+(neuer Default, vorher `AUTOMATIC`) und `HIGH_SPEED`. Alte
+Konfigurationsdateien mit einem der entfernten Werte werden nicht
+aktiv abgelehnt (Rückwärtskompatibilität: `max_ni9213_sample_rate_hz`
+fällt für unbekannte Werte weiterhin auf den
+`HIGH_RESOLUTION`-Wandlungszeit zurück), sind aber über die GUI nicht
+mehr neu wählbar.
 
-Sollte mit echter Hardware (NI-MAX-Testpanel) oder dem vollständigen,
-nicht kopiergeschützten Datenblatt gegengeprüft werden.
+**Verbleibende, unabhängig davon bestehende Unsicherheit:** Ein
+Forumsbeitrag deutet an, dass die Kanalzahl in der realen NI-Formel
+ggf. interne CJC-/Auto-Zero-Hilfskanäle mitzählt, die hier nicht
+berücksichtigt sind (nur die vom Nutzer aktivierten TC-Kanäle werden
+gezählt) - die App könnte dadurch bei sehr vielen aktiven Kanälen etwas
+zu optimistisch sein. Sollte bei Gelegenheit mit echter Hardware
+(NI-MAX-Testpanel) gegengeprüft werden.
 
 ## Gleichzeitige Erfassung mit grundsätzlich inkompatiblen Abtastraten (z. B. NI9210 + NI9234)
 

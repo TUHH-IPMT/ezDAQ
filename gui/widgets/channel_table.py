@@ -93,11 +93,8 @@ SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
 # `data/models.py::ADC_TIMING_MODES`) - NUR beim NI9213 verfügbar (siehe
 # `ChannelParameterDialog`).
 _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
-    "AUTOMATIC": "adc_timing_mode_automatic",
     "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
     "HIGH_SPEED": "adc_timing_mode_high_speed",
-    "BEST_50_HZ_REJECTION": "adc_timing_mode_50hz",
-    "BEST_60_HZ_REJECTION": "adc_timing_mode_60hz",
 }
 
 _COL_NUMBER = 0
@@ -423,7 +420,7 @@ class ChannelParameterDialog(QDialog):
         offset: float,
         sensitivity: float,
         thermocouple_type: str,
-        adc_timing_mode: str = "AUTOMATIC",
+        adc_timing_mode: str = "HIGH_RESOLUTION",
         cal_point1_measured: float | None = None,
         cal_point1_reference: float | None = None,
         cal_point2_measured: float | None = None,
@@ -553,7 +550,7 @@ class ChannelParameterDialog(QDialog):
         return self._thermocouple_combo.currentText() if self._thermocouple_combo is not None else "K"
 
     def adc_timing_mode(self) -> str:
-        return self._adc_timing_combo.currentData() if self._adc_timing_combo is not None else "AUTOMATIC"
+        return self._adc_timing_combo.currentData() if self._adc_timing_combo is not None else "HIGH_RESOLUTION"
 
     def cal_point1(self) -> tuple[float | None, float | None]:
         return self._cal_point1_measured, self._cal_point1_reference
@@ -792,7 +789,7 @@ class ChannelTableWidget(QWidget):
             param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
             if param_widget is not None:
                 timing_mode = str(
-                    param_widget.property("adc_timing_mode") or "AUTOMATIC"
+                    param_widget.property("adc_timing_mode") or "HIGH_RESOLUTION"
                 )
                 device_name = device_name_from_hw_channel(hw_channel)
                 for other_row in range(self._table.rowCount()):
@@ -806,7 +803,7 @@ class ChannelTableWidget(QWidget):
                     other_param_widget = self._table.cellWidget(other_row, _COL_PARAMETERS)
                     if other_param_widget is not None:
                         timing_mode = str(
-                            other_param_widget.property("adc_timing_mode") or "AUTOMATIC"
+                            other_param_widget.property("adc_timing_mode") or "HIGH_RESOLUTION"
                         )
                         break
                 param_widget.setProperty("adc_timing_mode", timing_mode)
@@ -1202,7 +1199,7 @@ class ChannelTableWidget(QWidget):
         button.setProperty("offset", channel.offset)
         button.setProperty("sensitivity", sensitivity)
         button.setProperty("thermocouple_type", channel.thermocouple_type or "K")
-        button.setProperty("adc_timing_mode", channel.adc_timing_mode or "AUTOMATIC")
+        button.setProperty("adc_timing_mode", channel.adc_timing_mode or "HIGH_RESOLUTION")
         button.setProperty("cal_point1_measured", channel.cal_point1_measured)
         button.setProperty("cal_point1_reference", channel.cal_point1_reference)
         button.setProperty("cal_point2_measured", channel.cal_point2_measured)
@@ -1243,7 +1240,7 @@ class ChannelTableWidget(QWidget):
             offset=float(button.property("offset") or 0.0),
             sensitivity=float(button.property("sensitivity") or 0.0),
             thermocouple_type=str(button.property("thermocouple_type") or "K"),
-            adc_timing_mode=str(button.property("adc_timing_mode") or "AUTOMATIC"),
+            adc_timing_mode=str(button.property("adc_timing_mode") or "HIGH_RESOLUTION"),
             cal_point1_measured=self._property_float_or_none(button, "cal_point1_measured"),
             cal_point1_reference=self._property_float_or_none(button, "cal_point1_reference"),
             cal_point2_measured=self._property_float_or_none(button, "cal_point2_measured"),
@@ -1406,7 +1403,7 @@ class ChannelTableWidget(QWidget):
         offset = float(param_widget.property("offset") or 0.0)
         sensitivity = float(param_widget.property("sensitivity") or 0.0)
         thermocouple_type = str(param_widget.property("thermocouple_type") or "K")
-        adc_timing_mode = str(param_widget.property("adc_timing_mode") or "AUTOMATIC")
+        adc_timing_mode = str(param_widget.property("adc_timing_mode") or "HIGH_RESOLUTION")
         cal_point1_measured = self._property_float_or_none(param_widget, "cal_point1_measured")
         cal_point1_reference = self._property_float_or_none(param_widget, "cal_point1_reference")
         cal_point2_measured = self._property_float_or_none(param_widget, "cal_point2_measured")
@@ -1424,7 +1421,7 @@ class ChannelTableWidget(QWidget):
             enabled=enabled,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
             thermocouple_type=thermocouple_type or "K",
-            adc_timing_mode=adc_timing_mode or "AUTOMATIC",
+            adc_timing_mode=adc_timing_mode or "HIGH_RESOLUTION",
             cal_point1_measured=cal_point1_measured,
             cal_point1_reference=cal_point1_reference,
             cal_point2_measured=cal_point2_measured,

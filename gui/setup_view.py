@@ -105,11 +105,8 @@ _RECORDING_STOP_UNIT_LABEL_KEYS: dict[RecordingStopUnit, str] = {
 # kleine Kopie von `gui/widgets/channel_table.py::_ADC_TIMING_MODE_LABEL_KEYS`
 # statt eines Imports des dortigen privaten (`_`-präfigierten) Dicts.
 _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
-    "AUTOMATIC": "adc_timing_mode_automatic",
     "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
     "HIGH_SPEED": "adc_timing_mode_high_speed",
-    "BEST_50_HZ_REJECTION": "adc_timing_mode_50hz",
-    "BEST_60_HZ_REJECTION": "adc_timing_mode_60hz",
 }
 
 
@@ -787,7 +784,7 @@ class SetupView(QWidget):
             max_rate = max_ni9213_sample_rate_hz(group_channels)
             if sample_rate > max_rate + 0.05:
                 mode_key = _ADC_TIMING_MODE_LABEL_KEYS.get(
-                    group_channels[0].adc_timing_mode, "adc_timing_mode_automatic"
+                    group_channels[0].adc_timing_mode, "adc_timing_mode_high_resolution"
                 )
                 self.show_error(
                     t(

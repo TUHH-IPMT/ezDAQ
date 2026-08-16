@@ -113,19 +113,19 @@ THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
 }
 
 # ADC-Timing-Modi, die den Kompromiss zwischen Geschwindigkeit und
-# effektiver Auflösung steuern (manche Modi verbessern zusätzlich die
-# Netzbrumm-Unterdrückung) - NUR beim NI9213 hardwareseitig verfügbar,
+# effektiver Auflösung steuern - NUR beim NI9213 hardwareseitig verfügbar,
 # NICHT beim NI9210 (dieses hat eine feste Abtastrate von 14 S/s ohne
 # konfigurierbaren Timing-Modus). Werte entsprechen direkt den
 # Mitgliedsnamen von `nidaqmx.constants.ADCTimingMode`, siehe
-# `hardware/ni9213.py`. "CUSTOM" ist bewusst nicht enthalten, da es
-# zusätzliche, hier nicht abgebildete Parameter erfordert.
+# `hardware/ni9213.py`. Der volle DAQmx-Treiber kennt zusätzlich
+# "AUTOMATIC", "BEST_50_HZ_REJECTION", "BEST_60_HZ_REJECTION" und "CUSTOM"
+# - bewusst nicht angeboten, da weder NI-MAX noch DIAdem diese in ihrer
+# Bedienoberfläche zur Auswahl stellen (nur HIGH_RESOLUTION/HIGH_SPEED)
+# und für die drei erstgenannten auch keine verifizierten Wandlungszeiten
+# auffindbar waren (siehe Git-Historie/doc/offene_punkte.md).
 ADC_TIMING_MODES = [
-    "AUTOMATIC",
     "HIGH_RESOLUTION",
     "HIGH_SPEED",
-    "BEST_50_HZ_REJECTION",
-    "BEST_60_HZ_REJECTION",
 ]
 
 # Wandlungszeit pro Kanal je ADC-Timing-Modus (Sekunden) - der NI9213-ADC
@@ -133,21 +133,11 @@ ADC_TIMING_MODES = [
 # maximal erreichbare Abtastrate ergibt sich laut NI-9213-Datenblatt aus
 # fs_max = min(1 / (Wandlungszeit * aktive Kanalzahl), 100 S/s) - "if you
 # are using fewer than all channels, the sample rate might be faster".
-# HIGH_RESOLUTION (55 ms/Kanal) und HIGH_SPEED (740 µs/Kanal) sind über
-# mehrere unabhängige NI-Community-Zitate aus dem Datenblatt bestätigt.
-# Für AUTOMATIC/BEST_50_HZ_REJECTION/BEST_60_HZ_REJECTION konnte keine
-# öffentlich zugängliche, verifizierte Wandlungszeit gefunden werden
-# (NI-PDF-Datenblätter sind kopiergeschützt, Textextraktion schlägt
-# fehl) - hier wird defensiv derselbe (langsamere, strengere) Wert wie
-# bei HIGH_RESOLUTION angenommen, damit im Zweifel zu früh abgelehnt statt
-# eine tatsächlich ungültige Rate durchgelassen wird. VOR Produktiveinsatz
-# mit echter Hardware oder dem vollständigen Datenblatt gegenprüfen.
+# Beide Werte sind über mehrere unabhängige NI-Community-Zitate aus dem
+# Datenblatt bestätigt.
 NI9213_CONVERSION_TIME_S: dict[str, float] = {
-    "AUTOMATIC": 0.055,
     "HIGH_RESOLUTION": 0.055,
     "HIGH_SPEED": 0.00074,
-    "BEST_50_HZ_REJECTION": 0.055,
-    "BEST_60_HZ_REJECTION": 0.055,
 }
 NI9213_MAX_SAMPLE_RATE_HZ = 100.0
 
@@ -434,7 +424,7 @@ class Channel:
     cal_point1_reference: Optional[float] = None
     cal_point2_measured: Optional[float] = None
     cal_point2_reference: Optional[float] = None
-    adc_timing_mode: str = "AUTOMATIC"
+    adc_timing_mode: str = "HIGH_RESOLUTION"
     plot_color: Optional[str] = None
     plot_background: Optional[str] = None
     plot_grid_color: Optional[str] = None
@@ -549,7 +539,7 @@ class Channel:
             cal_point1_reference=data.get("cal_point1_reference"),
             cal_point2_measured=data.get("cal_point2_measured"),
             cal_point2_reference=data.get("cal_point2_reference"),
-            adc_timing_mode=data.get("adc_timing_mode", "AUTOMATIC"),
+            adc_timing_mode=data.get("adc_timing_mode", "HIGH_RESOLUTION"),
             plot_color=data.get("plot_color"),
             plot_background=data.get("plot_background"),
             plot_grid_color=data.get("plot_grid_color"),
