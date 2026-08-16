@@ -115,6 +115,11 @@ _translations = {
             "51200 Hz / n (n = 1…31, also 51200, 25600, 17066,7, ... bis "
             "1651,6 S/s). Nächstgelegener gültiger Wert: {nearest} S/s."
         ),
+        "error_ni9213_rate_too_high": (
+            "Das NI9213 ({device}, {count} aktive(r) Kanal/Kanäle, "
+            "Timing-Modus \"{mode}\") unterstützt bei dieser Kanalzahl "
+            "maximal {max_rate} S/s."
+        ),
         "error_channel_missing_hw_channel": (
             "Folgende(r) aktive Kanal/Kanäle hat/haben noch keinen Hardwarekanal "
             "zugewiesen: {names}. Bitte über \"Kanal zuweisen...\" einen echten "
@@ -503,6 +508,11 @@ _translations = {
             "The NI9234 only supports sample rates following the formula "
             "51200 Hz / n (n = 1...31, i.e. 51200, 25600, 17066.7, ... down "
             "to 1651.6 S/s). Nearest valid value: {nearest} S/s."
+        ),
+        "error_ni9213_rate_too_high": (
+            "The NI9213 ({device}, {count} active channel(s), timing mode "
+            "\"{mode}\") supports a maximum of {max_rate} S/s at this "
+            "channel count."
         ),
         "error_channel_missing_hw_channel": (
             "The following active channel(s) have no hardware channel assigned "

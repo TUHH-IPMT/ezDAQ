@@ -128,6 +128,68 @@ ADC_TIMING_MODES = [
     "BEST_60_HZ_REJECTION",
 ]
 
+# Wandlungszeit pro Kanal je ADC-Timing-Modus (Sekunden) - der NI9213-ADC
+# ist zwischen den Kanälen EINES physischen Moduls multiplext, die
+# maximal erreichbare Abtastrate ergibt sich laut NI-9213-Datenblatt aus
+# fs_max = min(1 / (Wandlungszeit * aktive Kanalzahl), 100 S/s) - "if you
+# are using fewer than all channels, the sample rate might be faster".
+# HIGH_RESOLUTION (55 ms/Kanal) und HIGH_SPEED (740 µs/Kanal) sind über
+# mehrere unabhängige NI-Community-Zitate aus dem Datenblatt bestätigt.
+# Für AUTOMATIC/BEST_50_HZ_REJECTION/BEST_60_HZ_REJECTION konnte keine
+# öffentlich zugängliche, verifizierte Wandlungszeit gefunden werden
+# (NI-PDF-Datenblätter sind kopiergeschützt, Textextraktion schlägt
+# fehl) - hier wird defensiv derselbe (langsamere, strengere) Wert wie
+# bei HIGH_RESOLUTION angenommen, damit im Zweifel zu früh abgelehnt statt
+# eine tatsächlich ungültige Rate durchgelassen wird. VOR Produktiveinsatz
+# mit echter Hardware oder dem vollständigen Datenblatt gegenprüfen.
+NI9213_CONVERSION_TIME_S: dict[str, float] = {
+    "AUTOMATIC": 0.055,
+    "HIGH_RESOLUTION": 0.055,
+    "HIGH_SPEED": 0.00074,
+    "BEST_50_HZ_REJECTION": 0.055,
+    "BEST_60_HZ_REJECTION": 0.055,
+}
+NI9213_MAX_SAMPLE_RATE_HZ = 100.0
+
+
+def ni9213_device_groups(channels: list["Channel"]) -> dict[str, list["Channel"]]:
+    """Gruppiert die aktiven NI9213-Kanäle nach physischem Gerät (z. B.
+    "cDAQ1Mod3"), da der ADC pro Modul (nicht pro Messkonfiguration)
+    multiplext ist - zwei separate NI9213-Module teilen sich keine
+    gemeinsame Wandlerbandbreite.
+
+    Eigenständige, bewusst einfache String-Gruppierung statt eines
+    Imports aus `core/measurement.py::group_channels_by_device` -
+    `data/models.py` hängt bewusst nicht von `core/` ab (siehe
+    Moduldocstring oben).
+    """
+    groups: dict[str, list[Channel]] = {}
+    for channel in channels:
+        if not (channel.enabled and channel.module_type == ModuleType.NI9213):
+            continue
+        device_name = channel.hardware_channel.split("/", 1)[0]
+        groups.setdefault(device_name, []).append(channel)
+    return groups
+
+
+def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
+    """Maximal erreichbare Abtastrate für EIN physisches NI9213-Modul.
+
+    `channels_on_device`: nur die aktiven Kanäle dieses einen Geräts
+    (siehe `ni9213_device_groups`). Nimmt bei uneinheitlichem
+    `adc_timing_mode` innerhalb der Gruppe (sollte über die GUI nicht
+    vorkommen, siehe `hardware/ni9213.py`, aber z. B. bei einer von Hand
+    bearbeiteten Konfigurationsdatei möglich) defensiv den langsamsten
+    beteiligten Modus an.
+    """
+    if not channels_on_device:
+        return NI9213_MAX_SAMPLE_RATE_HZ
+    conversion_time_s = max(
+        NI9213_CONVERSION_TIME_S.get(ch.adc_timing_mode, NI9213_CONVERSION_TIME_S["HIGH_RESOLUTION"])
+        for ch in channels_on_device
+    )
+    return min(NI9213_MAX_SAMPLE_RATE_HZ, 1.0 / (conversion_time_s * len(channels_on_device)))
+
 
 class StorageFormat(str, Enum):
     """Von der Anwendung unterstützte Speicherformate für Messdaten."""
@@ -602,6 +664,14 @@ class MeasurementConfig:
                 f"51200 Hz / n (n = 1..31); nächstgelegener gültiger Wert: "
                 f"{nearest:.1f} S/s."
             )
+        for device_name, group_channels in ni9213_device_groups(self.channels).items():
+            max_rate = max_ni9213_sample_rate_hz(group_channels)
+            if self.sample_rate_hz > max_rate + 0.05:
+                raise ValueError(
+                    f"Das NI9213 ({device_name}, {len(group_channels)} aktive(r) Kanal/"
+                    f"Kanäle, Timing-Modus '{group_channels[0].adc_timing_mode}') "
+                    f"unterstützt bei dieser Kanalzahl maximal {max_rate:.1f} S/s."
+                )
 
     def active_channels(self) -> list[Channel]:
         """Gibt nur die aktivierten Kanäle zurück."""

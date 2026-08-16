@@ -54,7 +54,9 @@ from data.models import (
     NI9210_FIXED_SAMPLE_RATE_HZ,
     StorageFormat,
     is_valid_ni9234_sample_rate,
+    max_ni9213_sample_rate_hz,
     nearest_ni9234_sample_rate,
+    ni9213_device_groups,
 )
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
@@ -96,6 +98,18 @@ _RECORDING_STOP_UNIT_LABEL_KEYS: dict[RecordingStopUnit, str] = {
     RecordingStopUnit.SECONDS: "recording_stop_unit_seconds",
     RecordingStopUnit.MINUTES: "recording_stop_unit_minutes",
     RecordingStopUnit.HOURS: "recording_stop_unit_hours",
+}
+
+# Übersetzte Anzeige-Labels je ADC-Timing-Modus für die Fehlermeldung bei
+# zu hoher Abtastrate (siehe `build_current_config`) - eigene, bewusst
+# kleine Kopie von `gui/widgets/channel_table.py::_ADC_TIMING_MODE_LABEL_KEYS`
+# statt eines Imports des dortigen privaten (`_`-präfigierten) Dicts.
+_ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
+    "AUTOMATIC": "adc_timing_mode_automatic",
+    "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
+    "HIGH_SPEED": "adc_timing_mode_high_speed",
+    "BEST_50_HZ_REJECTION": "adc_timing_mode_50hz",
+    "BEST_60_HZ_REJECTION": "adc_timing_mode_60hz",
 }
 
 
@@ -768,6 +782,23 @@ class SetupView(QWidget):
                 )
             )
             return None
+
+        for device_name, group_channels in ni9213_device_groups(channels).items():
+            max_rate = max_ni9213_sample_rate_hz(group_channels)
+            if sample_rate > max_rate + 0.05:
+                mode_key = _ADC_TIMING_MODE_LABEL_KEYS.get(
+                    group_channels[0].adc_timing_mode, "adc_timing_mode_automatic"
+                )
+                self.show_error(
+                    t(
+                        "error_ni9213_rate_too_high",
+                        device=device_name,
+                        count=len(group_channels),
+                        mode=t(mode_key),
+                        max_rate=f"{max_rate:.1f}",
+                    )
+                )
+                return None
 
         ring_buffer_size = self._calculate_dynamic_buffer_size(
             sample_rate, len([ch for ch in channels if ch.enabled])
