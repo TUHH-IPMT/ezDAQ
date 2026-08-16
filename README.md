@@ -137,6 +137,11 @@ have been tested end-to-end with simulated hardware.
 Malte Flehmke, Sebastian Junghans – originally developed at IPMT, TUHH
 (Hamburg University of Technology).
 
+## Logo
+
+The duck mascot logo (`resources/ezDAQ_logo_full.png`) was AI-generated
+using ChatGPT.
+
 ## License
 
 Released under the [GNU General Public License v3](LICENSE) (GPLv3).

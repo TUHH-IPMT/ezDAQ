@@ -132,6 +132,11 @@ Speicherung, GUI) wurden mit simulierter Hardware end-to-end getestet.
 Malte Flehmke, Sebastian Junghans – ursprünglich entwickelt am IPMT,
 TUHH.
 
+## Logo
+
+Das Enten-Maskottchen (`resources/ezDAQ_logo_full.png`) wurde mit
+ChatGPT KI-generiert.
+
 ## Lizenz
 
 Veröffentlicht unter der [GNU General Public License v3](LICENSE) (GPLv3).
