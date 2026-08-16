@@ -2,4 +2,12 @@ __pycache__/
 Testdaten/
 .claude/
 .venv/
-tests/
+build/
+dist/
+*.spec
+.idea/
+.vscode/
+*.egg-info/
+
+# Private Entwicklernotizen, nicht Teil der Veröffentlichung
+doc/offene_punkte.md
