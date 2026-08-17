@@ -1,0 +1,155 @@
+"""
+gui/widgets/spinbox.py
+
+`PrecisionDoubleSpinBox`: `QDoubleSpinBox`-Variante ohne künstliches
+Nachkommastellen-Limit beim Eintippen/Einfügen, mit "sauberer" Anzeige
+(keine überflüssigen Nachkommanullen) und ohne die deutsche System-Locale
+als Fallstrick beim Einfügen von Werten mit Punkt als Dezimaltrennzeichen.
+
+Hintergrund (siehe Kanalparameter-Dialog in `gui/widgets/channel_table.py`):
+    Ein normaler `QDoubleSpinBox` koppelt über `setDecimals()` zwei
+    unabhängige Dinge aneinander: wie viele Nachkommastellen beim
+    Eintippen überhaupt akzeptiert werden UND wie viele beim Anzeigen
+    ausgegeben werden (immer exakt diese Anzahl, mit Nachkommanullen
+    aufgefüllt). Ein niedriger Wert (z. B. 4) begrenzt die Eingabe-
+    präzision künstlich; ein hoher Wert lässt dafür selbst einen Wert wie
+    2.0 als "2.0000000000" erscheinen.
+
+    Zusätzlich verwendet ein `QDoubleSpinBox` ohne explizite Locale die
+    System-Locale (`QLocale.system()`) zum Parsen von eingegebenem/
+    eingefügtem Text - unter deutscher Windows-Locale ("," als Dezimal-,
+    "." als Tausendertrennzeichen) wird ein eingefügter Wert wie "1.5"
+    dadurch NICHT als 1,5 interpretiert, sondern als 1500 (!) - ein
+    eingefügter Punkt-Dezimalwert wird so klammheimlich um den Faktor
+    1000 verfälscht, ohne jede Fehlermeldung.
+
+    Damit trotz erzwungener "C"-Locale (Punkt-Anzeige) auch die deutsche
+    Tippgewohnheit ("," als Dezimaltrennzeichen) weiterhin funktioniert,
+    wird ein eingegebenes/eingefügtes "," beim Validieren transparent wie
+    "." behandelt - die Anzeige selbst bleibt aber bei "." (siehe
+    `textFromValue`).
+"""
+
+from __future__ import annotations
+
+from PyQt6.QtCore import QLocale
+from PyQt6.QtGui import QValidator
+from PyQt6.QtWidgets import QDoubleSpinBox, QSpinBox, QWidget
+
+
+class _NoWheelMixin:
+    """Ignoriert Mausrad-Ereignisse, statt den Wert zu ändern.
+
+    Ein Spinbox-Feld reagiert bei Qt standardmäßig auch OHNE Fokus auf das
+    Mausrad - scrollt man z. B. über ein längeres Formular hinweg und der
+    Mauszeiger streift dabei zufällig über ein Zahlenfeld, ändert sich
+    dessen Wert unbemerkt mit, statt dass die Seite weiterscrollt. Das
+    Ereignis wird hier bewusst ignoriert (nicht nur "nichts tun"), damit es
+    an das umgebende Scroll-Widget (z. B. `QScrollArea`) durchgereicht
+    wird und die Seite normal weiterscrollt.
+    """
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt-API
+        event.ignore()
+
+
+class NoWheelSpinBox(_NoWheelMixin, QSpinBox):
+    """`QSpinBox`, die Mausrad-Ereignisse ignoriert - siehe `_NoWheelMixin`."""
+
+
+class NoWheelDoubleSpinBox(_NoWheelMixin, QDoubleSpinBox):
+    """`QDoubleSpinBox`, die Mausrad-Ereignisse ignoriert - siehe `_NoWheelMixin`."""
+
+
+class GroupedDoubleSpinBox(NoWheelDoubleSpinBox):
+    """`QDoubleSpinBox` mit Tausendertrennzeichen-Anzeige
+    (`setGroupSeparatorShown(True)`), die sich beim Löschen einzelner
+    Ziffern normal bearbeiten lässt.
+
+    Qt's Standard-Validator lehnt bei aktivierter Trennzeichen-Anzeige
+    manche Zwischenzustände beim Editieren komplett ab (nicht nur als
+    unvollständig), statt sie als gültigen Zwischenschritt zu werten -
+    z. B. wird aus "1.000,0" nach Löschen der führenden "1" der Text
+    ".000,0" (ein "verwaistes" Trennzeichen direkt am Anfang), den Qt
+    als `Invalid` zurückweist. Der Nutzer kann die Ziffer dadurch
+    scheinbar nicht löschen - jeder Löschversuch wird stillschweigend
+    verworfen. Entfernt daher vor der eigentlichen Prüfung erst alle
+    Trennzeichen aus dem Zwischentext - die korrekte Gruppierung stellt
+    Qt beim nächsten Commit (z. B. Fokusverlust) über `textFromValue()`
+    ohnehin automatisch wieder her.
+    """
+
+    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:  # noqa: N802
+        separator = self.locale().groupSeparator()
+        if not separator or separator not in text:
+            return super().validate(text, pos)
+        removed_before_pos = text[:pos].count(separator)
+        cleaned = text.replace(separator, "")
+        return super().validate(cleaned, max(0, pos - removed_before_pos))
+
+
+class PrecisionDoubleSpinBox(NoWheelDoubleSpinBox):
+    """`QDoubleSpinBox` mit hoher Eingabepräzision, sauberer Anzeige und
+    Punkt ODER Komma als Dezimaltrennzeichen beim Eintippen/Einfügen,
+    unabhängig von der System-Locale (Anzeige selbst immer mit Punkt).
+
+    `decimals` (Standard 10) legt nur noch die *maximal* akzeptierte
+    Eingabepräzision fest - `textFromValue()` zeigt trotzdem stets die
+    kürzestmögliche Darstellung ohne überflüssige Nachkommanullen.
+    """
+
+    def __init__(self, decimals: int = 10, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        # "C"-Locale erzwingt "." als Dezimaltrennzeichen beim Parsen von
+        # eingegebenem/eingefügtem Text, unabhängig von der System-Locale
+        # (siehe Moduldoc) - muss VOR setDecimals()/setValue() gesetzt
+        # werden, damit der interne Validator sie von Anfang an nutzt.
+        self.setLocale(QLocale(QLocale.Language.C))
+        self.setDecimals(decimals)
+
+    def validate(self, text: str, pos: int) -> tuple[QValidator.State, str, int]:  # noqa: N802
+        # "," wie "." behandeln, BEVOR der (auf "."-Locale eingestellte)
+        # Standard-Validator prüft - sonst würde ein getipptes/
+        # eingefügtes "," als ungültiges Zeichen abgelehnt. Anzeige
+        # springt dadurch beim Tippen sofort auf ".", was hier bewusst in
+        # Kauf genommen wird (siehe Klassendoc).
+        return super().validate(text.replace(",", "."), pos)
+
+    def valueFromText(self, text: str) -> float:  # noqa: N802 - Qt-API
+        # Zusätzliche Absicherung (z. B. bei programmatischem setText()
+        # ohne den validate()-Pfad) - siehe validate().
+        return super().valueFromText(text.replace(",", "."))
+
+    def textFromValue(self, value: float) -> str:  # noqa: N802 - Qt-API
+        text = f"{value:.{self.decimals()}f}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return text
+
+
+def parse_optional_float(text: str) -> float | None:
+    """Wandelt frei eingegebenen Text (z. B. eine editierbare
+    Tabellen-/Baum-Zelle ohne `QDoubleSpinBox`, siehe
+    `gui/sensor_database_dialog.py`) in einen optionalen Float um - Komma
+    UND Punkt werden als Dezimaltrennzeichen akzeptiert (dasselbe Prinzip
+    wie bei `PrecisionDoubleSpinBox`, siehe Moduldoc oben), leerer Text
+    ergibt `None` statt eines Fehlers."""
+    text = text.strip().replace(",", ".")
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def format_optional_float(value: float | None) -> str:
+    """Kehrt `parse_optional_float` um - `None` wird als leerer Text
+    dargestellt, sonst ohne überflüssige Nachkommanullen (siehe
+    `PrecisionDoubleSpinBox.textFromValue`)."""
+    if value is None:
+        return ""
+    text = f"{value:.10f}"
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text
