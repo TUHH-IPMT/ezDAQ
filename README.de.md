@@ -134,7 +134,7 @@ Speicherung, GUI) wurden mit simulierter Hardware end-to-end getestet.
 ## Autoren
 
 Malte Flehmke, Sebastian Junghans – ursprünglich entwickelt am Institut
-für Produktionsmanagement und -technik (IPMT), TUHH.
+für Produktionsmanagement und -technik (IPMT), Technische Universität Hamburg (TUHH).
 
 ## Logo
 
