@@ -15,7 +15,7 @@ import logging
 
 from data.models import Channel, DeviceInfo, ModuleType, SignalType
 from hardware.base_device import AcquisitionError
-from hardware.nidaq_device import NIDAQDevice, NIDAQMX_AVAILABLE
+from hardware.nidaq_device import DaqmxError, NIDAQDevice, NIDAQMX_AVAILABLE
 
 if NIDAQMX_AVAILABLE:
     from nidaqmx.constants import (
@@ -108,11 +108,27 @@ class NI9234(NIDAQDevice):
         # auch nicht in einem gemeinsamen Task mit anderen Modulen (Channel
         # Expansion) - ohne diese Property wären NI9234-Kanäle gegenüber
         # z. B. NI9215-Kanälen im selben Task zeitlich versetzt (~1
-        # Sample-Periode bei niedrigen Abtastraten). Wird unabhängig davon
-        # gesetzt, ob das Modul allein oder zusammen mit anderen läuft - bei
-        # einer reinen NI9234-Messung macht es den gemeldeten Zeitstempel
-        # ebenfalls korrekter und schadet nicht. Quelle: NI-Knowledgebase
+        # Sample-Periode bei niedrigen Abtastraten). Quelle: NI-Knowledgebase
         # "Synchronized Data Delayed When Using NI DAQ Devices with
-        # Delta-Sigma-ADC". NICHT gegen echte Hardware verifiziert (siehe
-        # Hardware-Testvorbehalt in hardware/nidaq_device.py).
-        ai_channel.ai_remove_filter_delay = True
+        # Delta-Sigma-ADC".
+        #
+        # BEST EFFORT: gegen echte Hardware (cDAQ-9185 + NI9234, aktuelle
+        # Treiberversion) lehnt DAQmx diese Property IMMER ab (-200452
+        # "Specified property is not supported by the device or is not
+        # applicable to the task") - reproduzierbar sowohl für Voltage- als
+        # auch für IEPE-Accel-Kanäle und unabhängig davon, ob sie vor oder
+        # nach der Sample-Clock-Timing-Konfiguration gesetzt wird. Offenbar
+        # von dieser Treiber-/Firmware-Kombination schlicht nicht
+        # unterstützt. Bricht die Messung deshalb NICHT ab, wenn das
+        # Setzen fehlschlägt - nur die (kleine, bei niedrigen Abtastraten
+        # spürbare) Zeitversatz-Korrektur entfällt dann.
+        try:
+            ai_channel.ai_remove_filter_delay = True
+        except DaqmxError:
+            logger.warning(
+                "AI_RemoveFilterDelay wird von %s (Kanal '%s') nicht "
+                "unterstützt - Filterverzögerungs-Kompensation entfällt, "
+                "Messung läuft trotzdem weiter.",
+                self.device_info.device_name,
+                channel.display_name,
+            )
