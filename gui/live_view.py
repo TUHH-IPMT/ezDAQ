@@ -249,8 +249,9 @@ def _downsample_for_display(
     capacity: int,
     max_points: int = _MAX_DISPLAY_POINTS_PER_CURVE,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Reduziert `times`/`values` per Mittelwert-Bildung auf höchstens
-    `max_points` Punkte, BEVOR sie an PyQtGraph übergeben werden.
+    """Reduziert `times`/`values` per Min/Max-Hüllkurve (wie PyQtGraphs
+    eigenes `downsampleMethod='peak'`) auf höchstens `2 * max_points`
+    Punkte, BEVOR sie an PyQtGraph übergeben werden.
 
     Notwendig bei sehr hohen Abtastraten (z. B. NI9234 mit 51200 Hz über
     mehrere Kanäle gleichzeitig): PyQtGraphs eigenes `autoDownsample`
@@ -258,18 +259,25 @@ def _downsample_for_display(
     `setData()`-Aufruf (bis zu ~66x/s, siehe `_UI_UPDATE_INTERVAL_MS`) über
     das komplette Sweep-Fenster (bis zu Abtastrate * Zeitspanne Punkte PRO
     KANAL) neu - das hat den Live-Plot bei mehreren hochabtastenden
-    Kanälen spürbar ruckeln lassen. Diese einfache, feste Reshape+Mean-
-    Reduktion VOR `setData()` ist deutlich billiger als PyQtGraphs
-    generischere, view-range-abhängige Variante und macht diese
-    überflüssig (siehe `curve.setDownsampling(auto=False)` bei der
-    Kurven-Erzeugung).
+    Kanälen spürbar ruckeln lassen. Diese einfache, feste Reduktion VOR
+    `setData()` ist deutlich billiger als PyQtGraphs generischere,
+    view-range-abhängige Variante und macht diese überflüssig (siehe
+    `curve.setDownsampling(auto=False)` bei der Kurven-Erzeugung).
+
+    BEWUSST Min/Max-Hüllkurve statt Mittelwert: eine schnell abklingende
+    Schwingung (z. B. das typische Ausklingen nach einem Klopftest auf
+    einen Beschleunigungssensor) wird durch Mittelwertbildung bei starker
+    Kompression (hier oft >100x) fast komplett weggeglättet - die
+    Hüllkurve (min UND max pro Bin statt deren Mittelwert) zeigt die
+    Amplitude weiterhin sichtbar an, auch wenn einzelne Schwingungszyklen
+    nicht mehr aufgelöst werden.
 
     `capacity` (siehe `LiveView._channel_display_capacity`) ist bewusst
     NICHT `len(values)`: `values` wächst innerhalb eines Sweep-Durchlaufs
     bei jedem Tick weiter, ein daraus abgeleiteter Faktor würde die
     Bin-Zuordnung also JEDEN Tick leicht verschieben - ein einzelner
-    Spitzenwert würde dann mal isoliert in einem eigenen Bin, mal
-    mit Nachbarwerten vermittelt landen, sichtbar als "Wobbeln" der Spitze
+    Spitzenwert würde dann mal isoliert in einem eigenen Bin, mal mit
+    Nachbarwerten vermittelt landen, sichtbar als "Wobbeln" der Spitze
     zwischen niedriger und hoher Anzeige, obwohl sich die zugrunde
     liegenden Rohdaten an dieser Stelle gar nicht mehr ändern. Mit einem
     aus der (festen) Fensterkapazität abgeleiteten Faktor bleibt die
@@ -280,20 +288,26 @@ def _downsample_for_display(
     Bewusst NUR für die ANZEIGE (Kurven-Rendering) gedacht - Autoskalierung
     (`LiveView._apply_channel_y_range`) und die grosse Messwertanzeige
     (`_format_channel_value`, `values[-1]`) nutzen weiterhin die volle
-    Auflösung aus `LiveView._get_channel_display_view`, damit eine kurze
-    Spitze (z. B. ein Schockereignis) nicht durch die Mittelwertbildung
-    "weggeglättet" wird, bevor sie den Y-Bereich oder den angezeigten
-    aktuellen Wert beeinflusst.
+    Auflösung aus `LiveView._get_channel_display_view`.
     """
     n = values.shape[0]
-    if n <= max_points:
+    if n <= 2 * max_points:
         return times, values
     factor = max(1, capacity // max_points)
     if factor < 2 or n < factor:
         return times, values
-    usable = (n // factor) * factor
-    downsampled_values = values[:usable].reshape(-1, factor).mean(axis=1)
-    downsampled_times = times[:usable:factor]
+    bin_count = n // factor
+    usable = bin_count * factor
+    binned_values = values[:usable].reshape(bin_count, factor)
+
+    # Je Bin ZWEI Punkte (max, min) statt einem Mittelwert - siehe
+    # Docstring. `stx` zentriert den x-Wert des Bins etwas (statt immer
+    # dessen ersten Sample zu nehmen), wie in PyQtGraphs `peak`-Methode.
+    stx = factor // 2
+    downsampled_times = np.repeat(times[stx:stx + usable:factor], 2)
+    downsampled_values = np.empty(bin_count * 2, dtype=values.dtype)
+    downsampled_values[0::2] = binned_values.max(axis=1)
+    downsampled_values[1::2] = binned_values.min(axis=1)
     return downsampled_times, downsampled_values
 
 
