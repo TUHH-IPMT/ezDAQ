@@ -124,12 +124,13 @@ nötig sein.
 
 Die Hardware-Schicht (`hardware/nidaq_device.py`, `ni9215.py`,
 `ni9234.py`, `ni9210.py`, `ni9213.py`) wurde gegen die offiziellen
-`nidaqmx`-API-Signaturen entwickelt und geprüft, jedoch **nicht
-durchgängig gegen echte Hardware** getestet – NI 9210/NI 9213
-(Thermoelement, inkl. 2-Punkt-Kalibrierung) bislang gar nicht. Ein Test
-mit angeschlossener Hardware wird dringend empfohlen, bevor produktiv
-gemessen wird. Alle übrigen Schichten (Ring Buffer, Controller,
-Speicherung, GUI) wurden mit simulierter Hardware end-to-end getestet.
+`nidaqmx`-API-Signaturen entwickelt und geprüft und an den folgenden
+Modulen getestet:
+
+- NI 9215
+- NI 9234
+- NI 9210
+- NI 9213
 
 ## Autoren
 
