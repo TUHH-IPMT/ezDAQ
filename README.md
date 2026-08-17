@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/ezDAQ_logo_full.png" alt="ezDAQ logo" width="600">
+</p>
+
 # ezDAQ - Easy Data Acquisition
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
@@ -134,8 +138,9 @@ have been tested end-to-end with simulated hardware.
 
 ## Authors
 
-Malte Flehmke, Sebastian Junghans – originally developed at IPMT, TUHH
-(Hamburg University of Technology).
+Malte Flehmke, Sebastian Junghans – originally developed at the Institute
+of Production Management and Technology (IPMT), Hamburg University of
+Technology (TUHH).
 
 ## Logo
 

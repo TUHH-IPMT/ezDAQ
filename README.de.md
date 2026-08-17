@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="resources/ezDAQ_logo_full.png" alt="ezDAQ Logo" width="200">
+</p>
+
 # ezDAQ - Easy Data Acquisition
 
 *[English version](README.md)*
@@ -129,8 +133,8 @@ Speicherung, GUI) wurden mit simulierter Hardware end-to-end getestet.
 
 ## Autoren
 
-Malte Flehmke, Sebastian Junghans – ursprünglich entwickelt am IPMT,
-TUHH.
+Malte Flehmke, Sebastian Junghans – ursprünglich entwickelt am Institut
+für Produktionsmanagement und -technik (IPMT), TUHH.
 
 ## Logo
 
