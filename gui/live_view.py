@@ -308,6 +308,20 @@ def _downsample_for_display(
     downsampled_values = np.empty(bin_count * 2, dtype=values.dtype)
     downsampled_values[0::2] = binned_values.max(axis=1)
     downsampled_values[1::2] = binned_values.min(axis=1)
+
+    # Restliche, noch nicht volle Bin NICHT verwerfen: sonst haengt die
+    # Kurvenspitze bis zu `factor` Samples hinter der tatsaechlichen
+    # Schreibposition hinterher und springt bei jedem neu vollstaendigen
+    # Bin ruckartig ein Stueck vor, statt mit jedem Tick sichtbar
+    # weiterzuwachsen (siehe Klassendoc "bewusst KEIN Reveal-Pacing" -
+    # das hier ist kein zusaetzliches Glaetten/Verzoegern, nur das
+    # Nicht-Wegwerfen bereits eingetroffener Daten).
+    remainder = n - usable
+    if remainder > 0:
+        tail = values[usable:]
+        tail_time = times[usable + remainder // 2]
+        downsampled_times = np.append(downsampled_times, (tail_time, tail_time))
+        downsampled_values = np.append(downsampled_values, (tail.max(), tail.min()))
     return downsampled_times, downsampled_values
 
 
