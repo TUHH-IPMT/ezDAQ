@@ -464,15 +464,16 @@ class Channel:
     plot_time_window_seconds: float = 5.0
     # Ob der eigentliche Kurvenverlauf angezeigt wird (Hauptraster UND
     # eigenes Fenster) - unabhaengig von `plot_show_value` unten: beide
-    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer),
-    # beide zusammen angeschaltet ist der Standard, NUR dieses Feld aus
-    # zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
+    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer).
+    # Standard ist NUR das Diagramm (siehe `plot_show_value`), NUR dieses
+    # Feld aus zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
     # `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`).
     plot_show_graph: bool = True
     # Grosse, aktuelle Messwertanzeige neben dem Subplot im Hauptraster
     # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
-    # pro Kanal abschaltbar, da sie bei vielen Kanälen unnötig Platz kostet.
-    plot_show_value: bool = True
+    # standardmaessig AUS: pro Kanal bewusst zuschaltbar statt bei vielen
+    # Kanälen von vornherein unnötig Platz zu kosten.
+    plot_show_value: bool = False
     # Anzahl Vorkommastellen fuer `plot_show_value` - passt ein Messwert
     # NICHT hinein, wird statt einer irrefuehrend abgeschnittenen Zahl ein
     # Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-Digitalanzeigen),
@@ -580,7 +581,7 @@ class Channel:
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
             ),
             plot_show_graph=data.get("plot_show_graph", True),
-            plot_show_value=data.get("plot_show_value", True),
+            plot_show_value=data.get("plot_show_value", False),
             plot_value_integer_digits=max(
                 1, int(data.get("plot_value_integer_digits", 3))
             ),

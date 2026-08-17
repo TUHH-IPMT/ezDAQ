@@ -1703,7 +1703,7 @@ class LiveView(QWidget):
             # `_apply_channel_curve_style()`, das `_apply_channel_appearance()`
             # unten (bzw. am Ende dieser Methode) ohnehin immer aufruft.
             channel.plot_show_graph = values.get("plot_show_graph", True)
-            new_show_value = values.get("plot_show_value", True)
+            new_show_value = values.get("plot_show_value", False)
             if new_show_value != channel.plot_show_value:
                 show_value_changed = True
             channel.plot_show_value = new_show_value

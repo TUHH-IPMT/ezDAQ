@@ -1436,7 +1436,7 @@ class ChannelTableWidget(QWidget):
                 0.1, float(display_settings.get("plot_time_window_seconds", 5.0))
             ),
             plot_show_graph=display_settings.get("plot_show_graph", True),
-            plot_show_value=display_settings.get("plot_show_value", True),
+            plot_show_value=display_settings.get("plot_show_value", False),
             plot_value_integer_digits=max(
                 1, int(display_settings.get("plot_value_integer_digits", 3))
             ),
