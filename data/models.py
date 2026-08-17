@@ -61,8 +61,38 @@ def ni9234_valid_sample_rates() -> list[float]:
 
 
 def nearest_ni9234_sample_rate(sample_rate_hz: float) -> float:
-    """Die gültige NI9234-Abtastrate, die `sample_rate_hz` am nächsten liegt."""
+    """Die gültige NI9234-Abtastrate, die `sample_rate_hz` am nächsten liegt.
+
+    Ausschließlich für die Rasterprüfung in `is_valid_ni9234_sample_rate`
+    gedacht (symmetrische Toleranz um einen gültigen Wert). Für den
+    Vorschlag in Fehlermeldungen wird bewusst NICHT diese Funktion,
+    sondern `next_ni9234_sample_rate_at_or_above` verwendet - siehe dort.
+    """
     return min(ni9234_valid_sample_rates(), key=lambda rate: abs(rate - sample_rate_hz))
+
+
+def next_ni9234_sample_rate_at_or_above(sample_rate_hz: float) -> float:
+    """Die kleinste gültige NI9234-Abtastrate, die `sample_rate_hz` nicht
+    unterschreitet - also aufrunden statt auf den nächstgelegenen Wert.
+
+    Begründung: Eine zu hohe Abtastrate kostet nur Speicherplatz, eine zu
+    niedrige verliert dagegen unwiederbringlich Signalanteile (das
+    NI9234-Antialiasing-Filter zieht mit der Rate mit, ein zu niedrig
+    gewähltes Raster schneidet also echte Frequenzanteile weg). Bei
+    Vibrationsmessungen ist die Bandbreite meist die eigentliche
+    Anforderung - deshalb im Zweifel nach oben.
+
+    Wird NUR als Vorschlag in der Fehlermeldung verwendet, NICHT
+    automatisch angewendet: der Nutzer muss die gültige Rate selbst
+    eintragen, damit nie stillschweigend etwas anderes gemessen wird als
+    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick, siehe
+    `doc/offene_punkte.md`).
+
+    Liegt die Anfrage über der höchsten unterstützten Rate, wird diese
+    zurückgegeben - darüber geht hardwareseitig nichts.
+    """
+    candidates = [rate for rate in ni9234_valid_sample_rates() if rate >= sample_rate_hz]
+    return min(candidates) if candidates else NI9234_BASE_SAMPLE_RATE_HZ
 
 
 def is_valid_ni9234_sample_rate(sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
@@ -434,15 +464,16 @@ class Channel:
     plot_time_window_seconds: float = 5.0
     # Ob der eigentliche Kurvenverlauf angezeigt wird (Hauptraster UND
     # eigenes Fenster) - unabhaengig von `plot_show_value` unten: beide
-    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer),
-    # beide zusammen angeschaltet ist der Standard, NUR dieses Feld aus
-    # zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
+    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer).
+    # Standard ist NUR das Diagramm (siehe `plot_show_value`), NUR dieses
+    # Feld aus zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
     # `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`).
     plot_show_graph: bool = True
     # Grosse, aktuelle Messwertanzeige neben dem Subplot im Hauptraster
     # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
-    # pro Kanal abschaltbar, da sie bei vielen Kanälen unnötig Platz kostet.
-    plot_show_value: bool = True
+    # standardmaessig AUS: pro Kanal bewusst zuschaltbar statt bei vielen
+    # Kanälen von vornherein unnötig Platz zu kosten.
+    plot_show_value: bool = False
     # Anzahl Vorkommastellen fuer `plot_show_value` - passt ein Messwert
     # NICHT hinein, wird statt einer irrefuehrend abgeschnittenen Zahl ein
     # Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-Digitalanzeigen),
@@ -550,7 +581,7 @@ class Channel:
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
             ),
             plot_show_graph=data.get("plot_show_graph", True),
-            plot_show_value=data.get("plot_show_value", True),
+            plot_show_value=data.get("plot_show_value", False),
             plot_value_integer_digits=max(
                 1, int(data.get("plot_value_integer_digits", 3))
             ),
@@ -648,11 +679,11 @@ class MeasurementConfig:
             channel.enabled and channel.module_type == ModuleType.NI9234
             for channel in self.channels
         ) and not is_valid_ni9234_sample_rate(self.sample_rate_hz):
-            nearest = nearest_ni9234_sample_rate(self.sample_rate_hz)
+            suggestion = next_ni9234_sample_rate_at_or_above(self.sample_rate_hz)
             raise ValueError(
                 "Das NI9234 unterstützt nur Abtastraten nach der Formel "
-                f"51200 Hz / n (n = 1..31); nächstgelegener gültiger Wert: "
-                f"{nearest:.1f} S/s."
+                f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
+                f"{suggestion:.1f} S/s."
             )
         for device_name, group_channels in ni9213_device_groups(self.channels).items():
             max_rate = max_ni9213_sample_rate_hz(group_channels)

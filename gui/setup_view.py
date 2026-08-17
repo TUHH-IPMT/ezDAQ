@@ -55,7 +55,7 @@ from data.models import (
     StorageFormat,
     is_valid_ni9234_sample_rate,
     max_ni9213_sample_rate_hz,
-    nearest_ni9234_sample_rate,
+    next_ni9234_sample_rate_at_or_above,
     ni9213_device_groups,
 )
 from gui.i18n import connect_language_changed, t
@@ -775,7 +775,7 @@ class SetupView(QWidget):
             self.show_error(
                 t(
                     "error_ni9234_invalid_sample_rate",
-                    nearest=f"{nearest_ni9234_sample_rate(sample_rate):.1f}",
+                    suggestion=f"{next_ni9234_sample_rate_at_or_above(sample_rate):.1f}",
                 )
             )
             return None

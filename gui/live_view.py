@@ -129,6 +129,10 @@ pg.setConfigOptions(antialias=True, useOpenGL=True)
 _DEFAULT_DISPLAY_WINDOW_SECONDS = 5.0
 _UI_UPDATE_INTERVAL_MS = 15  # ~66 Hz; mit useOpenGL=True ist Rendering nicht mehr der Flaschenhals
 _STORAGE_UPDATE_INTERVAL_MS = 1000  # Dateizugriff (stat) seltener als das Plot-Update
+# Obergrenze fuer die an `curve.setData()` uebergebene Punktzahl (siehe
+# `_downsample_for_display`) - deutlich mehr als jeder Bildschirm an
+# horizontalen Pixeln hat, Kurve sieht also visuell unveraendert aus.
+_MAX_DISPLAY_POINTS_PER_CURVE = 2000
 # Grosse Messwertanzeige neben dem Subplot (siehe `Channel.plot_show_value`)
 # in Hauptraster-Spalte und Popout-Fenster, je in EIGENER Spalte/Label fuer
 # Zahl und Einheit. Die Zahl wird nach einem festen Format aus
@@ -237,6 +241,88 @@ def _space_width_px(font: QFont) -> float:
     `LiveView._make_value_box`), statt eines je nach Layout/Ausrichtung
     unterschiedlich grossen, "zufaelligen" Zwischenraums."""
     return QFontMetrics(font).horizontalAdvance(" ")
+
+
+def _downsample_for_display(
+    times: np.ndarray,
+    values: np.ndarray,
+    capacity: int,
+    max_points: int = _MAX_DISPLAY_POINTS_PER_CURVE,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Reduziert `times`/`values` per Min/Max-Hüllkurve (wie PyQtGraphs
+    eigenes `downsampleMethod='peak'`) auf höchstens `2 * max_points`
+    Punkte, BEVOR sie an PyQtGraph übergeben werden.
+
+    Notwendig bei sehr hohen Abtastraten (z. B. NI9234 mit 51200 Hz über
+    mehrere Kanäle gleichzeitig): PyQtGraphs eigenes `autoDownsample`
+    reduziert zwar ebenfalls, berechnet dabei aber bei JEDEM
+    `setData()`-Aufruf (bis zu ~66x/s, siehe `_UI_UPDATE_INTERVAL_MS`) über
+    das komplette Sweep-Fenster (bis zu Abtastrate * Zeitspanne Punkte PRO
+    KANAL) neu - das hat den Live-Plot bei mehreren hochabtastenden
+    Kanälen spürbar ruckeln lassen. Diese einfache, feste Reduktion VOR
+    `setData()` ist deutlich billiger als PyQtGraphs generischere,
+    view-range-abhängige Variante und macht diese überflüssig (siehe
+    `curve.setDownsampling(auto=False)` bei der Kurven-Erzeugung).
+
+    BEWUSST Min/Max-Hüllkurve statt Mittelwert: eine schnell abklingende
+    Schwingung (z. B. das typische Ausklingen nach einem Klopftest auf
+    einen Beschleunigungssensor) wird durch Mittelwertbildung bei starker
+    Kompression (hier oft >100x) fast komplett weggeglättet - die
+    Hüllkurve (min UND max pro Bin statt deren Mittelwert) zeigt die
+    Amplitude weiterhin sichtbar an, auch wenn einzelne Schwingungszyklen
+    nicht mehr aufgelöst werden.
+
+    `capacity` (siehe `LiveView._channel_display_capacity`) ist bewusst
+    NICHT `len(values)`: `values` wächst innerhalb eines Sweep-Durchlaufs
+    bei jedem Tick weiter, ein daraus abgeleiteter Faktor würde die
+    Bin-Zuordnung also JEDEN Tick leicht verschieben - ein einzelner
+    Spitzenwert würde dann mal isoliert in einem eigenen Bin, mal mit
+    Nachbarwerten vermittelt landen, sichtbar als "Wobbeln" der Spitze
+    zwischen niedriger und hoher Anzeige, obwohl sich die zugrunde
+    liegenden Rohdaten an dieser Stelle gar nicht mehr ändern. Mit einem
+    aus der (festen) Fensterkapazität abgeleiteten Faktor bleibt die
+    Bin-Zuordnung für den gesamten Durchlauf stabil - bereits vollständig
+    gefüllte Bins ändern sich nicht mehr, nur der aktuell noch befüllte
+    letzte Bin läuft (erwartungsgemäß) mit.
+
+    Bewusst NUR für die ANZEIGE (Kurven-Rendering) gedacht - Autoskalierung
+    (`LiveView._apply_channel_y_range`) und die grosse Messwertanzeige
+    (`_format_channel_value`, `values[-1]`) nutzen weiterhin die volle
+    Auflösung aus `LiveView._get_channel_display_view`.
+    """
+    n = values.shape[0]
+    if n <= 2 * max_points:
+        return times, values
+    factor = max(1, capacity // max_points)
+    if factor < 2 or n < factor:
+        return times, values
+    bin_count = n // factor
+    usable = bin_count * factor
+    binned_values = values[:usable].reshape(bin_count, factor)
+
+    # Je Bin ZWEI Punkte (max, min) statt einem Mittelwert - siehe
+    # Docstring. `stx` zentriert den x-Wert des Bins etwas (statt immer
+    # dessen ersten Sample zu nehmen), wie in PyQtGraphs `peak`-Methode.
+    stx = factor // 2
+    downsampled_times = np.repeat(times[stx:stx + usable:factor], 2)
+    downsampled_values = np.empty(bin_count * 2, dtype=values.dtype)
+    downsampled_values[0::2] = binned_values.max(axis=1)
+    downsampled_values[1::2] = binned_values.min(axis=1)
+
+    # Restliche, noch nicht volle Bin NICHT verwerfen: sonst haengt die
+    # Kurvenspitze bis zu `factor` Samples hinter der tatsaechlichen
+    # Schreibposition hinterher und springt bei jedem neu vollstaendigen
+    # Bin ruckartig ein Stueck vor, statt mit jedem Tick sichtbar
+    # weiterzuwachsen (siehe Klassendoc "bewusst KEIN Reveal-Pacing" -
+    # das hier ist kein zusaetzliches Glaetten/Verzoegern, nur das
+    # Nicht-Wegwerfen bereits eingetroffener Daten).
+    remainder = n - usable
+    if remainder > 0:
+        tail = values[usable:]
+        tail_time = times[usable + remainder // 2]
+        downsampled_times = np.append(downsampled_times, (tail_time, tail_time))
+        downsampled_values = np.append(downsampled_values, (tail.max(), tail.min()))
+    return downsampled_times, downsampled_values
 
 
 def _format_channel_value(
@@ -794,7 +880,10 @@ class ChannelPopoutWindow(QWidget):
         style_plot_item(self.plot_item)
 
         self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
-        self.curve.setDownsampling(auto=True, method="mean")
+        # KEIN `autoDownsample`: die Daten kommen bereits über
+        # `_downsample_for_display()` vorverdichtet an - PyQtGraphs eigene,
+        # view-range-abhängige Variante würde bei jedem Tick unnötig
+        # nochmal über die (jetzt kleine) Punktmenge laufen (siehe dort).
         self.curve.setClipToView(True)
         self.plot_item.enableAutoRange(x=False)
         # Siehe `Channel.plot_show_graph` - normales Qt-Widget (kein
@@ -1614,7 +1703,7 @@ class LiveView(QWidget):
             # `_apply_channel_curve_style()`, das `_apply_channel_appearance()`
             # unten (bzw. am Ende dieser Methode) ohnehin immer aufruft.
             channel.plot_show_graph = values.get("plot_show_graph", True)
-            new_show_value = values.get("plot_show_value", True)
+            new_show_value = values.get("plot_show_value", False)
             if new_show_value != channel.plot_show_value:
                 show_value_changed = True
             channel.plot_show_value = new_show_value
@@ -1972,7 +2061,7 @@ class LiveView(QWidget):
             # wuerde den zuletzt gesetzten Bereich auf alle anderen Subplots
             # erzwingen und die Einstellung pro Kanal wirkungslos machen.
             curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
-            curve.setDownsampling(auto=True, method="mean")
+            # KEIN `autoDownsample` - siehe Kommentar in `ChannelPopoutWindow.__init__`.
             curve.setClipToView(True)
             plot_item.getViewBox().setBackgroundColor(background)
             # Kein `plot_show_graph` -> Diagramm ausgeblendet, nur der
@@ -2284,7 +2373,10 @@ class LiveView(QWidget):
         for pos, curve in enumerate(self._curves):
             channel_index = self._curve_channel_indices[pos]
             times, values = channel_views[channel_index]
-            curve.setData(times, values)
+            draw_times, draw_values = _downsample_for_display(
+                times, values, self._channel_display_capacity(channel_index)
+            )
+            curve.setData(draw_times, draw_values)
             if values.size and self._value_labels[pos] is not None:
                 channel = self._channels[channel_index]
                 self._value_labels[pos].setText(
@@ -2312,7 +2404,10 @@ class LiveView(QWidget):
                 if window is None:
                     continue
                 times, values = channel_views[index]
-                window.curve.setData(times, values)
+                draw_times, draw_values = _downsample_for_display(
+                    times, values, self._channel_display_capacity(index)
+                )
+                window.curve.setData(draw_times, draw_values)
                 if values.size:
                     window.value_label.setText(
                         _format_channel_value(
@@ -2363,6 +2458,24 @@ class LiveView(QWidget):
             self._display_buffer = np.zeros((num_channels, capacity), dtype=np.float64)
             self._buffer_write_pos = 0
 
+    def _channel_display_capacity(self, channel_index: int) -> int:
+        """Maximale Sample-Anzahl EINES Sweep-Durchlaufs für `channel_index`
+        (Abtastrate * konfigurierte Zeitspanne, gedeckelt auf die
+        tatsächlich allokierte Puffergröße) - gemeinsam genutzt von
+        `_write_to_display_buffer` (Umbruchpunkt des Ringpuffers) UND
+        `_downsample_for_display` (siehe dort, wieso das für einen
+        stabilen Downsampling-Faktor wichtig ist)."""
+        return max(
+            1,
+            min(
+                self._display_capacity_samples,
+                int(
+                    self._sample_rate_hz
+                    * self._channels[channel_index].plot_time_window_seconds
+                ),
+            ),
+        )
+
     def _write_to_display_buffer(self, scaled_block: np.ndarray) -> None:
         """Schreibt neue Samples in den Sweep-Puffer (siehe Klassendoc oben).
 
@@ -2377,16 +2490,7 @@ class LiveView(QWidget):
         if self._display_buffer is None:
             return
         for channel_index in range(scaled_block.shape[0]):
-            cap = max(
-                1,
-                min(
-                    self._display_capacity_samples,
-                    int(
-                        self._sample_rate_hz
-                        * self._channels[channel_index].plot_time_window_seconds
-                    ),
-                ),
-            )
+            cap = self._channel_display_capacity(channel_index)
             pos = self._channel_buffer_positions.get(channel_index, 0)
             start = 0
             while start < scaled_block.shape[1]:

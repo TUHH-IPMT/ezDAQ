@@ -99,7 +99,8 @@ def discover_devices() -> list[DeviceInfo]:
             "NI-DAQmx-Treiber (oder das Python-Paket 'nidaqmx') ist auf "
             "diesem Rechner nicht installiert."
         )
-        logger.warning(message)
+        # Nur DEBUG, siehe Begründung im DaqmxError-Zweig unten.
+        logger.debug(message)
         raise RuntimeError(message)
 
     devices: list[DeviceInfo] = []
@@ -123,7 +124,14 @@ def discover_devices() -> list[DeviceInfo]:
                 )
             )
     except DaqmxError as exc:
-        logger.error("Fehler bei der Geräteerkennung: %s", exc)
+        # Bewusst nur DEBUG statt ERROR: die Meldung wird unverändert in der
+        # RuntimeError weitergereicht und dort protokolliert UND angezeigt,
+        # wo der Fehler tatsächlich behandelt wird (`gui/main_window.py`:
+        # `_on_discover_hardware_failed` bzw. `_on_start_measurement`). Ein
+        # zusätzliches ERROR hier hätte dieselbe Ursache doppelt in der
+        # Konsole erscheinen lassen und wie zwei getrennte Fehlschläge
+        # ausgesehen.
+        logger.debug("Geräteerkennung fehlgeschlagen: %s", exc)
         raise RuntimeError(str(exc)) from exc
 
     return devices
