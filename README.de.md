@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="resources/ezDAQ_logo_full.png" alt="ezDAQ Logo" width="200">
+  <img src="resources/ezDAQ_logo_full.png" alt="ezDAQ Logo" width="600">
 </p>
 
 # ezDAQ - Easy Data Acquisition
