@@ -124,6 +124,11 @@ class ChannelTreeWidget(QTreeWidget):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
+        # Drag&Drop-Events landen bei Qt-ItemViews am Viewport, nicht am
+        # aeusseren Widget (siehe gleiches Muster bei AssignablePlotWidget
+        # weiter unten) - ohne diesen Aufruf kommen extern gezogene Dateien
+        # nie bei dragEnterEvent()/dropEvent() an.
+        self.viewport().setAcceptDrops(True)
 
         # Leerzustand-Hinweis als Overlay auf dem Viewport (QTreeWidget
         # kennt anders als z. B. QLineEdit kein natives `placeholderText`)
@@ -165,6 +170,16 @@ class ChannelTreeWidget(QTreeWidget):
             event.acceptProposedAction()
         else:
             super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        # Ohne diesen Override greift QAbstractItemView's Standard-
+        # dragMoveEvent, das externe URL-Drops ablehnt (Modell kennt sie
+        # nicht) - sichtbar am Verbotsschild-Cursor waehrend des Ziehens,
+        # obwohl dragEnterEvent() oben bereits akzeptiert hat.
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802 (Qt API)
         urls = event.mimeData().urls()
