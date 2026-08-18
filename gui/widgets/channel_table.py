@@ -1419,6 +1419,15 @@ class ChannelTableWidget(QWidget):
             signal_type=signal_type,
             module_type=module_type,
             enabled=enabled,
+            # min_range/max_range sind hier bewusst NICHT editierbar (kein
+            # Tabellenfeld dafuer) - explizit None statt den Channel-
+            # Dataclass-Default (-10.0/10.0 V) uebernehmen zu lassen, damit
+            # die Hardware-Schicht (hardware/ni9234.py etc.) ihren
+            # jeweils korrekten Modul-Messbereich als Fallback anwendet
+            # (z. B. NI9234 fest ±5V) statt eines pauschalen ±10V, das die
+            # NI9234-Hardware beim Messstart hart ablehnt.
+            min_range=None,
+            max_range=None,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
             thermocouple_type=thermocouple_type or "K",
             adc_timing_mode=adc_timing_mode or "HIGH_RESOLUTION",
