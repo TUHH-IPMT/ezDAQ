@@ -52,8 +52,10 @@ from data.models import (
     ModuleType,
     RecordingStopUnit,
     StorageFormat,
+    is_valid_grid_sample_rate,
     is_valid_ni9234_sample_rate,
     max_ni9213_sample_rate_hz,
+    next_grid_sample_rate_at_or_above,
     next_ni9234_sample_rate_at_or_above,
     ni9213_device_groups,
     resolve_rate_groups,
@@ -778,6 +780,17 @@ class SetupView(QWidget):
                 t(
                     "error_ni9234_invalid_sample_rate",
                     suggestion=f"{next_ni9234_sample_rate_at_or_above(sample_rate):.1f}",
+                )
+            )
+            return None
+
+        if any(
+            ch.enabled and ch.module_type == ModuleType.NI9235 for ch in channels
+        ) and not is_valid_grid_sample_rate(ModuleType.NI9235, sample_rate):
+            self.show_error(
+                t(
+                    "error_ni9235_invalid_sample_rate",
+                    suggestion=f"{next_grid_sample_rate_at_or_above(ModuleType.NI9235, sample_rate):.1f}",
                 )
             )
             return None

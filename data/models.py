@@ -33,6 +33,7 @@ class ModuleType(str, Enum):
     NI9234 = "NI9234"
     NI9210 = "NI9210"
     NI9213 = "NI9213"
+    NI9235 = "NI9235"
 
 
 NI9210_FIXED_SAMPLE_RATE_HZ = 14.0
@@ -51,13 +52,125 @@ NI9234_BASE_SAMPLE_RATE_HZ = 51_200.0
 NI9234_MIN_RATE_DIVISOR = 1
 NI9234_MAX_RATE_DIVISOR = 31
 
+# Das NI9235 (120-Ω-Viertelbrücke-DMS-Modul) hat ebenfalls einen
+# Delta-Sigma-ADC mit demselben Rastermuster, aber einem ANDEREN Master-
+# Timebase (12,8 MHz statt 13,1072 MHz): fs = (12.8 MHz / 256) / n =
+# 50.000 Hz / n. Am internen Timebase ist n auf 5..63 begrenzt (10.000 S/s
+# bis ca. 793,65 S/s) - anders als beim NI9234 NICHT bei n=1, da die
+# Hardware oberhalb von 10 kS/s keine gültige Rate mehr liefert. Quelle:
+# NI-9235 Specifications (ni.com, 2022-07-11), Abschnitt "Data Rates" /
+# "Data rate range (fs) using internal master timebase".
+NI9235_BASE_SAMPLE_RATE_HZ = 50_000.0
+NI9235_MIN_RATE_DIVISOR = 5
+NI9235_MAX_RATE_DIVISOR = 63
+
+
+@dataclass(frozen=True)
+class GridRateSpec:
+    """Beschreibt das Abtastraten-Raster eines Delta-Sigma-Moduls (fs =
+    `base_hz` / n, n ganzzahlig `min_divisor`..`max_divisor`).
+
+    Ermöglicht es, dieselbe Rasterprüf-/Rundungslogik für mehrere Module
+    mit strukturell gleichem, aber zahlenmäßig unterschiedlichem Raster
+    (aktuell NI9234 und NI9235) zu teilen, siehe
+    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`.
+    """
+
+    module_label: str
+    base_hz: float
+    min_divisor: int
+    max_divisor: int
+
+
+# Module mit einem Delta-Sigma-Raster (fs = base_hz / n), das sich NICHT
+# frei auf eine beliebige Zielrate einstellen lässt, sondern nur snappen.
+# Ein künftiges weiteres Rastermodul braucht nur einen Eintrag hier - siehe
+# `resolve_rate_groups()`, das generisch über alle vorhandenen Einträge
+# iteriert (nicht mehr NI9234-spezifisch).
+_GRID_SAMPLE_RATE_SPEC_BY_MODULE: dict[ModuleType, GridRateSpec] = {
+    ModuleType.NI9234: GridRateSpec("NI9234", NI9234_BASE_SAMPLE_RATE_HZ, NI9234_MIN_RATE_DIVISOR, NI9234_MAX_RATE_DIVISOR),
+    ModuleType.NI9235: GridRateSpec("NI9235", NI9235_BASE_SAMPLE_RATE_HZ, NI9235_MIN_RATE_DIVISOR, NI9235_MAX_RATE_DIVISOR),
+}
+
+
+def _grid_valid_sample_rates(spec: GridRateSpec) -> list[float]:
+    """Alle gültigen Abtastraten eines Rastermoduls (absteigend sortiert)."""
+    return [spec.base_hz / n for n in range(spec.min_divisor, spec.max_divisor + 1)]
+
+
+def _nearest_grid_sample_rate(sample_rate_hz: float, spec: GridRateSpec) -> float:
+    """Die gültige Rasterrate von `spec`, die `sample_rate_hz` am nächsten liegt.
+
+    Ausschließlich für die Rasterprüfung in `_is_valid_grid_sample_rate`
+    gedacht (symmetrische Toleranz um einen gültigen Wert). Für den
+    Vorschlag in Fehlermeldungen wird bewusst NICHT diese Funktion,
+    sondern `_next_grid_sample_rate_at_or_above` verwendet - siehe dort.
+    """
+    return min(_grid_valid_sample_rates(spec), key=lambda rate: abs(rate - sample_rate_hz))
+
+
+def _next_grid_sample_rate_at_or_above(sample_rate_hz: float, spec: GridRateSpec) -> float:
+    """Die kleinste gültige Rasterrate von `spec`, die `sample_rate_hz`
+    nicht unterschreitet - also aufrunden statt auf den nächstgelegenen Wert.
+
+    Begründung: Eine zu hohe Abtastrate kostet nur Speicherplatz, eine zu
+    niedrige verliert dagegen unwiederbringlich Signalanteile (das
+    Antialiasing-Filter des Moduls zieht mit der Rate mit, ein zu niedrig
+    gewähltes Raster schneidet also echte Frequenzanteile weg). Bei
+    Vibrations-/Dehnungsmessungen ist die Bandbreite meist die eigentliche
+    Anforderung - deshalb im Zweifel nach oben.
+
+    Wird NUR als Vorschlag in der Fehlermeldung verwendet, NICHT
+    automatisch angewendet: der Nutzer muss die gültige Rate selbst
+    eintragen, damit nie stillschweigend etwas anderes gemessen wird als
+    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick).
+
+    Liegt die Anfrage über der höchsten unterstützten Rate, wird diese
+    zurückgegeben - darüber geht hardwareseitig nichts.
+    """
+    candidates = [rate for rate in _grid_valid_sample_rates(spec) if rate >= sample_rate_hz]
+    return min(candidates) if candidates else spec.base_hz / spec.min_divisor
+
+
+def _is_valid_grid_sample_rate(sample_rate_hz: float, spec: GridRateSpec, tolerance_hz: float = 0.05) -> bool:
+    """Prüft `sample_rate_hz` gegen das Raster von `spec` (fs = base_hz / n).
+
+    `tolerance_hz` deckt die Rundung der GUI-Eingabe ab (Spinbox mit einer
+    Nachkommastelle, siehe `gui/setup_view.py::_sample_rate_spin`) - viele
+    gültige Raten (z. B. 51200/3 = 17066,666...) sind mit einer
+    Nachkommastelle ohnehin nicht exakt darstellbar.
+    """
+    return abs(sample_rate_hz - _nearest_grid_sample_rate(sample_rate_hz, spec)) <= tolerance_hz
+
+
+def grid_valid_sample_rates(module_type: ModuleType) -> list[float]:
+    """Öffentliche, modultyp-generische Fassung von `_grid_valid_sample_rates`."""
+    return _grid_valid_sample_rates(_GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
+
+
+def nearest_grid_sample_rate(module_type: ModuleType, sample_rate_hz: float) -> float:
+    """Öffentliche, modultyp-generische Fassung von `_nearest_grid_sample_rate`."""
+    return _nearest_grid_sample_rate(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
+
+
+def next_grid_sample_rate_at_or_above(module_type: ModuleType, sample_rate_hz: float) -> float:
+    """Öffentliche, modultyp-generische Fassung von `_next_grid_sample_rate_at_or_above`."""
+    return _next_grid_sample_rate_at_or_above(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
+
+
+def is_valid_grid_sample_rate(module_type: ModuleType, sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
+    """Öffentliche, modultyp-generische Fassung von `_is_valid_grid_sample_rate`."""
+    return _is_valid_grid_sample_rate(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type], tolerance_hz)
+
 
 def ni9234_valid_sample_rates() -> list[float]:
-    """Alle 31 gültigen Abtastraten des NI9234 (absteigend sortiert)."""
-    return [
-        NI9234_BASE_SAMPLE_RATE_HZ / n
-        for n in range(NI9234_MIN_RATE_DIVISOR, NI9234_MAX_RATE_DIVISOR + 1)
-    ]
+    """Alle 31 gültigen Abtastraten des NI9234 (absteigend sortiert).
+
+    Dünner Wrapper um die generische Rasterlogik (siehe
+    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`) - Verhalten unverändert gegenüber
+    der Zeit, als diese Funktion NI9234-spezifisch implementiert war.
+    """
+    return grid_valid_sample_rates(ModuleType.NI9234)
 
 
 def nearest_ni9234_sample_rate(sample_rate_hz: float) -> float:
@@ -68,42 +181,24 @@ def nearest_ni9234_sample_rate(sample_rate_hz: float) -> float:
     Vorschlag in Fehlermeldungen wird bewusst NICHT diese Funktion,
     sondern `next_ni9234_sample_rate_at_or_above` verwendet - siehe dort.
     """
-    return min(ni9234_valid_sample_rates(), key=lambda rate: abs(rate - sample_rate_hz))
+    return nearest_grid_sample_rate(ModuleType.NI9234, sample_rate_hz)
 
 
 def next_ni9234_sample_rate_at_or_above(sample_rate_hz: float) -> float:
     """Die kleinste gültige NI9234-Abtastrate, die `sample_rate_hz` nicht
     unterschreitet - also aufrunden statt auf den nächstgelegenen Wert.
 
-    Begründung: Eine zu hohe Abtastrate kostet nur Speicherplatz, eine zu
-    niedrige verliert dagegen unwiederbringlich Signalanteile (das
-    NI9234-Antialiasing-Filter zieht mit der Rate mit, ein zu niedrig
-    gewähltes Raster schneidet also echte Frequenzanteile weg). Bei
-    Vibrationsmessungen ist die Bandbreite meist die eigentliche
-    Anforderung - deshalb im Zweifel nach oben.
-
     Wird NUR als Vorschlag in der Fehlermeldung verwendet, NICHT
     automatisch angewendet: der Nutzer muss die gültige Rate selbst
     eintragen, damit nie stillschweigend etwas anderes gemessen wird als
-    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick, siehe
-    `doc/offene_punkte.md`).
-
-    Liegt die Anfrage über der höchsten unterstützten Rate, wird diese
-    zurückgegeben - darüber geht hardwareseitig nichts.
+    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick).
     """
-    candidates = [rate for rate in ni9234_valid_sample_rates() if rate >= sample_rate_hz]
-    return min(candidates) if candidates else NI9234_BASE_SAMPLE_RATE_HZ
+    return next_grid_sample_rate_at_or_above(ModuleType.NI9234, sample_rate_hz)
 
 
 def is_valid_ni9234_sample_rate(sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
-    """Prüft `sample_rate_hz` gegen das NI9234-Raster (fs = 51200 Hz / n).
-
-    `tolerance_hz` deckt die Rundung der GUI-Eingabe ab (Spinbox mit einer
-    Nachkommastelle, siehe `gui/setup_view.py::_sample_rate_spin`) - viele
-    der 31 gültigen Raten (z. B. 51200/3 = 17066,666...) sind mit einer
-    Nachkommastelle ohnehin nicht exakt darstellbar.
-    """
-    return abs(sample_rate_hz - nearest_ni9234_sample_rate(sample_rate_hz)) <= tolerance_hz
+    """Prüft `sample_rate_hz` gegen das NI9234-Raster (fs = 51200 Hz / n)."""
+    return is_valid_grid_sample_rate(ModuleType.NI9234, sample_rate_hz, tolerance_hz)
 
 
 class SignalType(str, Enum):
@@ -117,6 +212,7 @@ class SignalType(str, Enum):
     VOLTAGE = "voltage"
     IEPE_ACCELERATION = "iepe_acceleration"
     THERMOCOUPLE = "thermocouple"
+    STRAIN = "strain"
 
 
 # Von der Anwendung angebotene Thermoelement-Typen (NI9210/NI9213, siehe
@@ -157,6 +253,14 @@ ADC_TIMING_MODES = [
     "HIGH_RESOLUTION",
     "HIGH_SPEED",
 ]
+
+# Vom NI9235 hardwareseitig unterstützte Brückenvarianten - AUSSCHLIESSLICH
+# Viertelbrücke (siehe hardware/ni9235.py), Halb-/Vollbrücke sind auf diesem
+# Modul physisch nicht verdrahtet. Werte entsprechen direkt den
+# Mitgliedsnamen von `nidaqmx.constants.StrainGageBridgeType`.
+#   QUARTER_BRIDGE_I:  ein aktiver Messgitter (Standardfall).
+#   QUARTER_BRIDGE_II: ein aktives Messgitter + ein Dummy-Gitter.
+NI9235_BRIDGE_TYPES = ["QUARTER_BRIDGE_I", "QUARTER_BRIDGE_II"]
 
 # Wandlungszeit pro Kanal je ADC-Timing-Modus (Sekunden) - der NI9213-ADC
 # ist zwischen den Kanälen EINES physischen Moduls multiplext, die
@@ -213,14 +317,18 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
 
 # Modultypen mit einer hardwareseitig FESTEN Abtastrate, die sich nicht an
 # eine gemeinsame Zielrate anpassen lässt (aktuell nur der NI9210 mit
-# 14 S/s). NI9234 (Raster 51200/n) und NI9213 (max. erreichbare Rate
-# abhängig von Kanalzahl/Timing-Modus) fehlen hier bewusst: beide können
-# EINE gemeinsame Zielrate erfüllen, solange diese auf ihrem jeweiligen
-# Raster bzw. unterhalb ihres Maximums liegt - sie bleiben deshalb immer
-# in der gemeinsamen "Zielraten"-Gruppe. Ein künftiges Modul mit einer
-# ähnlich starren Rate muss nur hier ergänzt werden -
-# `resolve_rate_groups()` bildet daraus automatisch eine eigene Gruppe,
-# ohne dass die Gruppierungslogik selbst angepasst werden muss.
+# 14 S/s). NI9234/NI9235 (Raster-Module, siehe
+# `_GRID_SAMPLE_RATE_SPEC_BY_MODULE` weiter oben) und NI9213 (max.
+# erreichbare Rate abhängig von Kanalzahl/Timing-Modus) fehlen hier
+# bewusst: alle drei können EINE gemeinsame Zielrate erfüllen, solange
+# diese auf ihrem jeweiligen Raster bzw. unterhalb ihres Maximums liegt -
+# sie bleiben deshalb grundsätzlich in der gemeinsamen "Zielraten"-Gruppe
+# (Ausnahme: zwei GLEICHZEITIG vorhandene Raster-Module mit für die
+# Zielrate unterschiedlich gesnappten Raten, siehe `resolve_rate_groups()`).
+# Ein künftiges Modul mit einer ähnlich starren EINZELNEN Rate muss nur
+# hier ergänzt werden - `resolve_rate_groups()` bildet daraus automatisch
+# eine eigene Gruppe, ohne dass die Gruppierungslogik selbst angepasst
+# werden muss.
 _FIXED_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
     ModuleType.NI9210: NI9210_FIXED_SAMPLE_RATE_HZ,
 }
@@ -237,11 +345,13 @@ class RateGroup:
     teilen können und daher (der bevorzugte Fall) in einem einzigen
     nidaqmx-Task mit echter Sample-Clock-Synchronität laufen.
 
-    Mehrere `RateGroup`s in einer Messung entstehen NUR, wenn ein Modul
-    eine mit den übrigen Kanälen unvereinbare, hardwareseitig fixe Rate
-    hat (siehe `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, aktuell: NI9210, feste
-    14 S/s) - das ist die Ausnahme, nicht der Regelfall. Siehe
-    `resolve_rate_groups`.
+    Mehrere `RateGroup`s in einer Messung entstehen NUR, wenn (a) ein Modul
+    eine mit den übrigen Kanälen unvereinbare, hardwareseitig fixe Rate hat
+    (siehe `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, aktuell: NI9210, feste
+    14 S/s), oder (b) zwei gleichzeitig vorhandene Raster-Module (siehe
+    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`, aktuell NI9234/NI9235) für die
+    Zielrate auf unterschiedliche Raten snappen - das ist die Ausnahme,
+    nicht der Regelfall. Siehe `resolve_rate_groups`.
     """
 
     channels: list["Channel"]
@@ -301,16 +411,36 @@ def resolve_rate_groups(
     groups: list[RateGroup] = []
 
     if adaptive_channels:
-        resolved_rate = target_sample_rate_hz
-        if any(ch.module_type == ModuleType.NI9234 for ch in adaptive_channels):
-            if not is_valid_ni9234_sample_rate(target_sample_rate_hz):
-                suggestion = next_ni9234_sample_rate_at_or_above(target_sample_rate_hz)
+        # Alle Raster-Modultypen (siehe `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`),
+        # die unter den adaptiven Kanälen tatsächlich vorkommen - sortiert,
+        # damit die Gruppen-Reihenfolge bei gleicher Eingabe deterministisch
+        # bleibt. Jeder wird GEGEN SEIN EIGENES Raster geprüft/gesnappt,
+        # nicht mehr nur das NI9234 (siehe Docstring oben, Fall (b)).
+        grid_module_types = sorted(
+            (
+                {ch.module_type for ch in adaptive_channels}
+                & _GRID_SAMPLE_RATE_SPEC_BY_MODULE.keys()
+            ),
+            key=lambda m: m.value,
+        )
+        resolved_by_module: dict[ModuleType, float] = {}
+        if len(grid_module_types) == 1:
+            # Regelfall: GENAU EIN Rastermodultyp vorhanden. Verhalten
+            # unveraendert gegenueber vor dieser Generalisierung: eine
+            # Zielrate, die nicht (innerhalb Toleranz) auf DIESEM Raster
+            # liegt, ist ein echter Konfigurationsfehler - der Nutzer soll
+            # bewusst einen gueltigen Wert eintragen statt dass die App
+            # unbemerkt auf einen ganz anderen Wert ausweicht.
+            module_type = grid_module_types[0]
+            spec = _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type]
+            if not _is_valid_grid_sample_rate(target_sample_rate_hz, spec):
+                suggestion = _next_grid_sample_rate_at_or_above(target_sample_rate_hz, spec)
                 raise ValueError(
-                    "Das NI9234 unterstützt nur Abtastraten nach der Formel "
-                    f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
-                    f"{suggestion:.1f} S/s."
+                    f"Das {spec.module_label} unterstützt nur Abtastraten nach der Formel "
+                    f"{spec.base_hz:.0f} Hz / n (n = {spec.min_divisor}..{spec.max_divisor}); "
+                    f"nächster gültiger Wert nach oben: {suggestion:.1f} S/s."
                 )
-            # Auf die EXAKTE gültige NI9234-Rate einrasten, NICHT die rohe
+            # Auf die EXAKTE gültige Rasterrate einrasten, NICHT die rohe
             # (z. B. auf eine Nachkommastelle gerundete) Zielrate
             # verwenden: DAQmx rundet einen Wert, der auch nur minimal
             # ÜBER einer gültigen Rate liegt, auf die NÄCHSTHÖHERE
@@ -322,7 +452,22 @@ def resolve_rate_groups(
             # die überall angezeigte/gespeicherte Rate tatsächlich die
             # ist, die DAQmx auch wirklich konfiguriert - an echter
             # Hardware verifiziert (`task.timing.samp_clk_rate`).
-            resolved_rate = nearest_ni9234_sample_rate(target_sample_rate_hz)
+            resolved_by_module[module_type] = _nearest_grid_sample_rate(target_sample_rate_hz, spec)
+        else:
+            # >=2 Rastermodultypen GLEICHZEITIG vorhanden (z. B. NI9234 +
+            # NI9235): die beiden Raster überschneiden sich rechnerisch nie
+            # (siehe Modul-Kommentar bei `NI9235_BASE_SAMPLE_RATE_HZ`) -
+            # die rohe Zielrate kann also grundsätzlich nur für HÖCHSTENS
+            # eines der beiden Raster "gültig" sein. Anders als im
+            # Ein-Modul-Fall ist das hier KEIN Konfigurationsfehler,
+            # sondern der Regelfall (exakt wie beim NI9210-Fixed-Rate-Fall:
+            # jedes Modul bekommt einfach die für sein eigenes Raster
+            # nächstgelegene Rate, ohne Fehlermeldung) - deshalb hier KEINE
+            # `_is_valid_grid_sample_rate`-Gate, nur bedingungslos snappen.
+            for module_type in grid_module_types:
+                spec = _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type]
+                resolved_by_module[module_type] = _nearest_grid_sample_rate(target_sample_rate_hz, spec)
+
         for device_name, group_channels in ni9213_device_groups(adaptive_channels).items():
             max_rate = max_ni9213_sample_rate_hz(group_channels)
             if target_sample_rate_hz > max_rate + 0.05:
@@ -331,13 +476,51 @@ def resolve_rate_groups(
                     f"Kanäle, Timing-Modus '{group_channels[0].adc_timing_mode}') "
                     f"unterstützt bei dieser Kanalzahl maximal {max_rate:.1f} S/s."
                 )
-        groups.append(
-            RateGroup(
-                channels=adaptive_channels,
-                resolved_sample_rate_hz=resolved_rate,
-                reason="Zielrate",
+
+        distinct_rates = set(resolved_by_module.values())
+        if len(distinct_rates) <= 1:
+            # Regelfall: 0 oder 1 Raster-Modultyp vorhanden -> EXAKT eine
+            # gemeinsame "Zielrate"-Gruppe, wie schon immer.
+            resolved_rate = next(iter(distinct_rates), target_sample_rate_hz)
+            groups.append(
+                RateGroup(
+                    channels=adaptive_channels,
+                    resolved_sample_rate_hz=resolved_rate,
+                    reason="Zielrate",
+                )
             )
-        )
+        else:
+            # >=2 Raster-Modultypen (z. B. NI9234 + NI9235) snappen für
+            # DIESE Zielrate auf unterschiedliche Raten - ein gemeinsamer
+            # Task würde eines der beiden Module stillschweigend falsch
+            # takten. Aufteilung in separate Gruppen, analog zum
+            # bestehenden Fixed-Rate-Split unten. Kanäle OHNE eigenes
+            # Rasterlimit (z. B. NI9215) wandern in die Gruppe, deren
+            # gesnappte Rate der rohen Zielrate am nächsten liegt - eine
+            # bewusste, aber nicht hardwareseitig erzwungene Wahl (das
+            # Modul toleriert jede Taktrate).
+            per_module: dict[ModuleType, list[Channel]] = {}
+            for ch in adaptive_channels:
+                key = (
+                    ch.module_type
+                    if ch.module_type in resolved_by_module
+                    else min(
+                        grid_module_types,
+                        key=lambda m: abs(resolved_by_module[m] - target_sample_rate_hz),
+                    )
+                )
+                per_module.setdefault(key, []).append(ch)
+            for module_type in grid_module_types:
+                rate = resolved_by_module[module_type]
+                group_channels = per_module.get(module_type, [])
+                module_names = sorted({ch.module_type.value for ch in group_channels})
+                groups.append(
+                    RateGroup(
+                        channels=group_channels,
+                        resolved_sample_rate_hz=rate,
+                        reason=f"{'/'.join(module_names)} (Raster {rate:.1f} S/s)",
+                    )
+                )
 
     fixed_groups: dict[float, list[Channel]] = {}
     for ch in fixed_channels:
@@ -539,6 +722,16 @@ class Channel:
         thermocouple_type: Thermoelement-Typ (z. B. "K", "J", "T", ...),
             relevant für Thermoelement-Kanäle (NI9210/NI9213), siehe
             `THERMOCOUPLE_TYPES`.
+        strain_gage_factor: k-Faktor des angeschlossenen Dehnungsmessstreifens
+            (typisch ~2.0), relevant für NI9235-Kanäle. `None` = nicht
+            gesetzt (analog `sensitivity_mv_per_unit`).
+        strain_bridge_type: Viertelbrücken-Variante (siehe
+            `NI9235_BRIDGE_TYPES`) - hängt von der physischen Verkabelung
+            ab (mit/ohne Dummy-Gitter), relevant für NI9235-Kanäle.
+        lead_wire_resistance_ohm: Zuleitungswiderstand in Ω zur
+            Kompensation der Leitungslänge (siehe NI9235 "Lead Wire
+            Desensitization"), relevant für NI9235-Kanäle. 0.0 = keine
+            Kompensation (Standard).
         cal_point1_measured / cal_point1_reference: Erster Referenzpunkt
             einer optionalen 2-Punkt-Kalibrierung (gemessener Rohwert vs.
             bekannter Sollwert, z. B. Eispunkt 0 °C bei einem
@@ -595,6 +788,9 @@ class Channel:
     max_range: Optional[float] = 10.0
     sensitivity_mv_per_unit: Optional[float] = None
     thermocouple_type: str = "K"
+    strain_gage_factor: Optional[float] = None
+    strain_bridge_type: str = "QUARTER_BRIDGE_I"
+    lead_wire_resistance_ohm: float = 0.0
     cal_point1_measured: Optional[float] = None
     cal_point1_reference: Optional[float] = None
     cal_point2_measured: Optional[float] = None
@@ -671,6 +867,9 @@ class Channel:
             "max_range": self.max_range,
             "sensitivity_mv_per_unit": self.sensitivity_mv_per_unit,
             "thermocouple_type": self.thermocouple_type,
+            "strain_gage_factor": self.strain_gage_factor,
+            "strain_bridge_type": self.strain_bridge_type,
+            "lead_wire_resistance_ohm": self.lead_wire_resistance_ohm,
             "cal_point1_measured": self.cal_point1_measured,
             "cal_point1_reference": self.cal_point1_reference,
             "cal_point2_measured": self.cal_point2_measured,
@@ -711,6 +910,9 @@ class Channel:
             max_range=data.get("max_range", 10.0),
             sensitivity_mv_per_unit=data.get("sensitivity_mv_per_unit"),
             thermocouple_type=data.get("thermocouple_type", "K"),
+            strain_gage_factor=data.get("strain_gage_factor"),
+            strain_bridge_type=data.get("strain_bridge_type", "QUARTER_BRIDGE_I"),
+            lead_wire_resistance_ohm=data.get("lead_wire_resistance_ohm", 0.0),
             cal_point1_measured=data.get("cal_point1_measured"),
             cal_point1_reference=data.get("cal_point1_reference"),
             cal_point2_measured=data.get("cal_point2_measured"),

@@ -7,7 +7,7 @@ der Hardware-Schicht:
     * Gruppiert aktive Kanäle nach ihrem physischen Gerät/Modul
       (z. B. alle Kanäle von "cDAQ1Mod1" gehören zu einem NI9215).
     * Erzeugt daraus die passenden konkreten Hardware-Objekte
-      (`NI9215`, `NI9234`, `NI9210`, `NI9213`).
+      (`NI9215`, `NI9234`, `NI9210`, `NI9213`, `NI9235`).
     * Wendet die lineare Kanal-Skalierung (`scale`, `offset`) auf
       Rohdaten-Blöcke an.
 
@@ -29,6 +29,7 @@ from hardware.ni9210 import NI9210
 from hardware.ni9213 import NI9213
 from hardware.ni9215 import NI9215
 from hardware.ni9234 import NI9234
+from hardware.ni9235 import NI9235
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ _DEVICE_CLASSES: dict[ModuleType, type[BaseDevice]] = {
     ModuleType.NI9234: NI9234,
     ModuleType.NI9210: NI9210,
     ModuleType.NI9213: NI9213,
+    ModuleType.NI9235: NI9235,
 }
 
 

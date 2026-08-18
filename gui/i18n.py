@@ -115,6 +115,11 @@ _translations = {
             "51200 Hz / n (n = 1…31, also 51200, 25600, 17066,7, ... bis "
             "1651,6 S/s). Nächster gültiger Wert nach oben: {suggestion} S/s."
         ),
+        "error_ni9235_invalid_sample_rate": (
+            "Das NI9235 unterstützt nur Abtastraten nach der Formel "
+            "50000 Hz / n (n = 5…63, also 10000, 8333,3, ... bis "
+            "793,7 S/s). Nächster gültiger Wert nach oben: {suggestion} S/s."
+        ),
         "error_ni9213_rate_too_high": (
             "Das NI9213 ({device}, {count} aktive(r) Kanal/Kanäle, "
             "Timing-Modus \"{mode}\") unterstützt bei dieser Kanalzahl "
@@ -284,6 +289,7 @@ _translations = {
         "signal_type_voltage": "Spannung",
         "signal_type_iepe": "IEPE-Beschleunigung",
         "signal_type_thermocouple": "Thermoelement",
+        "signal_type_strain": "Dehnung",
         "add_channel_button": "Kanal hinzufügen",
         "remove_channel_button": "Ausgewählten Kanal entfernen",
         "default_channel_name": "Kanal {index}",
@@ -297,6 +303,11 @@ _translations = {
         "param_adc_timing_mode_hint": "Gilt für alle Kanäle dieses Moduls (nur NI9213).",
         "adc_timing_mode_high_resolution": "Hohe Auflösung",
         "adc_timing_mode_high_speed": "Hohe Geschwindigkeit",
+        "param_gage_factor_label": "Gage-Faktor (k):",
+        "param_strain_bridge_type_label": "Brückentyp:",
+        "param_lead_wire_resistance_label": "Zuleitungswiderstand (Ω):",
+        "bridge_type_quarter_i": "Viertelbrücke (1 aktives Gitter)",
+        "bridge_type_quarter_ii": "Viertelbrücke (1 aktives + 1 Dummy-Gitter)",
         "two_point_cal_button": "2-Punkt-Kalibrierung...",
         "two_point_cal_dialog_title": "2-Punkt-Kalibrierung",
         "two_point_cal_hint": (
@@ -511,6 +522,11 @@ _translations = {
             "51200 Hz / n (n = 1...31, i.e. 51200, 25600, 17066.7, ... down "
             "to 1651.6 S/s). Next valid value at or above: {suggestion} S/s."
         ),
+        "error_ni9235_invalid_sample_rate": (
+            "The NI9235 only supports sample rates following the formula "
+            "50000 Hz / n (n = 5...63, i.e. 10000, 8333.3, ... down to "
+            "793.7 S/s). Next valid value at or above: {suggestion} S/s."
+        ),
         "error_ni9213_rate_too_high": (
             "The NI9213 ({device}, {count} active channel(s), timing mode "
             "\"{mode}\") supports a maximum of {max_rate} S/s at this "
@@ -680,6 +696,7 @@ _translations = {
         "signal_type_voltage": "Voltage",
         "signal_type_iepe": "IEPE Acceleration",
         "signal_type_thermocouple": "Thermocouple",
+        "signal_type_strain": "Strain",
         "add_channel_button": "Add Channel",
         "remove_channel_button": "Remove Selected Channel",
         "default_channel_name": "Channel {index}",
@@ -693,6 +710,11 @@ _translations = {
         "param_adc_timing_mode_hint": "Applies to all channels of this module (NI9213 only).",
         "adc_timing_mode_high_resolution": "High Resolution",
         "adc_timing_mode_high_speed": "High Speed",
+        "param_gage_factor_label": "Gage Factor (k):",
+        "param_strain_bridge_type_label": "Bridge Type:",
+        "param_lead_wire_resistance_label": "Lead Wire Resistance (Ω):",
+        "bridge_type_quarter_i": "Quarter Bridge (1 active gage)",
+        "bridge_type_quarter_ii": "Quarter Bridge (1 active + 1 dummy gage)",
         "two_point_cal_button": "2-Point Calibration...",
         "two_point_cal_dialog_title": "2-Point Calibration",
         "two_point_cal_hint": (

@@ -37,7 +37,15 @@ from PyQt6.QtWidgets import (
 
 from config.sensor_database import SensorDatabaseManager
 from core.measurement import device_name_from_hw_channel
-from data.models import ADC_TIMING_MODES, THERMOCOUPLE_TYPES, Channel, DeviceInfo, ModuleType, SignalType
+from data.models import (
+    ADC_TIMING_MODES,
+    NI9235_BRIDGE_TYPES,
+    THERMOCOUPLE_TYPES,
+    Channel,
+    DeviceInfo,
+    ModuleType,
+    SignalType,
+)
 from gui.i18n import connect_language_changed, t
 from gui.widgets.spinbox import PrecisionDoubleSpinBox
 from gui.theme import (
@@ -65,15 +73,16 @@ _COLUMN_KEYS = [
 _MODULE_SUFFIX_PATTERN = re.compile(r"Mod\d+")
 
 # Welche Signaltypen ein Modul hardwareseitig unterstützt (siehe
-# `hardware/ni9215.py`/`hardware/ni9234.py`, die jeweils den falschen
-# Signaltyp mit einem `AcquisitionError` ablehnen). Die Kanaltabelle
-# schränkt die Signaltyp-Auswahl pro Zeile entsprechend ein, statt den
-# Fehler erst beim Messstart auftreten zu lassen.
+# `hardware/ni9215.py`/`hardware/ni9234.py`/`hardware/ni9235.py`, die
+# jeweils den falschen Signaltyp mit einem `AcquisitionError` ablehnen).
+# Die Kanaltabelle schränkt die Signaltyp-Auswahl pro Zeile entsprechend
+# ein, statt den Fehler erst beim Messstart auftreten zu lassen.
 _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
     ModuleType.NI9215: [SignalType.VOLTAGE],
     ModuleType.NI9234: [SignalType.VOLTAGE, SignalType.IEPE_ACCELERATION],
     ModuleType.NI9210: [SignalType.THERMOCOUPLE],
     ModuleType.NI9213: [SignalType.THERMOCOUPLE],
+    ModuleType.NI9235: [SignalType.STRAIN],
 }
 
 # Übersetzte Anzeige-Labels für den Signaltyp-Auswahldialog/-Button. Der
@@ -87,6 +96,7 @@ SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.VOLTAGE: "signal_type_voltage",
     SignalType.IEPE_ACCELERATION: "signal_type_iepe",
     SignalType.THERMOCOUPLE: "signal_type_thermocouple",
+    SignalType.STRAIN: "signal_type_strain",
 }
 
 # Übersetzte Anzeige-Labels je ADC-Timing-Modus (siehe
@@ -95,6 +105,13 @@ SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
 _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
     "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
     "HIGH_SPEED": "adc_timing_mode_high_speed",
+}
+
+# Übersetzte Anzeige-Labels je NI9235-Viertelbrücken-Variante (siehe
+# `data/models.py::NI9235_BRIDGE_TYPES`) - analog `_ADC_TIMING_MODE_LABEL_KEYS`.
+_BRIDGE_TYPE_LABEL_KEYS: dict[str, str] = {
+    "QUARTER_BRIDGE_I": "bridge_type_quarter_i",
+    "QUARTER_BRIDGE_II": "bridge_type_quarter_ii",
 }
 
 _COL_NUMBER = 0
@@ -399,14 +416,15 @@ class ChannelParameterDialog(QDialog):
     Skalierung 1.8 + Offset 32) - beides sollte daher nicht automatisch
     gesperrt/versteckt werden. Zusätzlich zeigt der Dialog NUR das Feld,
     das für den aktuellen Signaltyp der Zeile hardwareseitig zwingend
-    nötig ist (Sensitivität bei IEPE, Thermoelement-Typ bei Thermoelement)
-    - bei Spannung entfällt dieses Zusatzfeld ganz. Der ADC-Timing-Modus
+    nötig ist (Sensitivität bei IEPE, Thermoelement-Typ bei Thermoelement,
+    Gage-Faktor/Brückentyp/Zuleitungswiderstand bei Dehnung) - bei
+    Spannung entfällt dieses Zusatzfeld ganz. Der ADC-Timing-Modus
     erscheint zusätzlich nur, wenn das Modul der Zeile ein NI9213 ist
     (NI9210 hat eine feste Abtastrate ohne diese Option).
 
     Ersetzt die vorherigen, immer sichtbaren Spalten
     (Skalierung/Offset/Sensitivität/Thermoelement-Typ): mit wachsender
-    Modulanzahl (aktuell NI9215/NI9234/NI9210/NI9213, siehe
+    Modulanzahl (aktuell NI9215/NI9234/NI9210/NI9213/NI9235, siehe
     `_MODULE_SIGNAL_TYPES`) würden das immer mehr, meist gesperrte Spalten
     - ein neuer Modultyp mit eigenen Parametern braucht hier nur einen
     weiteren Zweig in diesem einen Dialog statt einer neuen Tabellenspalte.
@@ -421,6 +439,9 @@ class ChannelParameterDialog(QDialog):
         sensitivity: float,
         thermocouple_type: str,
         adc_timing_mode: str = "HIGH_RESOLUTION",
+        strain_gage_factor: float = 0.0,
+        strain_bridge_type: str = "QUARTER_BRIDGE_I",
+        lead_wire_resistance_ohm: float = 0.0,
         cal_point1_measured: float | None = None,
         cal_point1_reference: float | None = None,
         cal_point2_measured: float | None = None,
@@ -444,6 +465,9 @@ class ChannelParameterDialog(QDialog):
         self._sensitivity_spin: QDoubleSpinBox | None = None
         self._thermocouple_combo: QComboBox | None = None
         self._adc_timing_combo: QComboBox | None = None
+        self._gage_factor_spin: QDoubleSpinBox | None = None
+        self._bridge_type_combo: QComboBox | None = None
+        self._lead_wire_resistance_spin: QDoubleSpinBox | None = None
 
         self._scale_spin = PrecisionDoubleSpinBox()
         self._scale_spin.setRange(-1e9, 1e9)
@@ -478,6 +502,23 @@ class ChannelParameterDialog(QDialog):
                 index = self._adc_timing_combo.findData(adc_timing_mode)
                 self._adc_timing_combo.setCurrentIndex(index if index >= 0 else 0)
                 form.addRow(t("param_adc_timing_mode_label"), self._adc_timing_combo)
+        elif signal_type == SignalType.STRAIN:
+            self._gage_factor_spin = PrecisionDoubleSpinBox()
+            self._gage_factor_spin.setRange(0.0, 1e3)
+            self._gage_factor_spin.setValue(strain_gage_factor if strain_gage_factor > 0 else 2.0)
+            form.addRow(t("param_gage_factor_label"), self._gage_factor_spin)
+
+            self._bridge_type_combo = QComboBox()
+            for bridge_type in NI9235_BRIDGE_TYPES:
+                self._bridge_type_combo.addItem(t(_BRIDGE_TYPE_LABEL_KEYS[bridge_type]), bridge_type)
+            index = self._bridge_type_combo.findData(strain_bridge_type)
+            self._bridge_type_combo.setCurrentIndex(index if index >= 0 else 0)
+            form.addRow(t("param_strain_bridge_type_label"), self._bridge_type_combo)
+
+            self._lead_wire_resistance_spin = PrecisionDoubleSpinBox()
+            self._lead_wire_resistance_spin.setRange(0.0, 1e6)
+            self._lead_wire_resistance_spin.setValue(lead_wire_resistance_ohm)
+            form.addRow(t("param_lead_wire_resistance_label"), self._lead_wire_resistance_spin)
 
         layout.addLayout(form)
 
@@ -551,6 +592,15 @@ class ChannelParameterDialog(QDialog):
 
     def adc_timing_mode(self) -> str:
         return self._adc_timing_combo.currentData() if self._adc_timing_combo is not None else "HIGH_RESOLUTION"
+
+    def strain_gage_factor(self) -> float:
+        return self._gage_factor_spin.value() if self._gage_factor_spin is not None else 0.0
+
+    def strain_bridge_type(self) -> str:
+        return self._bridge_type_combo.currentData() if self._bridge_type_combo is not None else "QUARTER_BRIDGE_I"
+
+    def lead_wire_resistance_ohm(self) -> float:
+        return self._lead_wire_resistance_spin.value() if self._lead_wire_resistance_spin is not None else 0.0
 
     def cal_point1(self) -> tuple[float | None, float | None]:
         return self._cal_point1_measured, self._cal_point1_reference
@@ -863,6 +913,8 @@ class ChannelTableWidget(QWidget):
         IEPE relevant (siehe `hardware/ni9234.py`) und wird sonst auf 0
         zurückgesetzt - ein nur im Dialog verstecktes Feld würde seinen
         alten Wert beim Auslesen (`_read_row`) sonst trotzdem behalten.
+        Analog wird der Gage-Faktor (nur für STRAIN relevant, siehe
+        `hardware/ni9235.py`) zurückgesetzt, wenn der Signaltyp wechselt.
         """
         signal_widget = self._table.cellWidget(row, _COL_SIGNAL)
         param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
@@ -877,6 +929,8 @@ class ChannelTableWidget(QWidget):
 
         if signal_type != SignalType.IEPE_ACCELERATION:
             param_widget.setProperty("sensitivity", 0.0)
+        if signal_type != SignalType.STRAIN:
+            param_widget.setProperty("gage_factor", 0.0)
 
     def set_channels(self, channels: list[Channel]) -> None:
         """Befüllt die Tabelle mit den übergebenen Kanälen (ersetzt den Inhalt)."""
@@ -1192,6 +1246,7 @@ class ChannelTableWidget(QWidget):
         als Properties mitgeführt.
         """
         sensitivity = channel.sensitivity_mv_per_unit if channel.sensitivity_mv_per_unit else 0.0
+        gage_factor = channel.strain_gage_factor if channel.strain_gage_factor else 0.0
         button = _IconTextButton()
         button.setText(t("choose_parameters_button"))
         button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1200,6 +1255,9 @@ class ChannelTableWidget(QWidget):
         button.setProperty("sensitivity", sensitivity)
         button.setProperty("thermocouple_type", channel.thermocouple_type or "K")
         button.setProperty("adc_timing_mode", channel.adc_timing_mode or "HIGH_RESOLUTION")
+        button.setProperty("gage_factor", gage_factor)
+        button.setProperty("strain_bridge_type", channel.strain_bridge_type or "QUARTER_BRIDGE_I")
+        button.setProperty("lead_wire_resistance_ohm", channel.lead_wire_resistance_ohm or 0.0)
         button.setProperty("cal_point1_measured", channel.cal_point1_measured)
         button.setProperty("cal_point1_reference", channel.cal_point1_reference)
         button.setProperty("cal_point2_measured", channel.cal_point2_measured)
@@ -1241,6 +1299,9 @@ class ChannelTableWidget(QWidget):
             sensitivity=float(button.property("sensitivity") or 0.0),
             thermocouple_type=str(button.property("thermocouple_type") or "K"),
             adc_timing_mode=str(button.property("adc_timing_mode") or "HIGH_RESOLUTION"),
+            strain_gage_factor=float(button.property("gage_factor") or 0.0),
+            strain_bridge_type=str(button.property("strain_bridge_type") or "QUARTER_BRIDGE_I"),
+            lead_wire_resistance_ohm=float(button.property("lead_wire_resistance_ohm") or 0.0),
             cal_point1_measured=self._property_float_or_none(button, "cal_point1_measured"),
             cal_point1_reference=self._property_float_or_none(button, "cal_point1_reference"),
             cal_point2_measured=self._property_float_or_none(button, "cal_point2_measured"),
@@ -1255,6 +1316,9 @@ class ChannelTableWidget(QWidget):
         button.setProperty("offset", dialog.offset())
         button.setProperty("sensitivity", dialog.sensitivity())
         button.setProperty("thermocouple_type", dialog.thermocouple_type())
+        button.setProperty("gage_factor", dialog.strain_gage_factor())
+        button.setProperty("strain_bridge_type", dialog.strain_bridge_type())
+        button.setProperty("lead_wire_resistance_ohm", dialog.lead_wire_resistance_ohm())
         cal_point1_measured, cal_point1_reference = dialog.cal_point1()
         cal_point2_measured, cal_point2_reference = dialog.cal_point2()
         button.setProperty("cal_point1_measured", cal_point1_measured)
@@ -1404,6 +1468,9 @@ class ChannelTableWidget(QWidget):
         sensitivity = float(param_widget.property("sensitivity") or 0.0)
         thermocouple_type = str(param_widget.property("thermocouple_type") or "K")
         adc_timing_mode = str(param_widget.property("adc_timing_mode") or "HIGH_RESOLUTION")
+        gage_factor = float(param_widget.property("gage_factor") or 0.0)
+        strain_bridge_type = str(param_widget.property("strain_bridge_type") or "QUARTER_BRIDGE_I")
+        lead_wire_resistance_ohm = float(param_widget.property("lead_wire_resistance_ohm") or 0.0)
         cal_point1_measured = self._property_float_or_none(param_widget, "cal_point1_measured")
         cal_point1_reference = self._property_float_or_none(param_widget, "cal_point1_reference")
         cal_point2_measured = self._property_float_or_none(param_widget, "cal_point2_measured")
@@ -1431,6 +1498,9 @@ class ChannelTableWidget(QWidget):
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
             thermocouple_type=thermocouple_type or "K",
             adc_timing_mode=adc_timing_mode or "HIGH_RESOLUTION",
+            strain_gage_factor=gage_factor if gage_factor > 0 else None,
+            strain_bridge_type=strain_bridge_type or "QUARTER_BRIDGE_I",
+            lead_wire_resistance_ohm=lead_wire_resistance_ohm,
             cal_point1_measured=cal_point1_measured,
             cal_point1_reference=cal_point1_reference,
             cal_point2_measured=cal_point2_measured,
