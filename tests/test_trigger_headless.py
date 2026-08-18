@@ -25,6 +25,7 @@ from data.models import (
     TriggerConfig,
     TriggerDirection,
     TriggerKind,
+    resolve_rate_groups,
 )
 from data.sensor_models import SensorEntry
 from gui.live_view import ChannelDisplayDialog, LiveView
@@ -161,7 +162,10 @@ class TriggerModelTests(unittest.TestCase):
 
         MeasurementConfig("Unlimited", 1000.0, recording_stop_value=0.0)
 
-    def test_ni9210_requires_fixed_sample_rate(self) -> None:
+    def test_ni9210_alone_ignores_target_rate_and_resolves_to_14hz(self) -> None:
+        # Ein alleinstehender NI9210 hat keine "andere" Gruppe, die die
+        # Zielrate erfuellen muesste - resolve_rate_groups() loest ihn
+        # immer auf seine feste 14 S/s auf, unabhaengig vom Zielwert.
         channels = [
             Channel(
                 "cDAQ1Mod1/ai0",
@@ -170,10 +174,41 @@ class TriggerModelTests(unittest.TestCase):
             )
         ]
 
-        with self.assertRaisesRegex(ValueError, "14 S/s"):
-            MeasurementConfig("Invalid NI9210", 1000.0, channels=channels)
+        config = MeasurementConfig("NI9210 only", 1000.0, channels=channels)
+        groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, 14.0)
 
         MeasurementConfig("Valid NI9210", 14.0, channels=channels)
+
+    def test_ni9210_combined_with_faster_module_yields_two_rate_groups(self) -> None:
+        # Kernverhalten von Phase A: NI9210 + ein schnelleres Modul ist
+        # kein Fehler mehr, sondern zwei getrennte Ratengruppen (siehe
+        # data/models.py::resolve_rate_groups).
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
+            Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
+        ]
+        target_rate = 51_200.0 / 31  # gueltige NI9234-Rate
+
+        config = MeasurementConfig("Mixed rates", target_rate, channels=channels)
+        groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, target_rate)
+        self.assertEqual(groups[1].resolved_sample_rate_hz, 14.0)
+
+    def test_ni9210_combined_with_invalid_ni9234_rate_still_raises(self) -> None:
+        # Intrinsische Ratenverstoesse (hier: NI9234-Raster) bleiben
+        # weiterhin Fehler - unabhaengig davon, ob zusaetzlich ein NI9210
+        # in der Messung ist.
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
+            Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
+        ]
+
+        with self.assertRaisesRegex(ValueError, "51200 Hz / n"):
+            MeasurementConfig("Invalid NI9234 rate", 1000.0, channels=channels)
 
     def test_sensor_database_ignores_invalid_sensor_data(self) -> None:
         invalid_documents = [
