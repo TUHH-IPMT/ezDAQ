@@ -8,6 +8,3 @@ dist/
 .idea/
 .vscode/
 *.egg-info/
-
-# Private Entwicklernotizen, nicht Teil der Veröffentlichung
-doc/offene_punkte.md

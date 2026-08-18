@@ -44,8 +44,6 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213).
 **Sonstiges**
 - Mehrsprachig (Deutsch/Englisch) und Hell/Dunkel-Theme, beides zur
   Laufzeit umschaltbar
-- Projektverwaltung (ein Projekt gleichzeitig) mit `project.json`,
-  `measurements/` und `metadata/`
 - Persistente Anwendungseinstellungen (Fenstergeometrie, zuletzt
   verwendete Hardware/Kanäle, Sprache, Theme)
 - Messungen auch ganz ohne GUI aus einem eigenen Python-Skript steuerbar
@@ -103,23 +101,6 @@ Verzeichnisse:
   Laufzeit über `config.settings.get_resource_path()`
 - `doc/` – ergänzende Dokumentation (aktuell: Messung per Skript steuern)
 
-## Verpacken als portable Windows-Anwendung (PyInstaller)
-
-    pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name ezDAQ ^
-        --icon resources\icon.ico --add-data "resources;resources" main.py
-
-`--icon` setzt das Icon der erzeugten `.exe` (Explorer/Taskbar), `--add-data`
-bündelt den `resources/`-Ordner mit, damit `get_resource_path()` das Icon
-auch im gepackten Programm zur Laufzeit findet (Fenster-/Taskbar-Icon,
-About-Dialog).
-
-Hinweis: `nidaqmx` lädt die native NI-DAQmx-Bibliothek zur Laufzeit vom
-Zielsystem; der NI-DAQmx-Treiber muss daher auch auf dem Zielrechner
-installiert sein. Je nach PyInstaller-Version kann ein zusätzliches
-`--hidden-import nidaqmx` bzw. das Einsammeln von `pyqtgraph`-Ressourcen
-nötig sein.
-
 ## Wichtiger Hinweis zum Hardware-Test
 
 Die Hardware-Schicht (`hardware/nidaq_device.py`, `ni9215.py`,
@@ -131,6 +112,9 @@ Modulen getestet:
 - NI 9234
 - NI 9210
 - NI 9213
+
+Ein eigener Test mit angeschlossener Hardware wird dennoch dringend
+empfohlen, bevor produktiv gemessen wird.
 
 ## Autoren
 

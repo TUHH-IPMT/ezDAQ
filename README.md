@@ -49,8 +49,6 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213).
 **Other**
 - Multilingual (German/English) and light/dark theme, both switchable at
   runtime
-- Project management (one project at a time) with `project.json`,
-  `measurements/`, and `metadata/`
 - Persistent application settings (window geometry, last-used
   hardware/channels, language, theme)
 - Measurements can also be run entirely without the GUI from a Python
@@ -109,33 +107,20 @@ Directories:
 - `doc/` – supplementary documentation (currently: scripted/headless
   measurement usage)
 
-## Packaging as a portable Windows application (PyInstaller)
-
-    pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name ezDAQ ^
-        --icon resources\icon.ico --add-data "resources;resources" main.py
-
-`--icon` sets the icon of the generated `.exe` (Explorer/taskbar),
-`--add-data` bundles the `resources/` folder so `get_resource_path()` can
-still find the icon at runtime in the packaged build (window/taskbar
-icon, About dialog).
-
-Note: `nidaqmx` loads the native NI-DAQmx library from the target system
-at runtime, so the NI-DAQmx driver must also be installed on the target
-machine. Depending on the PyInstaller version, an additional
-`--hidden-import nidaqmx` or collecting `pyqtgraph` resources may be
-necessary.
-
 ## Important note on hardware testing
 
 The hardware layer (`hardware/nidaq_device.py`, `ni9215.py`, `ni9234.py`,
 `ni9210.py`, `ni9213.py`) was developed and checked against the official
-`nidaqmx` API signatures, but has **not been comprehensively tested
-against real hardware** – NI 9210/NI 9213 (thermocouple, including
-2-point calibration) not at all so far. Testing with connected hardware
-is strongly recommended before relying on this for production
-measurements. All other layers (ring buffer, controller, storage, GUI)
-have been tested end-to-end with simulated hardware.
+`nidaqmx` API signatures, and has been tested against real hardware for
+the following modules:
+
+- NI 9215
+- NI 9234
+- NI 9210
+- NI 9213
+
+Testing with your own connected hardware is still strongly recommended
+before relying on this for production measurements.
 
 ## Authors
 
