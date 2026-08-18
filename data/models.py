@@ -211,6 +211,26 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
     return min(NI9213_MAX_SAMPLE_RATE_HZ, 1.0 / (conversion_time_s * len(channels_on_device)))
 
 
+# Modultypen mit einer hardwareseitig FESTEN Abtastrate, die sich nicht an
+# eine gemeinsame Zielrate anpassen lässt (aktuell nur der NI9210 mit
+# 14 S/s). NI9234 (Raster 51200/n) und NI9213 (max. erreichbare Rate
+# abhängig von Kanalzahl/Timing-Modus) fehlen hier bewusst: beide können
+# EINE gemeinsame Zielrate erfüllen, solange diese auf ihrem jeweiligen
+# Raster bzw. unterhalb ihres Maximums liegt - sie bleiben deshalb immer
+# in der gemeinsamen "Zielraten"-Gruppe. Ein künftiges Modul mit einer
+# ähnlich starren Rate muss nur hier ergänzt werden -
+# `resolve_rate_groups()` bildet daraus automatisch eine eigene Gruppe,
+# ohne dass die Gruppierungslogik selbst angepasst werden muss.
+_FIXED_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
+    ModuleType.NI9210: NI9210_FIXED_SAMPLE_RATE_HZ,
+}
+
+# Toleranz für den Vergleich "feste Modul-Rate == Zielrate" - deckt
+# Rundung der GUI-Eingabe ab (siehe `is_valid_ni9234_sample_rate` für
+# dieselbe Toleranz an anderer Stelle).
+_FIXED_RATE_TOLERANCE_HZ = 0.05
+
+
 @dataclass
 class RateGroup:
     """Eine Menge aktiver Kanäle, die hardwareseitig dieselbe Abtastrate
@@ -219,8 +239,9 @@ class RateGroup:
 
     Mehrere `RateGroup`s in einer Messung entstehen NUR, wenn ein Modul
     eine mit den übrigen Kanälen unvereinbare, hardwareseitig fixe Rate
-    hat (aktuell: NI9210, feste 14 S/s) - das ist die Ausnahme, nicht der
-    Regelfall. Siehe `resolve_rate_groups`.
+    hat (siehe `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, aktuell: NI9210, feste
+    14 S/s) - das ist die Ausnahme, nicht der Regelfall. Siehe
+    `resolve_rate_groups`.
     """
 
     channels: list["Channel"]
@@ -233,43 +254,55 @@ def resolve_rate_groups(
 ) -> list[RateGroup]:
     """Teilt aktive Kanäle in Gruppen mit gemeinsam nutzbarer Abtastrate auf.
 
-    Der NI9210 hat eine hardwareseitig FIXE Abtastrate (14 S/s), die sich
-    nicht an eine gemeinsame Zielrate anpassen lässt (siehe
-    `NI9210_FIXED_SAMPLE_RATE_HZ`) - im Gegensatz zu NI9234 (Raster
-    51200/n) und NI9213 (max. erreichbare Rate abhängig von Kanalzahl/
-    Timing-Modus), die beide EINE gemeinsame Zielrate erfüllen können,
-    solange diese auf ihrem jeweiligen Raster bzw. unterhalb ihres
-    Maximums liegt. Deshalb bekommt ausschließlich der NI9210 im
-    Bedarfsfall eine eigene Gruppe; alle anderen Module bleiben immer in
-    der gemeinsamen "Zielraten"-Gruppe (der bevorzugte, echt
-    synchronisierte Fall).
+    Ein Kanal von einem Modul aus `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`
+    (feste, nicht an eine Zielrate ANPASSBARE Rate) bekommt NUR dann
+    eine eigene Gruppe, wenn seine feste Rate von `target_sample_rate_hz`
+    abweicht - entspricht die Zielrate zufällig genau der festen Rate
+    (z. B. ein NI9210 bei einer Zielrate von exakt 14 S/s), gibt es
+    keinen Konflikt und der Kanal bleibt in der gemeinsamen
+    "Zielraten"-Gruppe. Mehrere tatsächlich abweichende feste Raten
+    werden NACH IHRER JEWEILIGEN RATE gruppiert (nicht nach Modultyp) -
+    zwei unterschiedliche Module mit zufällig derselben festen Rate
+    landen so in derselben Gruppe. Alle übrigen (an eine Zielrate
+    anpassbaren) Module bleiben IMMER in der gemeinsamen
+    "Zielraten"-Gruppe (der bevorzugte, echt synchronisierte Fall) -
+    diese Gruppe wird niemals aus Bequemlichkeit aufgeteilt.
 
     Args:
         channels: Aktive Kanäle (z. B. `MeasurementConfig.active_channels()`).
         target_sample_rate_hz: Vom Nutzer eingestellte Zielrate.
 
     Returns:
-        1 oder 2 Gruppen (aktuell nie mehr, da nur der NI9210 eine eigene
-        Gruppe erzwingt). Reihenfolge: zuerst die Zielraten-Gruppe (falls
-        vorhanden), danach die NI9210-Gruppe (falls vorhanden) - diese
+        Eine Gruppe pro tatsächlich vorkommender Rate (Zielraten-Gruppe
+        zuerst, falls vorhanden, danach die Gruppen fester Rate in der
+        Reihenfolge ihres ersten Auftretens in `channels`) - diese
         Reihenfolge bestimmt später die Kanalreihenfolge im Ring Buffer
         (siehe `core/controller.py::start_measurement`).
 
     Raises:
-        ValueError: falls die Zielrate für ein NICHT vom NI9210 betroffenes
-            Modul (NI9234-Raster, NI9213-Maximalrate) intrinsisch
-            unerreichbar ist - das ist unabhängig davon, welche anderen
-            Module in der Messung sind, also KEIN "Teilen"-Problem,
-            sondern eine echte Fehlkonfiguration.
+        ValueError: falls die Zielrate für ein Modul OHNE feste Rate
+            (NI9234-Raster, NI9213-Maximalrate) intrinsisch unerreichbar
+            ist - das ist unabhängig davon, welche anderen Module in der
+            Messung sind, also KEIN "Teilen"-Problem, sondern eine echte
+            Fehlkonfiguration.
     """
-    ni9210_channels = [ch for ch in channels if ch.module_type == ModuleType.NI9210]
-    other_channels = [ch for ch in channels if ch.module_type != ModuleType.NI9210]
+    fixed_channels: list[Channel] = []
+    adaptive_channels: list[Channel] = []
+    for ch in channels:
+        fixed_rate = _FIXED_SAMPLE_RATE_HZ_BY_MODULE.get(ch.module_type)
+        if fixed_rate is not None and abs(target_sample_rate_hz - fixed_rate) > _FIXED_RATE_TOLERANCE_HZ:
+            fixed_channels.append(ch)
+        else:
+            # Kein Konflikt: entweder kein Modul mit fester Rate, oder
+            # die feste Rate entspricht bereits der Zielrate - der Kanal
+            # kann im gemeinsamen Task bleiben (siehe Docstring oben).
+            adaptive_channels.append(ch)
 
     groups: list[RateGroup] = []
 
-    if other_channels:
+    if adaptive_channels:
         if any(
-            ch.module_type == ModuleType.NI9234 for ch in other_channels
+            ch.module_type == ModuleType.NI9234 for ch in adaptive_channels
         ) and not is_valid_ni9234_sample_rate(target_sample_rate_hz):
             suggestion = next_ni9234_sample_rate_at_or_above(target_sample_rate_hz)
             raise ValueError(
@@ -277,7 +310,7 @@ def resolve_rate_groups(
                 f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
                 f"{suggestion:.1f} S/s."
             )
-        for device_name, group_channels in ni9213_device_groups(other_channels).items():
+        for device_name, group_channels in ni9213_device_groups(adaptive_channels).items():
             max_rate = max_ni9213_sample_rate_hz(group_channels)
             if target_sample_rate_hz > max_rate + 0.05:
                 raise ValueError(
@@ -287,18 +320,23 @@ def resolve_rate_groups(
                 )
         groups.append(
             RateGroup(
-                channels=other_channels,
+                channels=adaptive_channels,
                 resolved_sample_rate_hz=target_sample_rate_hz,
                 reason="Zielrate",
             )
         )
 
-    if ni9210_channels:
+    fixed_groups: dict[float, list[Channel]] = {}
+    for ch in fixed_channels:
+        fixed_groups.setdefault(_FIXED_SAMPLE_RATE_HZ_BY_MODULE[ch.module_type], []).append(ch)
+
+    for rate, group_channels in fixed_groups.items():
+        module_names = sorted({ch.module_type.value for ch in group_channels})
         groups.append(
             RateGroup(
-                channels=ni9210_channels,
-                resolved_sample_rate_hz=NI9210_FIXED_SAMPLE_RATE_HZ,
-                reason="NI9210 (feste 14 S/s)",
+                channels=group_channels,
+                resolved_sample_rate_hz=rate,
+                reason=f"{'/'.join(module_names)} (feste {rate:.1f} S/s)",
             )
         )
 

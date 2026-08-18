@@ -181,6 +181,24 @@ class TriggerModelTests(unittest.TestCase):
 
         MeasurementConfig("Valid NI9210", 14.0, channels=channels)
 
+    def test_ni9210_joins_shared_group_when_target_rate_matches_its_fixed_rate(self) -> None:
+        # Entspricht die Zielrate zufaellig genau der festen NI9210-Rate
+        # (14 S/s), gibt es keinen Ratenkonflikt - der NI9210 bleibt dann
+        # im selben Task wie andere, damit kompatible Module (hier
+        # NI9215, das keine Ratenbeschraenkung hat), statt unnoetig eine
+        # eigene Merge-Gruppe zu bekommen.
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
+            Channel("cDAQ1Mod2/ai0", "Voltage", module_type=ModuleType.NI9215),
+        ]
+
+        config = MeasurementConfig("Matching fixed rate", 14.0, channels=channels)
+        groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, 14.0)
+        self.assertEqual(len(groups[0].channels), 2)
+
     def test_ni9210_combined_with_faster_module_yields_two_rate_groups(self) -> None:
         # Kernverhalten von Phase A: NI9210 + ein schnelleres Modul ist
         # kein Fehler mehr, sondern zwei getrennte Ratengruppen (siehe
