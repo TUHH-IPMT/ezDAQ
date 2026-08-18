@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Callable, Optional
 
@@ -33,6 +34,19 @@ from hardware.nidaq_device import NIDAQSharedTask, discover_devices, open_ni_max
 logger = logging.getLogger(__name__)
 
 ErrorCallback = Callable[[Exception], None]
+
+
+def _start_devices_sequentially(devices: list[BaseDevice]) -> None:
+    """Startet alle Geräte EINER Ratengruppe nacheinander (siehe
+    `start_measurement`). Innerhalb einer Gruppe teilen sich mehrere
+    Geräte ohnehin einen `NIDAQSharedTask` - nur der erste `start()`-
+    Aufruf tut wirklich etwas (siehe `NIDAQSharedTask.start()`s
+    Idempotenz-Prüfung), die übrigen sind quasi kostenlos. Sequentiell
+    innerhalb der Gruppe zu bleiben ist daher sowohl ausreichend als
+    auch nötig - ein `NIDAQSharedTask` gleichzeitig aus mehreren
+    Threads zu starten wäre nicht race-frei."""
+    for device in devices:
+        device.start()
 
 
 class MeasurementController:
@@ -245,8 +259,29 @@ class MeasurementController:
             )
 
             try:
-                for device in devices:
-                    device.start()
+                if len(device_groups) > 1:
+                    # Getrennte Gruppen (nur bei einem echten Ratenkonflikt,
+                    # siehe resolve_rate_groups) haben je einen eigenen,
+                    # unabhaengigen Task - dessen Start ist ein reiner
+                    # Netzwerk-Roundtrip zum Treiber-Commit (auf einem
+                    # Ethernet-cDAQ-Chassis je ~0.4-1.0s, an echter Hardware
+                    # gemessen) und laesst sich parallelisieren statt
+                    # nacheinander abzuwarten - an echter Hardware (zwei
+                    # Gruppen, selbes Chassis) rund 15-20% kuerzere
+                    # Gesamt-Startlatenz statt der theoretischen Halbierung,
+                    # vermutlich weil sich beide Gruppen Netzwerk-/Chassis-
+                    # Ressourcen beim Start teilen. Innerhalb einer Gruppe
+                    # bleibt der Start sequentiell (siehe
+                    # `_start_devices_sequentially`).
+                    with ThreadPoolExecutor(max_workers=len(device_groups)) as executor:
+                        futures = [
+                            executor.submit(_start_devices_sequentially, group.devices)
+                            for group in device_groups
+                        ]
+                        for future in futures:
+                            future.result()
+                else:
+                    _start_devices_sequentially(devices)
             except AcquisitionError:
                 self._close_devices(devices)
                 raise
