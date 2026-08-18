@@ -133,6 +133,20 @@ class BaseDevice(ABC):
             AcquisitionError: bei Timeout oder Lesefehler.
         """
 
+    @abstractmethod
+    def available_samples(self) -> int:
+        """Anzahl aktuell im Hardware-Puffer verfügbarer, noch NICHT
+        gelesener Samples pro Kanal - NICHT-blockierende Abfrage (reine
+        Statusabfrage beim Treiber, wartet nicht auf neue Daten).
+
+        Gedacht für Aufrufer, die selbst entscheiden wollen, wie viele
+        Samples sie OHNE zu blockieren lesen können (siehe
+        `core/rate_merge.py::RateMerger` - verhindert, dass eine
+        langsame, hardwareseitig fixe Abtastrate wie beim NI9210 den
+        Erfassungs-Thread blockiert, während parallel eine schnellere
+        Gruppe weiterläuft).
+        """
+
     def close(self) -> None:
         """Räumt Ressourcen auf. Idempotent, ruft `stop()` falls nötig."""
         if self._is_running:

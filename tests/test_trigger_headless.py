@@ -15,6 +15,7 @@ from analysis.basic_analysis import native_samples
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
 from core.controller import MeasurementController
+from core.rate_merge import DeviceGroup, RateMerger
 from core.measurement import (
     _device_name_from_channel,
     device_name_from_hw_channel,
@@ -48,6 +49,72 @@ class _SignalSpy:
 
     def emit(self) -> None:
         self.count += 1
+
+
+class _FakeAcquisitionDevice:
+    """Minimaler Fake für `hardware.base_device.BaseDevice` in
+    `RateMerger`-Tests - simuliert eine Hardware, deren Samples erst mit
+    Verzögerung tatsächlich verfügbar werden (siehe
+    `core/rate_merge.py`-Moduldocstring: laut `due()` fällig != vom
+    Treiber tatsächlich schon geliefert). `read()` wirft bewusst einen
+    `AssertionError`, falls jemals mehr angefordert wird, als
+    `available_samples()` zuvor gemeldet hat - genau die Garantie, die
+    der Fix in `RateMerger.read_merged_block` sicherstellen soll."""
+
+    def __init__(self, num_channels: int = 1) -> None:
+        self.active_channels = [object() for _ in range(num_channels)]
+        self._produced = 0
+        self._consumed = 0
+
+    def produce(self, count: int) -> None:
+        self._produced += count
+
+    def available_samples(self) -> int:
+        return self._produced - self._consumed
+
+    def read(self, samples_per_channel: int, timeout: float = 10.0) -> np.ndarray:
+        assert samples_per_channel <= self.available_samples(), (
+            "RateMerger darf nie mehr anfordern, als available_samples() meldet"
+        )
+        start = self._consumed
+        self._consumed += samples_per_channel
+        values = np.arange(start, start + samples_per_channel, dtype=np.float64)
+        return np.tile(values, (len(self.active_channels), 1))
+
+
+class RateMergerTests(unittest.TestCase):
+    def test_slow_group_never_blocks_and_catches_up_once_hardware_delivers(self) -> None:
+        # Fast-Geraet hat "immer genug" (steht fuer den blockierenden,
+        # aber in der Praxis schnell erfuellten Read der schnellen
+        # Gruppe) - Rate 100 vs. 10 (Verhaeltnis 10), 10 Samples/Zyklus.
+        fast_device = _FakeAcquisitionDevice()
+        fast_device.produce(10_000)
+        slow_device = _FakeAcquisitionDevice()
+
+        fast_group = DeviceGroup(devices=[fast_device], resolved_sample_rate_hz=100.0)
+        slow_group = DeviceGroup(devices=[slow_device], resolved_sample_rate_hz=10.0)
+        merger = RateMerger([fast_group, slow_group], read_timeout_seconds=1.0)
+
+        # Zyklus 1: ein langsames Sample waere laut due() faellig, die
+        # "Hardware" hat es aber noch NICHT produziert - kein Blockieren/
+        # Fehler, der zuletzt bekannte Wert (0.0) wird gehalten.
+        block = merger.read_merged_block(10)
+        self.assertEqual(block.shape, (2, 10))
+        np.testing.assert_array_equal(block[1], np.zeros(10))
+        self.assertEqual(slow_device._consumed, 0)
+
+        # Zyklus 2: weiterhin nichts produziert - Rueckstand waechst auf
+        # 2 faellige Samples, weiterhin kein Blockieren.
+        block = merger.read_merged_block(10)
+        np.testing.assert_array_equal(block[1], np.zeros(10))
+
+        # Jetzt liefert die "Hardware" die beiden inzwischen faelligen
+        # Samples nach - RateMerger muss den Rueckstand automatisch
+        # nachholen, sobald verfuegbar.
+        slow_device.produce(2)
+        block = merger.read_merged_block(10)
+        self.assertEqual(slow_device._consumed, 2)
+        self.assertTrue(np.all(block[1] == 1.0))
 
 
 class TriggerModelTests(unittest.TestCase):

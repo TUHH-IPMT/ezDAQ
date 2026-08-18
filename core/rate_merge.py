@@ -22,17 +22,34 @@ das Taktraster der schnellsten Gruppe):
     kommt im Schnitt nur alle ~118 schnellen Takte ein neues echtes
     Sample hinzu) - stattdessen wird anhand der GLOBALEN, seit Messstart
     gezählten Anzahl schneller Takte berechnet, wie viele neue Samples
-    der langsamen Gruppe in diesem Zyklus fällig sind:
+    der langsamen Gruppe in diesem Zyklus FÄLLIG sind:
 
         due(t) = floor(t * langsame_rate / schnelle_rate)
 
-    Die Differenz `due(ende) - due(anfang)` ist die in diesem Zyklus zu
-    lesende Anzahl neuer Samples der langsamen Gruppe (kann 0 sein).
-    Diese auf absoluten Takt-Indizes basierende Berechnung (statt
-    inkrementeller Rundung) vermeidet Drift über eine lange Messung
-    hinweg (Bresenham-artiges Verfahren) - an echter Hardware über 45s/
-    1850 Zyklen validiert (Differenz zum theoretischen due()-Wert < 1
-    Sample).
+    WICHTIG: "fällig laut dieser Formel" heißt NICHT "vom Treiber schon
+    tatsächlich geliefert" - die Formel weiß nichts davon, ob die
+    Hardware ihre (bei 14 S/s bis zu ~71ms lange) Wandlung für dieses
+    Sample bereits abgeschlossen hat. Ein blockierender Read über genau
+    die fällige Anzahl (frühere Version dieser Datei) konnte deshalb bis
+    zu einer vollen Wandlungsperiode der langsamen Gruppe blockieren,
+    während die schnelle Gruppe parallel weiterlief - an echter Hardware
+    reproduziert: das führt nach ~10-20s zu einem "application is not
+    able to keep up with the hardware acquisition"-Fehler auf dem
+    SCHNELLEN Task, weil dessen eigener (begrenzter) Treiberpuffer
+    während der Blockade überläuft.
+
+    Deshalb wird pro Zyklus NIEMALS mehr von der langsamen Gruppe
+    angefordert, als `BaseDevice.available_samples()` (nicht-blockierende
+    Statusabfrage) gerade wirklich meldet - ist ein laut `due()`
+    fälliges Sample noch nicht da, wird der zuletzt bekannte Wert
+    einfach länger gehalten statt zu warten; der Rückstand wird über
+    `self._delivered` (tatsächlich zugestellte Anzahl je Gruppe, NICHT
+    dasselbe wie `due()`) verfolgt und in einem späteren Zyklus
+    automatisch nachgeholt, sobald die Hardware die Samples wirklich
+    liefert. Auf absoluten Takt-Indizes basierend (statt inkrementeller
+    Rundung), vermeidet Drift über eine lange Messung hinweg
+    (Bresenham-artiges Verfahren) - an echter Hardware über 45s/1850
+    Zyklen validiert (Differenz zum theoretischen due()-Wert < 1 Sample).
 """
 
 from __future__ import annotations
@@ -85,6 +102,16 @@ def _read_group_block(devices: list[BaseDevice], samples_to_read: int, timeout: 
         return np.concatenate([f.result() for f in futures], axis=0)
 
 
+def _group_available_samples(devices: list[BaseDevice]) -> int:
+    """Kleinste über alle Geräte EINER Gruppe aktuell verfügbare
+    (nicht-blockierend abgefragte) Samplezahl - bei einem gemeinsamen
+    Task (>1 Gerät in der Gruppe) melden ohnehin alle denselben Wert,
+    `min()` ist hier nur defensiv."""
+    if not devices:
+        return 0
+    return min(d.available_samples() for d in devices)
+
+
 class RateMerger:
     """Verschmilzt eine schnelle Gruppe mit einer oder mehreren
     langsameren Gruppen zu einem gemeinsam getakteten Block (siehe
@@ -105,6 +132,14 @@ class RateMerger:
             for i in range(len(groups))
             if i != self._fast_index
         }
+        # Anzahl TATSÄCHLICH gelesener (nicht nur laut due() fälliger)
+        # Samples je langsamerer Gruppe seit Messstart - kann hinter
+        # due() zurückbleiben, wenn der Treiber ein fälliges Sample noch
+        # nicht geliefert hat (siehe Moduldocstring); der Rückstand wird
+        # in einem späteren Zyklus automatisch nachgeholt.
+        self._delivered: dict[int, int] = {
+            i: 0 for i in range(len(groups)) if i != self._fast_index
+        }
         self._fast_ticks_emitted = 0
 
     def read_merged_block(self, samples_to_read: int) -> np.ndarray:
@@ -123,20 +158,33 @@ class RateMerger:
         for i, group in enumerate(self._groups):
             if i == self._fast_index:
                 continue
-            due_before = math.floor(start_idx * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz)
+            delivered_before = self._delivered[i]
             due_after = math.floor(end_idx * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz)
-            num_due = due_after - due_before
-            new_block = _read_group_block(group.devices, num_due, self._timeout)
+            owed = due_after - delivered_before
+            # NIE blockierend mehr anfordern, als der Treiber JETZT schon
+            # wirklich hat (siehe Moduldocstring) - sonst blockiert ein
+            # einzelnes, laut due() zwar fälliges, aber von der Hardware
+            # noch nicht fertig gewandeltes Sample den gesamten Zyklus,
+            # während die schnelle Gruppe parallel weiterläuft und ihr
+            # eigener (begrenzter) Treiberpuffer überläuft.
+            num_to_read = min(owed, _group_available_samples(group.devices)) if owed > 0 else 0
+            new_block = _read_group_block(group.devices, num_to_read, self._timeout)
+            delivered_after = delivered_before + num_to_read
+            self._delivered[i] = delivered_after
 
             extended = np.concatenate([self._last_known[i], new_block], axis=1)
             local_ticks = start_idx + np.arange(1, samples_to_read + 1)
-            counts = (
-                np.floor(local_ticks * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz).astype(
-                    np.int64
-                )
-                - due_before
-            )
-            # counts läuft monoton von 0..num_due - Fancy-Indexing auf
+            raw_counts = np.floor(
+                local_ticks * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz
+            ).astype(np.int64)
+            # Auf tatsächlich zugestellte Samples begrenzen (0..num_to_read):
+            # ist ein Sample laut Formel zwar schon fällig, aber noch
+            # nicht geliefert, wird der zuletzt bekannte Wert einfach
+            # länger gehalten statt zu warten - der dadurch entstehende
+            # Rückstand steckt in `due_after - delivered_after` und wird
+            # automatisch im nächsten Zyklus nachgeholt (siehe oben).
+            counts = np.clip(raw_counts - delivered_before, 0, num_to_read)
+            # counts läuft monoton von 0..num_to_read - Fancy-Indexing auf
             # `extended` liefert direkt den vektorisierten
             # Forward-Fill-Block, ein Python-Loop über Samples entfällt.
             filled = extended[:, counts]

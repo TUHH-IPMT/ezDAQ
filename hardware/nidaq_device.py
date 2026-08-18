@@ -292,6 +292,11 @@ class NIDAQSharedTask:
         )
         return buffer
 
+    def available_samples(self) -> int:
+        if not self._configured or self._task is None:
+            return 0
+        return self._task.in_stream.avail_samp_per_chan
+
 
 class NIDAQDevice(BaseDevice):
     """Basisklasse für NI-cDAQ-Module; verwaltet den Lebenszyklus eines
@@ -504,6 +509,13 @@ class NIDAQDevice(BaseDevice):
                 f"Lesefehler bei {self.device_info.device_name}: {exc}"
             ) from exc
         return buffer
+
+    def available_samples(self) -> int:
+        if self._shared_task is not None:
+            return self._shared_task.available_samples()
+        if self._task is None:
+            return 0
+        return self._task.in_stream.avail_samp_per_chan
 
     def _cleanup_task(self) -> None:
         """Schließt den nidaqmx-Task und setzt interne Referenzen zurück."""
