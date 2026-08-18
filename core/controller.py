@@ -24,8 +24,9 @@ import numpy as np
 from config.configuration_manager import ConfigurationManager
 from core.acquisition import AcquisitionThread
 from core.measurement import MeasurementConfigError, create_devices
+from core.rate_merge import DeviceGroup
 from core.ringbuffer import RingBuffer
-from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession, TriggerKind
+from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession, TriggerKind, resolve_rate_groups
 from hardware.base_device import AcquisitionError, BaseDevice
 from hardware.nidaq_device import NIDAQSharedTask, discover_devices, open_ni_max
 
@@ -191,31 +192,52 @@ class MeasurementController:
             if discovered_devices is None:
                 discovered_devices = self.discover_hardware()
 
-            devices = create_devices(active_channels, discovered_devices)
+            # Kanäle nach Ratenkompatibilität gruppieren (siehe
+            # `data/models.py::resolve_rate_groups`) - Regelfall ist genau
+            # EINE Gruppe (alle Geräte teilen sich weiterhin einen
+            # gemeinsamen Task/Sample-Clock). Mehr als eine Gruppe
+            # entsteht nur bei einem echten Ratenkonflikt (aktuell:
+            # NI9210 zusammen mit einem anderen Modul) - diese Gruppen
+            # bekommen je einen eigenen Task und werden erst nach dem
+            # Lesen per `RateMerger` zusammengeführt (siehe
+            # `core/acquisition.py`).
+            rate_groups = resolve_rate_groups(active_channels, config.sample_rate_hz)
 
             configured_devices: list[BaseDevice] = []
-            shared_task: Optional[NIDAQSharedTask] = None
-            if len(devices) > 1:
-                # Mehrere Geräte bekommen einen gemeinsamen Task, damit sie
-                # hardwareseitig dieselbe Abtastung teilen.
-                shared_task = NIDAQSharedTask()
+            device_groups: list[DeviceGroup] = []
             try:
-                for device in devices:
-                    device.configure(
-                        config.sample_rate_hz,
-                        config.samples_per_read,
-                        sample_clock_source=None,
-                        shared_task=shared_task,
+                for rate_group in rate_groups:
+                    group_devices = create_devices(rate_group.channels, discovered_devices)
+                    shared_task: Optional[NIDAQSharedTask] = None
+                    if len(group_devices) > 1:
+                        # Mehrere Geräte EINER Gruppe bekommen einen
+                        # gemeinsamen Task, damit sie hardwareseitig
+                        # dieselbe Abtastung teilen - der bevorzugte Fall.
+                        shared_task = NIDAQSharedTask()
+                    for device in group_devices:
+                        device.configure(
+                            rate_group.resolved_sample_rate_hz,
+                            config.samples_per_read,
+                            sample_clock_source=None,
+                            shared_task=shared_task,
+                        )
+                        configured_devices.append(device)
+                    if shared_task is not None:
+                        # Timing des gemeinsamen Tasks erst konfigurieren,
+                        # nachdem ALLE Geräte DIESER Gruppe ihre Kanäle
+                        # hinzugefügt haben (siehe NIDAQSharedTask.finalize()).
+                        shared_task.finalize()
+                    device_groups.append(
+                        DeviceGroup(
+                            devices=group_devices,
+                            resolved_sample_rate_hz=rate_group.resolved_sample_rate_hz,
+                        )
                     )
-                    configured_devices.append(device)
-                if shared_task is not None:
-                    # Timing des gemeinsamen Tasks erst konfigurieren, nachdem
-                    # ALLE Geräte ihre Kanäle hinzugefügt haben (siehe
-                    # NIDAQSharedTask.finalize()).
-                    shared_task.finalize()
             except AcquisitionError:
                 self._close_devices(configured_devices)
                 raise
+
+            devices = [device for group in device_groups for device in group.devices]
 
             ring_buffer = RingBuffer(
                 num_channels=len(active_channels),
@@ -247,7 +269,7 @@ class MeasurementController:
                 else config.target_recording_stop_samples()
             )
             acquisition_thread = AcquisitionThread(
-                devices=devices,
+                device_groups=device_groups,
                 ring_buffer=ring_buffer,
                 samples_per_read=config.samples_per_read,
                 on_error=self._handle_acquisition_error,

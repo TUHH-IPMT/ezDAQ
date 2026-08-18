@@ -211,6 +211,100 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
     return min(NI9213_MAX_SAMPLE_RATE_HZ, 1.0 / (conversion_time_s * len(channels_on_device)))
 
 
+@dataclass
+class RateGroup:
+    """Eine Menge aktiver Kanäle, die hardwareseitig dieselbe Abtastrate
+    teilen können und daher (der bevorzugte Fall) in einem einzigen
+    nidaqmx-Task mit echter Sample-Clock-Synchronität laufen.
+
+    Mehrere `RateGroup`s in einer Messung entstehen NUR, wenn ein Modul
+    eine mit den übrigen Kanälen unvereinbare, hardwareseitig fixe Rate
+    hat (aktuell: NI9210, feste 14 S/s) - das ist die Ausnahme, nicht der
+    Regelfall. Siehe `resolve_rate_groups`.
+    """
+
+    channels: list["Channel"]
+    resolved_sample_rate_hz: float
+    reason: str
+
+
+def resolve_rate_groups(
+    channels: list["Channel"], target_sample_rate_hz: float
+) -> list[RateGroup]:
+    """Teilt aktive Kanäle in Gruppen mit gemeinsam nutzbarer Abtastrate auf.
+
+    Der NI9210 hat eine hardwareseitig FIXE Abtastrate (14 S/s), die sich
+    nicht an eine gemeinsame Zielrate anpassen lässt (siehe
+    `NI9210_FIXED_SAMPLE_RATE_HZ`) - im Gegensatz zu NI9234 (Raster
+    51200/n) und NI9213 (max. erreichbare Rate abhängig von Kanalzahl/
+    Timing-Modus), die beide EINE gemeinsame Zielrate erfüllen können,
+    solange diese auf ihrem jeweiligen Raster bzw. unterhalb ihres
+    Maximums liegt. Deshalb bekommt ausschließlich der NI9210 im
+    Bedarfsfall eine eigene Gruppe; alle anderen Module bleiben immer in
+    der gemeinsamen "Zielraten"-Gruppe (der bevorzugte, echt
+    synchronisierte Fall).
+
+    Args:
+        channels: Aktive Kanäle (z. B. `MeasurementConfig.active_channels()`).
+        target_sample_rate_hz: Vom Nutzer eingestellte Zielrate.
+
+    Returns:
+        1 oder 2 Gruppen (aktuell nie mehr, da nur der NI9210 eine eigene
+        Gruppe erzwingt). Reihenfolge: zuerst die Zielraten-Gruppe (falls
+        vorhanden), danach die NI9210-Gruppe (falls vorhanden) - diese
+        Reihenfolge bestimmt später die Kanalreihenfolge im Ring Buffer
+        (siehe `core/controller.py::start_measurement`).
+
+    Raises:
+        ValueError: falls die Zielrate für ein NICHT vom NI9210 betroffenes
+            Modul (NI9234-Raster, NI9213-Maximalrate) intrinsisch
+            unerreichbar ist - das ist unabhängig davon, welche anderen
+            Module in der Messung sind, also KEIN "Teilen"-Problem,
+            sondern eine echte Fehlkonfiguration.
+    """
+    ni9210_channels = [ch for ch in channels if ch.module_type == ModuleType.NI9210]
+    other_channels = [ch for ch in channels if ch.module_type != ModuleType.NI9210]
+
+    groups: list[RateGroup] = []
+
+    if other_channels:
+        if any(
+            ch.module_type == ModuleType.NI9234 for ch in other_channels
+        ) and not is_valid_ni9234_sample_rate(target_sample_rate_hz):
+            suggestion = next_ni9234_sample_rate_at_or_above(target_sample_rate_hz)
+            raise ValueError(
+                "Das NI9234 unterstützt nur Abtastraten nach der Formel "
+                f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
+                f"{suggestion:.1f} S/s."
+            )
+        for device_name, group_channels in ni9213_device_groups(other_channels).items():
+            max_rate = max_ni9213_sample_rate_hz(group_channels)
+            if target_sample_rate_hz > max_rate + 0.05:
+                raise ValueError(
+                    f"Das NI9213 ({device_name}, {len(group_channels)} aktive(r) Kanal/"
+                    f"Kanäle, Timing-Modus '{group_channels[0].adc_timing_mode}') "
+                    f"unterstützt bei dieser Kanalzahl maximal {max_rate:.1f} S/s."
+                )
+        groups.append(
+            RateGroup(
+                channels=other_channels,
+                resolved_sample_rate_hz=target_sample_rate_hz,
+                reason="Zielrate",
+            )
+        )
+
+    if ni9210_channels:
+        groups.append(
+            RateGroup(
+                channels=ni9210_channels,
+                resolved_sample_rate_hz=NI9210_FIXED_SAMPLE_RATE_HZ,
+                reason="NI9210 (feste 14 S/s)",
+            )
+        )
+
+    return groups
+
+
 class StorageFormat(str, Enum):
     """Von der Anwendung unterstützte Speicherformate für Messdaten."""
 
@@ -630,7 +724,8 @@ class MeasurementConfig:
 
     Attributes:
         name: Bezeichner der Messung, z. B. "measurement_001".
-        sample_rate_hz: Abtastrate in Hz (gilt für alle Kanäle der Messung).
+        sample_rate_hz: Zielrate in Hz. Gilt direkt für alle Kanäle außer
+            dem NI9210 (feste 14 S/s, siehe `resolve_rate_groups`).
         channels: Liste der aktiven Kanäle für diese Messung.
         storage_format: Gewähltes Speicherformat (Parquet/CSV).
         samples_per_read: Blockgröße pro Lesevorgang vom DAQ-Gerät.
@@ -665,34 +760,12 @@ class MeasurementConfig:
             raise ValueError(
                 "recording_stop_value muss bei begrenzten Messungen größer als 0 sein."
             )
-        if (
-            any(
-                channel.enabled and channel.module_type == ModuleType.NI9210
-                for channel in self.channels
-            )
-            and self.sample_rate_hz != NI9210_FIXED_SAMPLE_RATE_HZ
-        ):
-            raise ValueError(
-                "Das NI9210 unterstützt ausschließlich eine Abtastrate von 14 S/s."
-            )
-        if any(
-            channel.enabled and channel.module_type == ModuleType.NI9234
-            for channel in self.channels
-        ) and not is_valid_ni9234_sample_rate(self.sample_rate_hz):
-            suggestion = next_ni9234_sample_rate_at_or_above(self.sample_rate_hz)
-            raise ValueError(
-                "Das NI9234 unterstützt nur Abtastraten nach der Formel "
-                f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
-                f"{suggestion:.1f} S/s."
-            )
-        for device_name, group_channels in ni9213_device_groups(self.channels).items():
-            max_rate = max_ni9213_sample_rate_hz(group_channels)
-            if self.sample_rate_hz > max_rate + 0.05:
-                raise ValueError(
-                    f"Das NI9213 ({device_name}, {len(group_channels)} aktive(r) Kanal/"
-                    f"Kanäle, Timing-Modus '{group_channels[0].adc_timing_mode}') "
-                    f"unterstützt bei dieser Kanalzahl maximal {max_rate:.1f} S/s."
-                )
+        # Wirft ValueError NUR noch bei intrinsisch unerreichbaren Raten
+        # (NI9234-Raster, NI9213-Maximalrate) - ein NI9210 zusammen mit
+        # schnelleren Modulen ist KEIN Fehler mehr, sondern führt zu zwei
+        # getrennten Abtast-Gruppen (siehe `resolve_rate_groups` und
+        # `core/controller.py::start_measurement`).
+        resolve_rate_groups(self.active_channels(), self.sample_rate_hz)
 
     def active_channels(self) -> list[Channel]:
         """Gibt nur die aktivierten Kanäle zurück."""

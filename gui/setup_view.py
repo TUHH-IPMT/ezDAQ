@@ -51,7 +51,6 @@ from data.models import (
     MeasurementConfig,
     ModuleType,
     RecordingStopUnit,
-    NI9210_FIXED_SAMPLE_RATE_HZ,
     StorageFormat,
     is_valid_ni9234_sample_rate,
     max_ni9213_sample_rate_hz,
@@ -758,17 +757,13 @@ class SetupView(QWidget):
             return None
 
         sample_rate = self._sample_rate_spin.value()
-        if any(
-            ch.enabled and ch.module_type == ModuleType.NI9210 for ch in channels
-        ) and sample_rate != NI9210_FIXED_SAMPLE_RATE_HZ:
-            self.show_error(
-                t(
-                    "error_ni9210_fixed_sample_rate",
-                    rate=NI9210_FIXED_SAMPLE_RATE_HZ,
-                )
-            )
-            return None
-
+        # Kein NI9210-Hard-Block mehr: Ein NI9210 zusammen mit einem
+        # schnelleren Modul ist seit `resolve_rate_groups()`
+        # (data/models.py) kein Fehlerfall mehr, sondern führt zu zwei
+        # getrennten, per RateMerger zusammengeführten Abtast-Gruppen
+        # (siehe core/controller.py::start_measurement). Die verbleibenden
+        # NI9234-/NI9213-Prüfungen unten bleiben unverändert - das sind
+        # intrinsische Ratenverstöße, unabhängig vom NI9210.
         if any(
             ch.enabled and ch.module_type == ModuleType.NI9234 for ch in channels
         ) and not is_valid_ni9234_sample_rate(sample_rate):
