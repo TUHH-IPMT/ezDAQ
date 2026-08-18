@@ -1019,14 +1019,19 @@ class LiveView(QWidget):
         self._display_capacity_samples: int = 0
         self._buffer_write_pos: int = 0
         self._channel_buffer_positions: dict[int, int] = {}
-        # Zuletzt tatsaechlich in den Sweep-Puffer GESCHRIEBENER Wert je
-        # Kanal - nur fuer Kanaele mit eigener, langsamerer nativer Rate
-        # gebraucht, um ZOH-Wiederholungen ueber mehrere Ticks hinweg
-        # korrekt zu erkennen (ein einzelner Block kann mitten in einer
-        # laufenden Wiederholungsfolge beginnen). `None` = noch kein
-        # Sample geschrieben (erste Zeile zaehlt dann immer als neu,
-        # analog `analysis/basic_analysis.py::native_samples`).
-        self._channel_last_written_value: dict[int, float | None] = {}
+        # Kumulative Anzahl roher (Tick-Rate-getakteter) Zeilen, die für
+        # diesen Kanal seit Messstart insgesamt gesehen wurden - NICHT
+        # bei jedem Sweep-Umbruch zurückgesetzt (anders als
+        # `_channel_buffer_positions`), siehe `_write_to_display_buffer`:
+        # nur für Kanäle mit eigener, langsamerer nativer Rate gebraucht,
+        # um dieselbe zeit-/takt-basierte due()-Zählung wie
+        # `core/rate_merge.py::RateMerger` unabhängig nachzuvollziehen
+        # (bewusst NICHT wertbasiert - ein echtes, aber zufällig
+        # unverändertes 14-S/s-Sample, z. B. bei einem stabilen
+        # Thermoelement-Messwert, darf nicht mit einer ZOH-Wiederholung
+        # verwechselt werden, sonst läuft die Sweep-Zeitachse gegenüber
+        # der echten Messzeit auseinander).
+        self._channel_total_ticks_seen: dict[int, int] = {}
         # Absolute Messzeit (Sekunden seit Messstart), bei der der AKTUELLE
         # Durchlauf des jeweiligen Kanals begonnen hat - die
         # Achsenbeschriftung soll die echte Messzeit zeigen (z. B. "40-45s"
@@ -1361,7 +1366,7 @@ class LiveView(QWidget):
         self._channel_buffer_positions = {index: 0 for index in range(len(channels))}
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
-        self._channel_last_written_value = {index: None for index in range(len(channels))}
+        self._channel_total_ticks_seen = {index: 0 for index in range(len(channels))}
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -2587,21 +2592,46 @@ class LiveView(QWidget):
             ),
         )
 
-    @staticmethod
-    def _filter_zoh_repeats(row: np.ndarray, last_value: float | None) -> np.ndarray:
-        """Filtert aus `row` reine ZOH-Wiederholungen des zuletzt
-        GESCHRIEBENEN Werts heraus - nur echte Wertwechsel bleiben uebrig.
-        `last_value` ist der zuletzt tatsaechlich geschriebene Wert (aus
-        einem FRUEHEREN Aufruf), `None` falls noch kein Sample geschrieben
-        wurde - die allererste Zeile zaehlt dann immer als neu (analog zu
-        `analysis/basic_analysis.py::native_samples`, das den jeweils
-        ERSTEN Wert einer Wiederholungsfolge behaelt)."""
-        if row.shape[0] == 0:
-            return row
-        keep = np.empty(row.shape[0], dtype=bool)
-        keep[0] = last_value is None or row[0] != last_value
-        keep[1:] = row[1:] != row[:-1]
-        return row[keep]
+    def _extract_native_rate_samples(self, channel_index: int, row: np.ndarray) -> np.ndarray:
+        """Reduziert `row` (ZOH-vorwärtsgefüllt bei Tick-Rate, siehe
+        `core/rate_merge.py`) auf genau die Werte, die laut der nativen
+        Rate dieses Kanals in diesem Block tatsächlich neu FÄLLIG sind -
+        dieselbe `due(t) = floor(t * native_rate / tick_rate)`-Zählung
+        wie `core/rate_merge.py::RateMerger`, hier unabhängig anhand der
+        kumulativen Tick-Anzahl (`_channel_total_ticks_seen`)
+        nachvollzogen.
+
+        BEWUSST rein takt-/zeitbasiert, NICHT wertbasiert (ein früherer
+        Versuch verglich aufeinanderfolgende Werte auf Gleichheit) - ein
+        echtes, aber zufällig unverändertes Sample eines langsamen
+        Kanals (z. B. ein stabiler Thermoelement-Messwert) hätte dabei
+        wie eine ZOH-Wiederholung ausgesehen und wäre fälschlich
+        verworfen worden. Das ließ die Sweep-Pufferposition langsamer
+        wachsen als die echte Messzeit verging - die Sweep-Anzeige lief
+        dadurch gegenüber der Realzeit sichtbar nach.
+        """
+        ticks_before = self._channel_total_ticks_seen.get(channel_index, 0)
+        n = row.shape[0]
+        ticks_after = ticks_before + n
+        self._channel_total_ticks_seen[channel_index] = ticks_after
+
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
+        due_before = int(ticks_before * native_rate / self._sample_rate_hz)
+        due_after = int(ticks_after * native_rate / self._sample_rate_hz)
+        num_new = due_after - due_before
+        if num_new <= 0:
+            return row[:0]
+
+        # Fuer jeden neu fälligen "Slot" den Tick-Index INNERHALB dieses
+        # Blocks finden, an dem er erstmals erreicht wird (row ist ZOH-
+        # gehalten, der Wert dort ist also der fuer diesen Slot gueltige) -
+        # `due_at_tick` ist monoton nicht-fallend, `searchsorted` liefert
+        # das direkt vektorisiert ohne Python-Schleife.
+        local_ticks = ticks_before + np.arange(1, n + 1)
+        due_at_tick = (local_ticks * native_rate / self._sample_rate_hz).astype(np.int64)
+        target_due = due_before + np.arange(1, num_new + 1)
+        indices = np.searchsorted(due_at_tick, target_due)
+        return row[indices]
 
     def _write_to_display_buffer(self, scaled_block: np.ndarray) -> None:
         """Schreibt neue Samples in den Sweep-Puffer (siehe Klassendoc oben).
@@ -2618,18 +2648,13 @@ class LiveView(QWidget):
         nativen Rate (siehe `_channel_native_rates`, z. B. NI9210 @
         14 S/s) kommen in `scaled_block` ZOH-vorwärtsgefüllt an (siehe
         `core/rate_merge.py`) - jede Zeile bis zum nächsten echten
-        Hardware-Sample wiederholt denselben Wert. Nur echte Wertwechsel
-        sind neue Samples (dasselbe Prinzip wie
-        `analysis/basic_analysis.py::native_samples`, hier live/
-        strömend statt post-hoc auf einer Datei angewendet - der zuletzt
-        GESCHRIEBENE Wert muss dafür über mehrere Ticks hinweg gemerkt
-        werden, siehe `_channel_last_written_value`, da ein einzelner
-        Block mitten in einer laufenden Wiederholungsfolge beginnen
-        kann). Ein Kanal an der Tick-Rate selbst (der Regelfall)
-        durchläuft diesen Filter NICHT (strukturelle Unterscheidung
-        anhand der nativen Rate, NICHT anhand einer Wertegleichheit zur
-        Laufzeit - ein echter, schneller Kanal kann legitim zwei gleiche
-        Messwerte hintereinander liefern).
+        Hardware-Sample wiederholt denselben Wert. Nur die laut der
+        nativen Rate tatsächlich neu fälligen Slots werden geschrieben
+        (siehe `_extract_native_rate_samples` - rein takt-/zeitbasiert,
+        NICHT anhand von Wertgleichheit, sonst würde ein echtes, aber
+        zufällig unverändertes Sample eines langsamen Kanals fälschlich
+        als Wiederholung verworfen). Ein Kanal an der Tick-Rate selbst
+        (der Regelfall) durchläuft diese Reduktion NICHT.
         """
         if self._display_buffer is None:
             return
@@ -2637,10 +2662,7 @@ class LiveView(QWidget):
             native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
             row = scaled_block[channel_index]
             if native_rate < self._sample_rate_hz:
-                last_value = self._channel_last_written_value.get(channel_index)
-                new_data = self._filter_zoh_repeats(row, last_value)
-                if new_data.size:
-                    self._channel_last_written_value[channel_index] = float(new_data[-1])
+                new_data = self._extract_native_rate_samples(channel_index, row)
             else:
                 new_data = row
 
