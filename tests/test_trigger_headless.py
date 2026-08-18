@@ -8,8 +8,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 from PyQt6.QtWidgets import QApplication, QLineEdit, QTreeWidgetItem
 
+from analysis.basic_analysis import native_samples
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
 from core.controller import MeasurementController
@@ -31,6 +33,7 @@ from data.models import (
     TriggerKind,
     resolve_rate_groups,
 )
+from data.loader import LoadedMeasurement
 from data.sensor_models import SensorEntry
 from gui.live_view import ChannelDisplayDialog, LiveView
 from gui.analysis_view import AnalysisView
@@ -242,6 +245,54 @@ class TriggerModelTests(unittest.TestCase):
         native_rates = {ch["hardware_channel"]: ch["native_sample_rate_hz"] for ch in metadata["channels"]}
         self.assertEqual(native_rates["cDAQ1Mod1/ai0"], 14.0)
         self.assertEqual(native_rates["cDAQ1Mod2/ai0"], target_rate)
+
+    def test_native_samples_removes_consecutive_duplicates(self) -> None:
+        # Zero-Order-Hold-Treppenstufe (siehe core/rate_merge.py::RateMerger):
+        # nur der jeweils ERSTE einer Folge identischer Werte ist ein
+        # echtes neues Sample.
+        data = pd.DataFrame({
+            "time_s": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
+            "Temp": [10.0, 10.0, 10.0, 11.0, 11.0, 12.0],
+        })
+
+        reduced = native_samples(data, "Temp")
+
+        self.assertEqual(list(reduced["Temp"]), [10.0, 11.0, 12.0])
+        self.assertEqual(list(reduced["time_s"]), [0.0, 0.3, 0.5])
+
+    def test_prepare_channel_for_rate_aware_analysis_decimates_forward_filled_channel(self) -> None:
+        # Mischt einen forward-gefuellten NI9210-Kanal (native 14 S/s)
+        # mit einem echten schnellen NI9234-Kanal (native == Tick-Rate)
+        # in derselben Datei - nur der NI9210-Kanal darf entdoppelt werden.
+        tick_rate = 100.0
+        data = pd.DataFrame({
+            "time_s": np.arange(6) / tick_rate,
+            "Temp": [10.0, 10.0, 10.0, 11.0, 11.0, 11.0],
+            "Vib": [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+        })
+        metadata = {
+            "sample_rate_hz": tick_rate,
+            "channels": [
+                {"hardware_channel": "cDAQ1Mod4/ai0", "display_name": "Temp", "native_sample_rate_hz": 14.0},
+                {"hardware_channel": "cDAQ1Mod1/ai0", "display_name": "Vib", "native_sample_rate_hz": tick_rate},
+            ],
+        }
+        measurement = LoadedMeasurement(
+            data=data, channels=[], metadata=metadata, source_path=Path("test.parquet"), x_column="time_s",
+        )
+        analysis_view = AnalysisView.__new__(AnalysisView)
+
+        temp_data, temp_rate = analysis_view._prepare_channel_for_rate_aware_analysis(
+            measurement, "Temp", tick_rate
+        )
+        self.assertEqual(temp_rate, 14.0)
+        self.assertEqual(list(temp_data["Temp"]), [10.0, 11.0])
+
+        vib_data, vib_rate = analysis_view._prepare_channel_for_rate_aware_analysis(
+            measurement, "Vib", tick_rate
+        )
+        self.assertEqual(vib_rate, tick_rate)
+        self.assertIs(vib_data, data)
 
     def test_ni9210_combined_with_invalid_ni9234_rate_still_raises(self) -> None:
         # Intrinsische Ratenverstoesse (hier: NI9234-Raster) bleiben

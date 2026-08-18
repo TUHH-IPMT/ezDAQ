@@ -14,6 +14,9 @@ Aktuell implementiert:
     * compute_fft(...): Amplitudenspektrum eines Kanals (numpy.fft.rfft).
     * apply_filter(...): Butterworth-Tief-/Hochpass (scipy.signal).
     * apply_smoothing(...): Gleitender Mittelwert.
+    * native_samples(...): Entdopplung eines forward-gefüllten
+      (Zero-Order-Hold) Kanals auf seine echten neuen Samples - siehe
+      `gui/analysis_view.py::_prepare_channel_for_rate_aware_analysis`.
 
 Noch nicht implementiert (spätere Version):
     * compute_rms(...), compute_statistics(...), generate_report(...).
@@ -76,6 +79,36 @@ def apply_filter(
         raise ValueError("Zu wenige Messwerte für die gewählte Filterordnung.")
 
     return filtfilt(b, a, values)
+
+
+def native_samples(data: pd.DataFrame, channel_name: str) -> pd.DataFrame:
+    """Reduziert einen zero-order-gehaltenen (forward-gefüllten) Kanal auf
+    nur die Zeilen, an denen sich der Wert tatsächlich ändert (= ein
+    echtes neues Sample).
+
+    Ein per `core/rate_merge.py::RateMerger` in eine schnellere Ratengruppe
+    eingemischter Kanal (z. B. ein NI9210 zusammen mit einem schnelleren
+    Modul, siehe `data/models.py::resolve_rate_groups`) wiederholt seinen
+    letzten echten Messwert so lange, bis ein neues Sample fällig ist -
+    diese Wiederholungen dürfen FFT/Filter nicht als echte neue Samples
+    bei der Datei-Tick-Rate behandeln (sonst täuscht die Zero-Order-Hold-
+    Treppenstufe ein falsches, sinc-förmiges Spektrum-Artefakt vor).
+
+    Erkennt Wiederholungen rein anhand aufeinanderfolgender identischer
+    Werte - robust gegenüber dem nicht-ganzzahligen Tick-Verhältnis aus
+    `RateMerger` (z. B. ~118 schnelle Ticks pro echtem 14-S/s-Sample),
+    ohne das genaue Verhältnis kennen zu müssen.
+
+    NUR für Kanäle aufrufen, deren native Rate (siehe
+    `data/metadata.py::build_measurement_metadata`, Schlüssel
+    `native_sample_rate_hz`) unterhalb der Datei-Tick-Rate liegt - sonst
+    würden legitime Wiederholungswerte in echten, nicht forward-gefüllten
+    Signalen fälschlich entfernt.
+    """
+    values = data[channel_name].to_numpy()
+    keep = np.ones(len(values), dtype=bool)
+    keep[1:] = values[1:] != values[:-1]
+    return data.loc[keep]
 
 
 def apply_smoothing(data: pd.DataFrame, channel_name: str, window_size: int) -> np.ndarray:

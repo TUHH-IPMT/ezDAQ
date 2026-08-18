@@ -53,7 +53,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from analysis.basic_analysis import apply_filter, apply_smoothing, compute_fft
+from analysis.basic_analysis import apply_filter, apply_smoothing, compute_fft, native_samples
 from data.loader import LoadedMeasurement, infer_metadata_path, load_measurement_file
 from data.models import Channel
 from gui.i18n import connect_language_changed, t
@@ -1076,9 +1076,12 @@ class AnalysisView(QWidget):
                     self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
                 )
                 return
+            analysis_data, sample_rate_hz = self._prepare_channel_for_rate_aware_analysis(
+                measurement, channel_name, sample_rate_hz
+            )
             self._run_analysis_in_background(
                 compute_fft,
-                (measurement.data, channel_name, sample_rate_hz),
+                (analysis_data, channel_name, sample_rate_hz),
                 {},
                 lambda result: self._finish_result(
                     file_item, channel_name, t("analysis_fft_result_suffix"),
@@ -1092,15 +1095,18 @@ class AnalysisView(QWidget):
                     self, t("analysis_error_title"), t("analysis_no_sample_rate_body")
                 )
                 return
+            analysis_data, sample_rate_hz = self._prepare_channel_for_rate_aware_analysis(
+                measurement, channel_name, sample_rate_hz
+            )
             suffix_key = (
                 "analysis_lowpass_result_suffix" if kind == "lowpass"
                 else "analysis_highpass_result_suffix"
             )
             x_column = measurement.x_column
-            x_values = measurement.data[x_column].to_numpy()
+            x_values = analysis_data[x_column].to_numpy()
             self._run_analysis_in_background(
                 apply_filter,
-                (measurement.data, channel_name, sample_rate_hz, dialog.cutoff_hz()),
+                (analysis_data, channel_name, sample_rate_hz, dialog.cutoff_hz()),
                 {"kind": kind},
                 lambda filtered: self._finish_result(
                     file_item, channel_name, t(suffix_key), x_column, x_values, filtered,
@@ -1207,6 +1213,61 @@ class AnalysisView(QWidget):
             if len(diffs) > 0:
                 return float(1.0 / np.median(diffs))
         return None
+
+    @staticmethod
+    def _resolve_native_sample_rate(measurement: LoadedMeasurement, channel_name: str) -> float | None:
+        """Native Abtastrate eines einzelnen Kanals aus den Metadaten
+        (Schlüssel `native_sample_rate_hz`, siehe
+        `data/metadata.py::build_measurement_metadata`), falls vorhanden.
+
+        Kann von der Datei-Tick-Rate (`_resolve_sample_rate`) abweichen,
+        wenn der Kanal per `core/rate_merge.py::RateMerger` forward-
+        gefüllt wurde (aktuell nur beim NI9210 möglich). Sucht bewusst im
+        ROHEN Metadaten-Dictionary (`measurement.metadata["channels"]`),
+        NICHT über `measurement.channels`/`Channel.from_dict` - letzteres
+        kennt `native_sample_rate_hz` nicht als eigenes Dataclass-Feld und
+        würde es beim Rekonstruieren stillschweigend verlieren.
+        """
+        if not measurement.metadata:
+            return None
+        for channel_meta in measurement.metadata.get("channels", []):
+            display_name = str(channel_meta.get("display_name", "")).strip()
+            hardware_channel = str(channel_meta.get("hardware_channel", "")).strip()
+            if channel_name not in (display_name, hardware_channel):
+                continue
+            native_rate = channel_meta.get("native_sample_rate_hz")
+            if native_rate is None:
+                return None
+            try:
+                return float(native_rate)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _prepare_channel_for_rate_aware_analysis(
+        self, measurement: LoadedMeasurement, channel_name: str, tick_rate_hz: float
+    ) -> tuple[pd.DataFrame, float]:
+        """Liefert die für FFT/Filter zu verwendenden Daten + Abtastrate.
+
+        Bei einem forward-gefüllten Kanal (native Rate erkennbar unter
+        der Datei-Tick-Rate, siehe `_resolve_native_sample_rate`) werden
+        zuerst die Wiederholungswerte entfernt
+        (`analysis.basic_analysis.native_samples`) und mit der echten
+        nativen Rate gerechnet - sonst würde eine Zero-Order-Hold-
+        Treppenstufe (siehe `core/rate_merge.py`) ein falsches, sinc-
+        förmiges Spektrum-Artefakt vortäuschen. Bei allen anderen Kanälen
+        (der Regelfall, native Rate == Tick-Rate) exakt unverändertes
+        Verhalten - `measurement.data`/`tick_rate_hz` werden unangetastet
+        zurückgegeben.
+
+        `* 0.99`-Toleranz deckt Rundung beim Speichern/Runden der Raten
+        ab, ohne eine minimal abweichende, aber eigentlich identische
+        Rate fälschlich als "forward-gefüllt" zu behandeln.
+        """
+        native_rate_hz = self._resolve_native_sample_rate(measurement, channel_name)
+        if native_rate_hz is not None and native_rate_hz < tick_rate_hz * 0.99:
+            return native_samples(measurement.data, channel_name), native_rate_hz
+        return measurement.data, tick_rate_hz
 
     @staticmethod
     def _make_unique_result_name(file_item: QTreeWidgetItem, channel_name: str, suffix: str) -> str:
