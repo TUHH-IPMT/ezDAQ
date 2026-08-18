@@ -267,30 +267,23 @@ class SetupView(QWidget):
 
         # Interne Performance-Parameter werden automatisch festgelegt,
         # damit der Nutzer hier nicht mit technischen Details belastet wird.
-        # Ziel: kleinere Read-Bloecke fuer fluessigere Live-Updates. NICHT
-        # weiter als 25ms verkleinern: ein Test mit 10ms fuehrte bei hoher
-        # Abtastrate zu "The application is not able to keep up with the
-        # hardware acquisition" (Pufferueberlauf/Datenverlust) - der reine
-        # Python/ctypes-Aufrufoverhead pro `device.read()` dominiert dann
-        # gegenueber dem eigentlichen Datentransfer und der DAQ-Thread
-        # selbst kommt nicht mehr hinterher.
+        # Ziel: Read-Bloecke, die rein von der BLOCKDAUER (nicht von einer
+        # festen Sample-Anzahl) abgeleitet werden, damit sich die Groesse
+        # dynamisch mit der Abtastrate skaliert - siehe
+        # `_calculate_samples_per_read`. NICHT weiter als 25ms verkleinern:
+        # ein Test mit 10ms fuehrte bei hoher Abtastrate zu "The application
+        # is not able to keep up with the hardware acquisition"
+        # (Pufferueberlauf/Datenverlust) - der reine Python/ctypes-
+        # Aufrufoverhead pro `device.read()` dominiert dann gegenueber dem
+        # eigentlichen Datentransfer und der DAQ-Thread selbst kommt nicht
+        # mehr hinterher. Eine feste Sample-Untergrenze (frueherer Ansatz)
+        # wuerde bei niedriger Abtastrate dieselbe Zielblockdauer verfehlen
+        # und lange, stossweise Bloecke erzeugen (z. B. 50 Samples bei
+        # 14 S/s = 3,6s statt der gewollten 25ms) - deshalb bewusst NUR
+        # eine Ober-, keine Untergrenze fuer die Sample-Anzahl.
         self._target_read_block_ms = 25.0
-        self._min_samples_per_read = 50
         self._max_samples_per_read = 2000
         self._default_ring_buffer_seconds = 30
-        # Obergrenze der BLOCKDAUER in Sekunden (zusaetzlich zur
-        # Sample-Untergrenze oben): `AcquisitionThread.stop()` (siehe
-        # core/acquisition.py) wartet beim Stoppen auf den GERADE
-        # laufenden, blockierenden `device.read()`-Aufruf - bei niedriger
-        # Abtastrate wuerde `_min_samples_per_read` sonst einen einzelnen
-        # Block mehrere Sekunden dauern lassen (z. B. 50 Samples bei 15 Hz
-        # = 3,3 s) und sowohl den manuellen Stopp-Button als auch ein
-        # konfiguriertes Aufnahme-Limit (siehe
-        # `data/models.py::MeasurementConfig.recording_unlimited`)
-        # entsprechend verzoegern. Bei den ueblichen Abtastraten
-        # (>= 100 Hz) greift diese Grenze nicht (50 Samples sind dann
-        # laengst unter 0.5s), aendert dort also nichts.
-        self._max_read_block_seconds = 0.5
 
         # --- Speichereinstellungen ---
         self._storage_header = QLabel(t("storage_settings"))
@@ -1024,16 +1017,17 @@ class SetupView(QWidget):
     def _calculate_samples_per_read(self, sample_rate_hz: float) -> int:
         """Berechnet eine adaptive Blockgroesse pro DAQ-Read.
 
-        Kleinere Bloecke reduzieren die wahrgenommene Hakelei der Live View,
-        weil neue Daten haeufiger im Ring Buffer landen. Zusaetzlich per
-        `_max_read_block_seconds` nach oben in der BLOCKDAUER begrenzt -
-        siehe dessen Kommentar in `__init__` fuer den Grund (Stopp-Latenz
-        bei niedrigen Abtastraten).
+        Rein aus der Ziel-BLOCKDAUER (`_target_read_block_ms`) abgeleitet,
+        nicht aus einer festen Sample-Anzahl - skaliert dadurch dynamisch
+        mit der Abtastrate: bei hoher Rate viele Samples pro Block (haelt
+        die Aufrufhaeufigkeit von `device.read()` konstant niedrig, siehe
+        `__init__`), bei niedriger Rate (z. B. NI9210 mit 14 S/s) entsprechend
+        wenige - so bleibt die Live View auch dort fluessig, statt in
+        seltenen, dafuer grossen Schueben zu aktualisieren. Nach oben durch
+        `_max_samples_per_read` begrenzt, nach unten auf mindestens 1 Sample.
         """
         target = int(sample_rate_hz * (self._target_read_block_ms / 1000.0))
-        samples = max(self._min_samples_per_read, min(self._max_samples_per_read, target))
-        max_by_duration = max(1, int(sample_rate_hz * self._max_read_block_seconds))
-        return min(samples, max_by_duration)
+        return max(1, min(self._max_samples_per_read, target))
 
     def _calculate_dynamic_buffer_size(self, sample_rate_hz: float, num_active_channels: int) -> int:
         """Berechnet die Puffergröße dynamisch basierend auf verfügbarem RAM.

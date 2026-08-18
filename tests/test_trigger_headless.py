@@ -660,5 +660,42 @@ class LiveViewStopTriggerTests(unittest.TestCase):
         self.assertEqual(live_view._channel_buffer_positions[0], 1)
 
 
+class CalculateSamplesPerReadTests(unittest.TestCase):
+    """`SetupView._calculate_samples_per_read` ueber `__new__` isoliert
+    getestet (gleiches Muster wie die `LiveView`-Tests oben) - die Methode
+    braucht nur zwei einfache Zahlenattribute, keine Qt-Widgets."""
+
+    def _make_setup_view(self) -> SetupView:
+        setup_view = SetupView.__new__(SetupView)
+        setup_view._target_read_block_ms = 25.0
+        setup_view._max_samples_per_read = 2000
+        return setup_view
+
+    def test_low_rate_scales_down_instead_of_using_fixed_minimum(self) -> None:
+        # Regressionstest: ein alleinstehendes NI9210 (14 S/s) bekam frueher
+        # wegen einer festen Sample-Untergrenze (50) einen Block, der erst
+        # nach 0,5s (bzw. urspruenglich sogar 3,6s) fertig war - sichtbar
+        # hakelige Live View (Daten kamen in seltenen Schueben statt
+        # kontinuierlich). Die Blockgroesse muss stattdessen mit der Rate
+        # mitskalieren, hier auf 1 Sample (Blockdauer ~71ms).
+        setup_view = self._make_setup_view()
+        self.assertEqual(setup_view._calculate_samples_per_read(14.0), 1)
+
+    def test_rate_at_former_fixed_minimum_boundary_is_unchanged(self) -> None:
+        # Bei 2000 Hz traf schon die alte, feste Untergrenze (50 Samples)
+        # zufaellig genau den Zielwert - hier darf sich durch die
+        # Umstellung nichts aendern.
+        setup_view = self._make_setup_view()
+        self.assertEqual(setup_view._calculate_samples_per_read(2000.0), 50)
+
+    def test_typical_ni9234_rate_matches_25ms_target_block(self) -> None:
+        setup_view = self._make_setup_view()
+        self.assertEqual(setup_view._calculate_samples_per_read(20_000.0), 500)
+
+    def test_high_rate_is_capped_at_max_samples_per_read(self) -> None:
+        setup_view = self._make_setup_view()
+        self.assertEqual(setup_view._calculate_samples_per_read(100_000.0), 2000)
+
+
 if __name__ == "__main__":
     unittest.main()
