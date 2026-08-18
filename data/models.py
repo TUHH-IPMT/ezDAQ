@@ -301,15 +301,28 @@ def resolve_rate_groups(
     groups: list[RateGroup] = []
 
     if adaptive_channels:
-        if any(
-            ch.module_type == ModuleType.NI9234 for ch in adaptive_channels
-        ) and not is_valid_ni9234_sample_rate(target_sample_rate_hz):
-            suggestion = next_ni9234_sample_rate_at_or_above(target_sample_rate_hz)
-            raise ValueError(
-                "Das NI9234 unterstützt nur Abtastraten nach der Formel "
-                f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
-                f"{suggestion:.1f} S/s."
-            )
+        resolved_rate = target_sample_rate_hz
+        if any(ch.module_type == ModuleType.NI9234 for ch in adaptive_channels):
+            if not is_valid_ni9234_sample_rate(target_sample_rate_hz):
+                suggestion = next_ni9234_sample_rate_at_or_above(target_sample_rate_hz)
+                raise ValueError(
+                    "Das NI9234 unterstützt nur Abtastraten nach der Formel "
+                    f"51200 Hz / n (n = 1..31); nächster gültiger Wert nach oben: "
+                    f"{suggestion:.1f} S/s."
+                )
+            # Auf die EXAKTE gültige NI9234-Rate einrasten, NICHT die rohe
+            # (z. B. auf eine Nachkommastelle gerundete) Zielrate
+            # verwenden: DAQmx rundet einen Wert, der auch nur minimal
+            # ÜBER einer gültigen Rate liegt, auf die NÄCHSTHÖHERE
+            # gültige Rate auf (nicht auf die nächstgelegene) - z. B.
+            # würde 17066,7 Hz (0,03 Hz über der exakt gültigen
+            # 17066,67 Hz) intern auf 25600 Hz hochspringen, ohne dass
+            # App/Metadaten/Live-View das bemerken. Hier bereits an der
+            # Quelle auf den exakten Wert einrasten stellt sicher, dass
+            # die überall angezeigte/gespeicherte Rate tatsächlich die
+            # ist, die DAQmx auch wirklich konfiguriert - an echter
+            # Hardware verifiziert (`task.timing.samp_clk_rate`).
+            resolved_rate = nearest_ni9234_sample_rate(target_sample_rate_hz)
         for device_name, group_channels in ni9213_device_groups(adaptive_channels).items():
             max_rate = max_ni9213_sample_rate_hz(group_channels)
             if target_sample_rate_hz > max_rate + 0.05:
@@ -321,7 +334,7 @@ def resolve_rate_groups(
         groups.append(
             RateGroup(
                 channels=adaptive_channels,
-                resolved_sample_rate_hz=target_sample_rate_hz,
+                resolved_sample_rate_hz=resolved_rate,
                 reason="Zielrate",
             )
         )

@@ -373,6 +373,25 @@ class TriggerModelTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "51200 Hz / n"):
             MeasurementConfig("Invalid NI9234 rate", 1000.0, channels=channels)
 
+    def test_resolve_rate_groups_snaps_ni9234_rate_to_exact_valid_value(self) -> None:
+        # DAQmx rundet eine Rate, die auch nur minimal UEBER einem
+        # gueltigen NI9234-Wert liegt, auf den NAECHSTHOEHEREN gueltigen
+        # Wert auf (nicht auf den naechstgelegenen) - an echter Hardware
+        # verifiziert: 17066.7 (0.03 Hz ueber 51200/3) sprang intern auf
+        # 25600 Hz (51200/2). resolve_rate_groups() muss deshalb auf den
+        # EXAKTEN gueltigen Wert einrasten, bevor er an die Hardware-
+        # Schicht weitergereicht wird - nicht die rohe (z. B. auf eine
+        # Nachkommastelle gerundete) Zielrate durchreichen.
+        channels = [Channel("cDAQ1Mod1/ai0", "Vibration", module_type=ModuleType.NI9234)]
+        exact_valid_rate = 51_200.0 / 3
+        raw_rounded_target = 17066.7  # wie von der 1-Nachkommastellen-Spinbox geliefert
+
+        self.assertNotEqual(raw_rounded_target, exact_valid_rate)
+        groups = resolve_rate_groups(channels, raw_rounded_target)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, exact_valid_rate)
+
     def test_sensor_database_ignores_invalid_sensor_data(self) -> None:
         invalid_documents = [
             [{"name": "broken", "channels": [{"signal_type": "removed-type"}]}],
