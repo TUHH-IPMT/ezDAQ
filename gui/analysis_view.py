@@ -1024,6 +1024,12 @@ class AnalysisView(QWidget):
                     pen=pg.mkPen(color=color, width=1.2),
                     name=f"{file_item.text(0)} - {display_label}",
                 )
+                # Min/Max-Dezimierung pro Pixel (siehe gui/live_view.py:44-53) -
+                # haelt Zoom/Pan bei sehr grossen Datensaetzen fluessig, ohne
+                # kurze Spitzen/Ausreisser zu verlieren (method="peak" statt
+                # "mean").
+                curve.setDownsampling(auto=True, method="peak")
+                curve.setClipToView(True)
                 self._curves.append(curve)
 
         self._refresh_plot_axis_labels()
