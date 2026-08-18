@@ -473,6 +473,95 @@ class LiveViewStopTriggerTests(unittest.TestCase):
 
         self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz (+ NI9210 @ 14.0 Hz)")
 
+    def test_write_to_display_buffer_fast_channel_writes_every_row_unchanged(self) -> None:
+        # Regressionsschutz: ein Kanal an der Tick-Rate selbst darf NIE dem
+        # ZOH-Filter unterliegen, auch wenn er zufaellig wiederholte Werte
+        # liefert (echtes, gueltiges Messsignal) - Verhalten muss exakt wie
+        # vor dem Fix bleiben.
+        live_view = LiveView.__new__(LiveView)
+        live_view._channels = [Channel("cDAQ1Mod2/ai0", "Vib", module_type=ModuleType.NI9234)]
+        live_view._sample_rate_hz = 1000.0
+        live_view._channel_native_rates = {0: 1000.0}
+        live_view._display_capacity_samples = 10
+        live_view._display_buffer = np.zeros((1, 10))
+        live_view._channel_buffer_positions = {0: 0}
+        live_view._channel_cycle_starts = {0: 0.0}
+        live_view._channel_last_written_value = {0: None}
+
+        block = np.array([[1.0, 1.0, 2.0, 2.0, 3.0]])
+        live_view._write_to_display_buffer(block)
+
+        self.assertEqual(live_view._channel_buffer_positions[0], 5)
+        np.testing.assert_array_equal(live_view._display_buffer[0, :5], block[0])
+
+    def test_channel_display_capacity_uses_native_rate_not_tick_rate(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        temp = Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)
+        vib = Channel("cDAQ1Mod2/ai0", "Vib", module_type=ModuleType.NI9234)
+        live_view._channels = [temp, vib]
+        live_view._sample_rate_hz = 20000.0
+        live_view._channel_native_rates = {0: 14.0, 1: 20000.0}
+        live_view._display_capacity_samples = 200_000
+
+        self.assertEqual(
+            live_view._channel_display_capacity(0), int(14.0 * temp.plot_time_window_seconds)
+        )
+        self.assertEqual(
+            live_view._channel_display_capacity(1), int(20000.0 * vib.plot_time_window_seconds)
+        )
+        self.assertLess(
+            live_view._channel_display_capacity(0), live_view._channel_display_capacity(1)
+        )
+
+    def test_write_to_display_buffer_slow_channel_only_advances_on_value_transitions(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        temp = Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)
+        live_view._channels = [temp]
+        live_view._sample_rate_hz = 1000.0
+        live_view._channel_native_rates = {0: 14.0}
+        live_view._display_capacity_samples = 1000
+        live_view._display_buffer = np.zeros((1, 1000))
+        live_view._channel_buffer_positions = {0: 0}
+        live_view._channel_cycle_starts = {0: 0.0}
+        live_view._channel_last_written_value = {0: None}
+
+        # ZOH-verschmolzener Block: 71x derselbe Wert, dann ein Wechsel.
+        block1 = np.array([[10.0] * 71 + [11.0] * 3])
+        live_view._write_to_display_buffer(block1)
+        self.assertEqual(live_view._channel_buffer_positions[0], 2)
+        np.testing.assert_array_equal(live_view._display_buffer[0, :2], [10.0, 11.0])
+
+        # Zweiter Tick, reine Wiederholung -> nichts Neues geschrieben.
+        block2 = np.array([[11.0] * 10])
+        live_view._write_to_display_buffer(block2)
+        self.assertEqual(live_view._channel_buffer_positions[0], 2)
+
+    def test_channel_cycle_start_increments_by_native_rate_elapsed_seconds(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        temp = Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)
+        live_view._channels = [temp]
+        live_view._sample_rate_hz = 1000.0
+        live_view._channel_native_rates = {0: 14.0}
+        cap = LiveView._capacity_for_rate(14.0, temp.plot_time_window_seconds)
+        live_view._display_capacity_samples = cap
+        live_view._display_buffer = np.zeros((1, cap))
+        live_view._channel_buffer_positions = {0: 0}
+        live_view._channel_cycle_starts = {0: 0.0}
+        live_view._channel_last_written_value = {0: None}
+
+        # `cap` echte Wertwechsel (jede Zeile ein neuer Wert -> garantiert
+        # keine ZOH-Filterung), fuellt den Durchlauf exakt.
+        values = np.arange(cap, dtype=float).reshape(1, -1)
+        live_view._write_to_display_buffer(values)
+        self.assertEqual(live_view._channel_buffer_positions[0], cap)
+        self.assertEqual(live_view._channel_cycle_starts[0], 0.0)
+
+        # Ein weiterer echter Wertwechsel loest den Umbruch aus.
+        live_view._write_to_display_buffer(np.array([[999.0]]))
+        self.assertAlmostEqual(live_view._channel_cycle_starts[0], cap / 14.0)
+        self.assertAlmostEqual(live_view._channel_cycle_starts[0], temp.plot_time_window_seconds)
+        self.assertEqual(live_view._channel_buffer_positions[0], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

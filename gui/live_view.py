@@ -998,6 +998,15 @@ class LiveView(QWidget):
         self._channels: list[Channel] = []
         self._sample_rate_hz: float = 1.0
         self._rate_groups: list[RateGroup] = []
+        # Native Abtastrate je Kanal-Index (Hz) - EINMAL in `start_display`
+        # aus `rate_groups` abgeleitet (nicht pro Tick neu). Fuer die
+        # meisten Kanaele == `self._sample_rate_hz` (dieselbe schnelle
+        # Ratengruppe); nur ein Kanal mit hardwareseitig fixer,
+        # abweichender Rate (z. B. NI9210 @ 14 S/s) bekommt hier einen
+        # eigenen, kleineren Wert - treibt die Sweep-Puffergroesse/
+        # -Fuellrate fuer genau diesen Kanal (siehe
+        # `_channel_display_capacity`/`_write_to_display_buffer`).
+        self._channel_native_rates: dict[int, float] = {}
         self._display_window_seconds = _DEFAULT_DISPLAY_WINDOW_SECONDS
 
         # Sweep-Anzeigepuffer für den AKTUELLEN Durchlauf (Oszilloskop-Art:
@@ -1010,6 +1019,14 @@ class LiveView(QWidget):
         self._display_capacity_samples: int = 0
         self._buffer_write_pos: int = 0
         self._channel_buffer_positions: dict[int, int] = {}
+        # Zuletzt tatsaechlich in den Sweep-Puffer GESCHRIEBENER Wert je
+        # Kanal - nur fuer Kanaele mit eigener, langsamerer nativer Rate
+        # gebraucht, um ZOH-Wiederholungen ueber mehrere Ticks hinweg
+        # korrekt zu erkennen (ein einzelner Block kann mitten in einer
+        # laufenden Wiederholungsfolge beginnen). `None` = noch kein
+        # Sample geschrieben (erste Zeile zaehlt dann immer als neu,
+        # analog `analysis/basic_analysis.py::native_samples`).
+        self._channel_last_written_value: dict[int, float | None] = {}
         # Absolute Messzeit (Sekunden seit Messstart), bei der der AKTUELLE
         # Durchlauf des jeweiligen Kanals begonnen hat - die
         # Achsenbeschriftung soll die echte Messzeit zeigen (z. B. "40-45s"
@@ -1285,14 +1302,41 @@ class LiveView(QWidget):
                 (siehe `data/models.py::TriggerConfig`). `None` entspricht
                 einer leeren Konfiguration (kein Trigger).
             rate_groups: Aufgeloeste Ratengruppen dieser Messung (siehe
-                `resolve_rate_groups`), NUR fuer die textuelle Anzeige im
-                Raten-Label (`_sample_rate_label`) - beeinflusst NICHT
-                `sample_rate_hz`/die Anzeige-Mathematik. `None`/eine
-                einzelne Gruppe zeigt weiterhin nur die einfache Rate.
+                `resolve_rate_groups`). Treibt zwei unabhaengige Dinge:
+                (1) weiterhin die textuelle Anzeige im Raten-Label
+                (`_sample_rate_label`, siehe
+                `_format_sample_rate_label_value`) und (2) die native
+                Rate je Kanal (siehe `_channel_native_rates`, direkt
+                unten aufgebaut) - ein Kanal mit einer von der Tick-Rate
+                abweichenden festen Rate (z. B. NI9210 @ 14 S/s) bekommt
+                seinen Sweep-Anzeigepuffer damit an SEINER eigenen,
+                echten Datenrate bemessen/gefuellt statt an der viel
+                schnelleren ZOH-Tick-Rate `sample_rate_hz` (siehe
+                `_write_to_display_buffer` - sonst kostet das
+                Downsampling pro Tick ein Vielfaches). `None`/eine
+                einzelne Gruppe -> alle Kanaele bekommen `sample_rate_hz`
+                als native Rate, unveraendertes Verhalten wie zuvor.
         """
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
         self._rate_groups = rate_groups or []
+        # Native Rate je Kanal-Index, EINMAL hier abgeleitet (nicht pro
+        # Tick neu, siehe `_write_to_display_buffer`) - exakt derselbe
+        # Aufbau wie `data/metadata.py::build_measurement_metadata`s
+        # `rate_by_hw_channel` (Schluessel bewusst `hardware_channel`,
+        # NICHT Objektidentitaet/`==` auf `Channel` - der ist ein
+        # mutable Dataclass, dessen Felder anderswo live veraendert
+        # werden). Fallback `sample_rate_hz`: Kanaele ohne eigene feste
+        # Rate (Regelfall) laufen an der Tick-Rate selbst.
+        rate_by_hw_channel = {
+            channel.hardware_channel: group.resolved_sample_rate_hz
+            for group in self._rate_groups
+            for channel in group.channels
+        }
+        self._channel_native_rates = {
+            index: rate_by_hw_channel.get(channel.hardware_channel, sample_rate_hz)
+            for index, channel in enumerate(channels)
+        }
         self._reader_id = self._controller.register_reader()
 
         self._trigger_config = trigger_config or TriggerConfig()
@@ -1317,6 +1361,7 @@ class LiveView(QWidget):
         self._channel_buffer_positions = {index: 0 for index in range(len(channels))}
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
+        self._channel_last_written_value = {index: None for index in range(len(channels))}
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -1516,6 +1561,7 @@ class LiveView(QWidget):
             self._controller.unregister_reader(self._reader_id)
             self._reader_id = None
         self._rate_groups = []
+        self._channel_native_rates = {}
         logger.info("Live View gestoppt")
 
     def retranslate_ui(self) -> None:
@@ -2482,13 +2528,36 @@ class LiveView(QWidget):
                 x_min, x_min + channel.plot_time_window_seconds, padding=0
             )
 
+    @staticmethod
+    def _capacity_for_rate(rate_hz: float, window_seconds: float) -> int:
+        """Sample-Anzahl fuer EIN Sweep-Fenster bei gegebener Rate - gemeinsame
+        Rundungslogik fuer `_ensure_display_buffer` und
+        `_channel_display_capacity`."""
+        return max(1, int(rate_hz * window_seconds))
+
     def _ensure_display_buffer(self, num_channels: int) -> None:
-        """Initialisiert oder passt den internen Sweep-Anzeigepuffer an."""
-        max_window = max(
-            [channel.plot_time_window_seconds for channel in self._channels],
-            default=self._display_window_seconds,
+        """Initialisiert oder passt den internen Sweep-Anzeigepuffer an.
+
+        EIN gemeinsames Array fuer alle Kanaele - die Spaltenzahl ist die
+        GROESSTE von einem einzelnen Kanal benoetigte Kapazitaet
+        (eigene native Rate * `plot_time_window_seconds`, siehe
+        `_channel_native_rates`), NICHT mehr pauschal
+        `self._sample_rate_hz * groesstes Fenster` - ein Kanal mit
+        eigener, langsamerer nativer Rate (z. B. NI9210 @ 14 S/s) braucht
+        dafuer deutlich weniger Spalten als vorher (siehe
+        `_write_to_display_buffer`, dessen Kosten mit der Puffer-
+        Fuellposition skalieren, nicht nur mit der Kapazitaet).
+        """
+        capacity = max(
+            (
+                self._capacity_for_rate(
+                    self._channel_native_rates.get(index, self._sample_rate_hz),
+                    channel.plot_time_window_seconds,
+                )
+                for index, channel in enumerate(self._channels)
+            ),
+            default=self._capacity_for_rate(self._sample_rate_hz, self._display_window_seconds),
         )
-        capacity = max(1, int(self._sample_rate_hz * max_window))
         if self._display_buffer is None or self._display_buffer.shape != (num_channels, capacity):
             self._display_capacity_samples = capacity
             self._display_buffer = np.zeros((num_channels, capacity), dtype=np.float64)
@@ -2496,21 +2565,43 @@ class LiveView(QWidget):
 
     def _channel_display_capacity(self, channel_index: int) -> int:
         """Maximale Sample-Anzahl EINES Sweep-Durchlaufs für `channel_index`
-        (Abtastrate * konfigurierte Zeitspanne, gedeckelt auf die
+        (EIGENE native Rate * konfigurierte Zeitspanne, gedeckelt auf die
         tatsächlich allokierte Puffergröße) - gemeinsam genutzt von
         `_write_to_display_buffer` (Umbruchpunkt des Ringpuffers) UND
         `_downsample_for_display` (siehe dort, wieso das für einen
-        stabilen Downsampling-Faktor wichtig ist)."""
+        stabilen Downsampling-Faktor - EIN fester Wert pro Zyklus - wichtig
+        ist; `_channel_native_rates` aendert sich waehrend einer laufenden
+        Messung nicht, der Rueckgabewert bleibt also weiterhin stabil).
+        Nutzt die Rate aus `_channel_native_rates` statt der globalen
+        Tick-Rate `self._sample_rate_hz` - bei einem Kanal mit eigener,
+        langsamerer nativer Rate waere die Kapazitaet sonst um den
+        Faktor Tick-Rate/native Rate zu gross."""
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
         return max(
             1,
             min(
                 self._display_capacity_samples,
-                int(
-                    self._sample_rate_hz
-                    * self._channels[channel_index].plot_time_window_seconds
+                self._capacity_for_rate(
+                    native_rate, self._channels[channel_index].plot_time_window_seconds
                 ),
             ),
         )
+
+    @staticmethod
+    def _filter_zoh_repeats(row: np.ndarray, last_value: float | None) -> np.ndarray:
+        """Filtert aus `row` reine ZOH-Wiederholungen des zuletzt
+        GESCHRIEBENEN Werts heraus - nur echte Wertwechsel bleiben uebrig.
+        `last_value` ist der zuletzt tatsaechlich geschriebene Wert (aus
+        einem FRUEHEREN Aufruf), `None` falls noch kein Sample geschrieben
+        wurde - die allererste Zeile zaehlt dann immer als neu (analog zu
+        `analysis/basic_analysis.py::native_samples`, das den jeweils
+        ERSTEN Wert einer Wiederholungsfolge behaelt)."""
+        if row.shape[0] == 0:
+            return row
+        keep = np.empty(row.shape[0], dtype=bool)
+        keep[0] = last_value is None or row[0] != last_value
+        keep[1:] = row[1:] != row[:-1]
+        return row[keep]
 
     def _write_to_display_buffer(self, scaled_block: np.ndarray) -> None:
         """Schreibt neue Samples in den Sweep-Puffer (siehe Klassendoc oben).
@@ -2522,23 +2613,50 @@ class LiveView(QWidget):
         klassischen Ringpuffer) langsam am linken Rand herauszuscrollen.
         Eine Schleife statt Rekursion, falls ein einzelner Block (nach
         einer GUI-Verzögerung) sogar mehr als ein volles Fenster enthält.
+
+        Kanäle mit einer von der Tick-Rate abweichenden, langsameren
+        nativen Rate (siehe `_channel_native_rates`, z. B. NI9210 @
+        14 S/s) kommen in `scaled_block` ZOH-vorwärtsgefüllt an (siehe
+        `core/rate_merge.py`) - jede Zeile bis zum nächsten echten
+        Hardware-Sample wiederholt denselben Wert. Nur echte Wertwechsel
+        sind neue Samples (dasselbe Prinzip wie
+        `analysis/basic_analysis.py::native_samples`, hier live/
+        strömend statt post-hoc auf einer Datei angewendet - der zuletzt
+        GESCHRIEBENE Wert muss dafür über mehrere Ticks hinweg gemerkt
+        werden, siehe `_channel_last_written_value`, da ein einzelner
+        Block mitten in einer laufenden Wiederholungsfolge beginnen
+        kann). Ein Kanal an der Tick-Rate selbst (der Regelfall)
+        durchläuft diesen Filter NICHT (strukturelle Unterscheidung
+        anhand der nativen Rate, NICHT anhand einer Wertegleichheit zur
+        Laufzeit - ein echter, schneller Kanal kann legitim zwei gleiche
+        Messwerte hintereinander liefern).
         """
         if self._display_buffer is None:
             return
         for channel_index in range(scaled_block.shape[0]):
+            native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
+            row = scaled_block[channel_index]
+            if native_rate < self._sample_rate_hz:
+                last_value = self._channel_last_written_value.get(channel_index)
+                new_data = self._filter_zoh_repeats(row, last_value)
+                if new_data.size:
+                    self._channel_last_written_value[channel_index] = float(new_data[-1])
+            else:
+                new_data = row
+
             cap = self._channel_display_capacity(channel_index)
             pos = self._channel_buffer_positions.get(channel_index, 0)
             start = 0
-            while start < scaled_block.shape[1]:
+            while start < new_data.shape[0]:
                 if pos >= cap:
                     pos = 0
                     self._channel_cycle_starts[channel_index] = (
                         self._channel_cycle_starts.get(channel_index, 0.0)
-                        + cap / self._sample_rate_hz
+                        + cap / native_rate
                     )
-                take = min(cap - pos, scaled_block.shape[1] - start)
-                self._display_buffer[channel_index, pos:pos + take] = scaled_block[
-                    channel_index, start:start + take
+                take = min(cap - pos, new_data.shape[0] - start)
+                self._display_buffer[channel_index, pos:pos + take] = new_data[
+                    start:start + take
                 ]
                 pos += take
                 start += take
@@ -2570,6 +2688,14 @@ class LiveView(QWidget):
         Reiz-Reaktions-Test (Klopftest auf einen Beschleunigungssensor)
         war das inakzeptabel: Latenz ist fuer ein Live-Messinstrument
         wichtiger als Anzeige-Glaette.
+
+        Die Zeitachse nutzt die native Rate des Kanals
+        (`_channel_native_rates`) statt der globalen Tick-Rate
+        `self._sample_rate_hz` - fuer einen Kanal mit eigener,
+        langsamerer nativer Rate waechst `position` (siehe
+        `_write_to_display_buffer`) nicht im Tick-Rate-Takt, ein Slot
+        entspraeche mit der globalen Rate also einer falschen (zu
+        kurzen) Zeitspanne.
         """
         if self._display_buffer is None:
             return np.array([]), np.empty((0,))
@@ -2577,7 +2703,8 @@ class LiveView(QWidget):
         if position == 0:
             return np.array([]), np.empty((0,))
         values = self._display_buffer[channel_index, :position]
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
         times = self._channel_cycle_starts.get(channel_index, 0.0) + (
-            np.arange(position) / self._sample_rate_hz
+            np.arange(position) / native_rate
         )
         return times, values
