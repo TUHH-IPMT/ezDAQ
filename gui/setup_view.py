@@ -56,6 +56,7 @@ from data.models import (
     max_ni9213_sample_rate_hz,
     next_ni9234_sample_rate_at_or_above,
     ni9213_device_groups,
+    resolve_rate_groups,
 )
 from gui.i18n import connect_language_changed, t
 from gui.theme import (
@@ -247,6 +248,17 @@ class SetupView(QWidget):
             configuration_manager.settings.default_sample_rate_hz
         )
         self._measurement_layout.addRow(f"{t('sample_rate_hz')}:", self._sample_rate_spin)
+
+        # Nicht-blockierende Vorschau der tatsaechlich pro Ratengruppe
+        # verwendeten Abtastrate (siehe `_update_resolved_rate_preview`) -
+        # bleibt leer/unsichtbar im Regelfall (genau eine Gruppe), zeigt
+        # sich erst, wenn z. B. ein NI9210 eine eigene Gruppe erzwingt.
+        # Anders als bei DIAdem/NI-MAX wird die abweichende Ist-Rate hier
+        # also sichtbar zurueckgemeldet statt still zu kappen.
+        self._resolved_rate_preview_label = QLabel()
+        self._resolved_rate_preview_label.setWordWrap(True)
+        self._measurement_layout.addRow("", self._resolved_rate_preview_label)
+        self._sample_rate_spin.valueChanged.connect(self._update_resolved_rate_preview)
 
         measurement_row = QHBoxLayout()
         measurement_row.addWidget(self._measurement_group, stretch=1)
@@ -448,6 +460,7 @@ class SetupView(QWidget):
         last_channels = configuration_manager.load_channel_configuration()
         if last_channels:
             self._channel_table.set_channels(last_channels)
+        self._update_resolved_rate_preview()
 
         connect_language_changed(self.retranslate_ui)
         connect_theme_changed(self._retheme_start_button_icons)
@@ -497,6 +510,7 @@ class SetupView(QWidget):
         self._naming_time_checkbox.setText(t("naming_include_time"))
 
         self._channel_table.retranslate_ui()
+        self._update_resolved_rate_preview()
 
     def get_naming_scheme(self) -> NamingScheme:
         """Gibt das aktuell in der UI eingestellte Namensschema zurück.
@@ -792,10 +806,25 @@ class SetupView(QWidget):
                 )
                 return None
 
+        active_channels = [ch for ch in channels if ch.enabled]
+        # Ring-Buffer-Groesse/Blockgroesse muessen sich an der
+        # TATSAECHLICHEN Tick-Rate orientieren (= schnellste Ratengruppe),
+        # nicht an der rohen Zielrate: bei einem alleinstehenden NI9210
+        # z. B. ist die Zielrate irrelevant (immer 14 S/s) - mit der
+        # rohen Zielrate berechnete Blockgroessen waeren dort viel zu
+        # gross und liessen den ersten Lesezyklus in ein Timeout laufen.
+        try:
+            rate_groups = resolve_rate_groups(active_channels, sample_rate)
+            effective_tick_rate = max(
+                (g.resolved_sample_rate_hz for g in rate_groups), default=sample_rate
+            )
+        except ValueError:
+            effective_tick_rate = sample_rate
+
         ring_buffer_size = self._calculate_dynamic_buffer_size(
-            sample_rate, len([ch for ch in channels if ch.enabled])
+            effective_tick_rate, len(active_channels)
         )
-        samples_per_read = self._calculate_samples_per_read(sample_rate)
+        samples_per_read = self._calculate_samples_per_read(effective_tick_rate)
 
         return MeasurementConfig(
             name=name,
@@ -836,6 +865,7 @@ class SetupView(QWidget):
         self._populate_recording_stop_unit_combo(config.recording_stop_unit.value)
         self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
         self._channel_table.set_channels(config.channels)
+        self._update_resolved_rate_preview()
         # config.trigger wird NICHT hier übernommen - `gui/main_window.py`
         # liest es direkt aus dem geladenen `MeasurementConfig` und setzt
         # es als seine eigene `_trigger_config` (siehe `_on_load_config`).
@@ -952,6 +982,44 @@ class SetupView(QWidget):
                 margins.right(),
                 4,
             )
+
+    def _update_resolved_rate_preview(self) -> None:
+        """Aktualisiert die nicht-blockierende Ratengruppen-Vorschau.
+
+        Bewusst tolerant: ein `ValueError` (z. B. gerade eine ungueltige
+        NI9234-Rate waehrend der Eingabe) wird hier verschluckt und die
+        Vorschau einfach geleert - `build_current_config()` bleibt die
+        einzige verbindliche Validierung (beim Start/Aufnehmen), diese
+        Vorschau ist reine Zusatzinformation.
+        """
+        active_channels = [ch for ch in self._channel_table.get_channels() if ch.enabled]
+        sample_rate = self._sample_rate_spin.value()
+        try:
+            rate_groups = resolve_rate_groups(active_channels, sample_rate)
+        except ValueError:
+            self._resolved_rate_preview_label.setText("")
+            return
+
+        if len(rate_groups) <= 1:
+            # Regelfall: genau eine Gruppe, Zielrate == tatsaechliche
+            # Rate - keine Zusatzinfo noetig, Label bleibt leer/unsichtbar.
+            self._resolved_rate_preview_label.setText("")
+            return
+
+        parts = []
+        for group in rate_groups:
+            if group.reason == "Zielrate":
+                parts.append(t("resolved_rate_preview_target", rate=f"{group.resolved_sample_rate_hz:.1f}"))
+            else:
+                module_names = sorted({ch.module_type.value for ch in group.channels})
+                parts.append(
+                    t(
+                        "resolved_rate_preview_fixed",
+                        modules="/".join(module_names),
+                        rate=f"{group.resolved_sample_rate_hz:.1f}",
+                    )
+                )
+        self._resolved_rate_preview_label.setText(" · ".join(parts))
 
     def _calculate_samples_per_read(self, sample_rate_hz: float) -> int:
         """Berechnet eine adaptive Blockgroesse pro DAQ-Read.

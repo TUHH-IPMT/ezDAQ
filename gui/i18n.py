@@ -120,6 +120,8 @@ _translations = {
             "Timing-Modus \"{mode}\") unterstützt bei dieser Kanalzahl "
             "maximal {max_rate} S/s."
         ),
+        "resolved_rate_preview_target": "Zielrate: {rate} S/s",
+        "resolved_rate_preview_fixed": "{modules} (fest): {rate} S/s",
         "error_channel_missing_hw_channel": (
             "Folgende(r) aktive Kanal/Kanäle hat/haben noch keinen Hardwarekanal "
             "zugewiesen: {names}. Bitte über \"Kanal zuweisen...\" einen echten "
@@ -514,6 +516,8 @@ _translations = {
             "\"{mode}\") supports a maximum of {max_rate} S/s at this "
             "channel count."
         ),
+        "resolved_rate_preview_target": "Target rate: {rate} S/s",
+        "resolved_rate_preview_fixed": "{modules} (fixed): {rate} S/s",
         "error_channel_missing_hw_channel": (
             "The following active channel(s) have no hardware channel assigned "
             "yet: {names}. Please use \"Assign channel...\" to pick a real "

@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from data.models import Channel, DeviceInfo, MeasurementSession, StorageFormat
+from data.models import Channel, DeviceInfo, MeasurementSession, StorageFormat, resolve_rate_groups
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +49,54 @@ def build_measurement_metadata(
             (z. B. `controller.active_device_infos`).
     """
     config = session.config
+    # Ratengruppen aus der Konfiguration ableiten (siehe
+    # `data/models.py::resolve_rate_groups`) - rein informativ fuer die
+    # Metadaten, beeinflusst die Messung selbst nicht mehr (das ist
+    # bereits beim Start in `core/controller.py::start_measurement`
+    # passiert). "sample_rate_hz" behaelt seine bisherige Bedeutung: die
+    # TATSAECHLICHE Tick-Rate der gespeicherten Datei (= schnellste
+    # Gruppe), NICHT zwangslaeufig die vom Nutzer eingestellte Zielrate -
+    # das ist die Rate, mit der `data/exporter.py::StorageWriter` die
+    # `time_s`-Spalte berechnet hat, also exakt das, was
+    # `gui/analysis_view.py::_resolve_sample_rate()` als Fallback braucht.
+    rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+    tick_rate_hz = max(
+        (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
+    )
+    rate_by_hw_channel = {
+        ch.hardware_channel: group.resolved_sample_rate_hz
+        for group in rate_groups
+        for ch in group.channels
+    }
+
+    channels_meta = []
+    for ch in config.active_channels():
+        channel_dict = ch.to_dict()
+        # Native Rate je Kanal (kann von "sample_rate_hz" abweichen, z. B.
+        # beim NI9210: 14 S/s eigene Rate trotz schnellerer Tick-Rate der
+        # Datei) - Grundlage fuer rate-bewusste FFT/Filter in
+        # `analysis/basic_analysis.py`, die auf einem forward-gefuellten
+        # Kanal sonst faelschlich wiederholte Werte als echte neue Samples
+        # behandeln wuerden.
+        channel_dict["native_sample_rate_hz"] = rate_by_hw_channel.get(
+            ch.hardware_channel, tick_rate_hz
+        )
+        channels_meta.append(channel_dict)
+
     return {
         "measurement_name": config.name,
         "start_time": session.start_time.isoformat() if session.start_time else None,
         "end_time": session.end_time.isoformat() if session.end_time else None,
         "duration_seconds": session.duration_seconds,
-        "sample_rate_hz": config.sample_rate_hz,
+        "sample_rate_hz": tick_rate_hz,
+        "target_sample_rate_hz": config.sample_rate_hz,
+        "rate_groups": [
+            {
+                "resolved_sample_rate_hz": group.resolved_sample_rate_hz,
+                "channel_hardware_ids": [ch.hardware_channel for ch in group.channels],
+            }
+            for group in rate_groups
+        ],
         "samples_per_read": config.samples_per_read,
         "storage_format": config.storage_format.value,
         "hardware": [
@@ -66,7 +108,7 @@ def build_measurement_metadata(
             }
             for d in device_infos
         ],
-        "channels": [ch.to_dict() for ch in config.active_channels()],
+        "channels": channels_meta,
     }
 
 

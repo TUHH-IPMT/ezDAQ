@@ -57,6 +57,7 @@ from data.models import (
     StorageFormat,
     TriggerConfig,
     TriggerKind,
+    resolve_rate_groups,
 )
 from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
@@ -774,6 +775,17 @@ class MainWindow(QMainWindow):
             [c.hardware_channel for c in self._controller.active_channels],
         )
 
+        # Tatsaechliche Tick-Rate des Ring Buffers (= schnellste
+        # Ratengruppe, siehe data/models.py::resolve_rate_groups) statt
+        # der rohen Zielrate - weicht nur ab, wenn z. B. ein NI9210 eine
+        # eigene Gruppe erzwingt hat. StorageWriter/LiveView muessen die
+        # ECHTE Tick-Rate kennen, sonst waere die gespeicherte
+        # time_s-Spalte falsch skaliert.
+        rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+        effective_tick_rate_hz = max(
+            (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
+        )
+
         self._configuration_manager.update_last_measurement_parameters(
             measurement_name=requested_measurement_name,
             sample_rate_hz=config.sample_rate_hz,
@@ -799,7 +811,7 @@ class MainWindow(QMainWindow):
                     channels=self._controller.active_channels,
                     output_path=data_path,
                     storage_format=config.storage_format,
-                    sample_rate_hz=config.sample_rate_hz,
+                    sample_rate_hz=effective_tick_rate_hz,
                 )
                 self._storage_writer.start()
             else:
@@ -807,9 +819,10 @@ class MainWindow(QMainWindow):
             self._recording_started = True
             self._live_view.start_display(
                 self._controller.active_channels,
-                config.sample_rate_hz,
+                effective_tick_rate_hz,
                 storage_writer=self._storage_writer,
                 trigger_config=config.trigger,
+                rate_groups=rate_groups,
             )
             # Nullpunkt fuer ein evtl. konfiguriertes Aufnahme-Limit UND
             # Reset des Stopp-Trigger-Flankendetektors (siehe
@@ -829,9 +842,10 @@ class MainWindow(QMainWindow):
         self._storage_writer = None
         self._live_view.start_display(
             self._controller.active_channels,
-            config.sample_rate_hz,
+            effective_tick_rate_hz,
             storage_writer=None,
             trigger_config=config.trigger,
+            rate_groups=rate_groups,
         )
         self._live_view.enter_armed_state()
 
@@ -881,10 +895,18 @@ class MainWindow(QMainWindow):
         if session is None or self._recording_started:
             return
         config = session.config
+        # Tatsaechliche Tick-Rate des Ring Buffers (siehe Kommentar in
+        # `_on_start_measurement`) - der Vorlauf-Sample-Versatz UND die
+        # gespeicherte time_s-Spalte muessen sich daran orientieren, nicht
+        # an der rohen Zielrate.
+        rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+        effective_tick_rate_hz = max(
+            (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
+        )
 
         back_samples = 0
         if config.trigger.start.kind == TriggerKind.THRESHOLD:
-            back_samples = round(config.trigger.pretrigger_seconds * config.sample_rate_hz)
+            back_samples = round(config.trigger.pretrigger_seconds * effective_tick_rate_hz)
 
         total_now = self._controller.total_samples_acquired
         ring_buffer = self._controller.get_ring_buffer()
@@ -905,7 +927,7 @@ class MainWindow(QMainWindow):
                 channels=self._controller.active_channels,
                 output_path=data_path,
                 storage_format=config.storage_format,
-                sample_rate_hz=config.sample_rate_hz,
+                sample_rate_hz=effective_tick_rate_hz,
                 reader_back_samples=back_samples,
             )
             self._storage_writer.start()

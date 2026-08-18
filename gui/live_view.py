@@ -86,7 +86,7 @@ from PyQt6.QtWidgets import (
 from core.controller import MeasurementController
 from core.measurement import apply_scaling
 from data.exporter import StorageWriter
-from data.models import Channel, TriggerConfig, TriggerDirection, TriggerKind
+from data.models import Channel, RateGroup, TriggerConfig, TriggerDirection, TriggerKind
 from gui.i18n import connect_language_changed, get_language, t
 from gui.theme import (
     PLAY_ICON_COLOR,
@@ -997,6 +997,7 @@ class LiveView(QWidget):
         self._reader_id: int | None = None
         self._channels: list[Channel] = []
         self._sample_rate_hz: float = 1.0
+        self._rate_groups: list[RateGroup] = []
         self._display_window_seconds = _DEFAULT_DISPLAY_WINDOW_SECONDS
 
         # Sweep-Anzeigepuffer für den AKTUELLEN Durchlauf (Oszilloskop-Art:
@@ -1256,6 +1257,7 @@ class LiveView(QWidget):
         sample_rate_hz: float,
         storage_writer: StorageWriter | None = None,
         trigger_config: TriggerConfig | None = None,
+        rate_groups: list[RateGroup] | None = None,
     ) -> None:
         """Beginnt die Live-Anzeige für eine neu gestartete Messung.
 
@@ -1271,15 +1273,26 @@ class LiveView(QWidget):
         (Start- und Stopp-Seite) und setzt beide Flankendetektoren zurueck.
 
         Args:
+            sample_rate_hz: Die TATSAECHLICHE Tick-Rate des Ring Buffers
+                (= schnellste Ratengruppe, siehe
+                `data/models.py::resolve_rate_groups`) - NICHT
+                zwangslaeufig die vom Nutzer eingestellte Zielrate. Treibt
+                die gesamte Anzeigepuffer-/X-Achsen-Mathematik unten.
             storage_writer: Der `StorageWriter` der laufenden Messung, falls
                 gespeichert wird. `None` bei "Nur Live anzeigen" - dann
                 bleibt die Speicherpuffer-Anzeige ausgeblendet.
             trigger_config: Aktuelle Start-/Stopp-Trigger-Konfiguration
                 (siehe `data/models.py::TriggerConfig`). `None` entspricht
                 einer leeren Konfiguration (kein Trigger).
+            rate_groups: Aufgeloeste Ratengruppen dieser Messung (siehe
+                `resolve_rate_groups`), NUR fuer die textuelle Anzeige im
+                Raten-Label (`_sample_rate_label`) - beeinflusst NICHT
+                `sample_rate_hz`/die Anzeige-Mathematik. `None`/eine
+                einzelne Gruppe zeigt weiterhin nur die einfache Rate.
         """
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
+        self._rate_groups = rate_groups or []
         self._reader_id = self._controller.register_reader()
 
         self._trigger_config = trigger_config or TriggerConfig()
@@ -1311,6 +1324,28 @@ class LiveView(QWidget):
         logger.info(
             "Live View gestartet für %d Kanäle bei %.1f Hz", len(channels), sample_rate_hz
         )
+
+    def _format_sample_rate_label_value(self) -> str:
+        """Baut den Anzeigetext fuer `_sample_rate_label`.
+
+        Regelfall (`self._rate_groups` leer oder genau eine Gruppe): nur
+        die einfache Rate, wie bisher. Bei mehreren Gruppen (aktueller
+        Ratenkonflikt, z. B. NI9210 + schnelleres Modul) wird zusaetzlich
+        angezeigt, mit welcher Rate die langsamere(n) Gruppe(n)
+        tatsaechlich laufen - anders als bei DIAdem/NI-MAX bleibt die
+        Abweichung von der Zielrate hier sichtbar statt still zu kappen.
+        """
+        if len(self._rate_groups) <= 1:
+            return f"{self._sample_rate_hz:.1f} Hz"
+
+        fast_group = max(self._rate_groups, key=lambda g: g.resolved_sample_rate_hz)
+        extra_parts = []
+        for group in self._rate_groups:
+            if group is fast_group:
+                continue
+            module_names = "/".join(sorted({ch.module_type.value for ch in group.channels}))
+            extra_parts.append(f"{module_names} @ {group.resolved_sample_rate_hz:.1f} Hz")
+        return f"{fast_group.resolved_sample_rate_hz:.1f} Hz (+ {', '.join(extra_parts)})"
 
     def attach_storage_writer(self, storage_writer: StorageWriter | None) -> None:
         """Setzt (oder entfernt) den StorageWriter der laufenden Messung.
@@ -1480,6 +1515,7 @@ class LiveView(QWidget):
         if self._reader_id is not None:
             self._controller.unregister_reader(self._reader_id)
             self._reader_id = None
+        self._rate_groups = []
         logger.info("Live View gestoppt")
 
     def retranslate_ui(self) -> None:
@@ -2350,7 +2386,7 @@ class LiveView(QWidget):
                 self.stop_requested.emit()
                 return
         self._sample_rate_label.setText(
-            t("sample_rate_value", value=f"{self._sample_rate_hz:.1f} Hz")
+            t("sample_rate_value", value=self._format_sample_rate_label_value())
         )
 
         max_display_samples = int(self._sample_rate_hz * self._display_window_seconds)

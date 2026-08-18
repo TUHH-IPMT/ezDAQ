@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,10 +18,13 @@ from core.measurement import (
     device_name_from_hw_channel,
 )
 from core.measurement import MeasurementConfigError
+from data.metadata import build_measurement_metadata
 from data.models import (
     Channel,
     MeasurementConfig,
+    MeasurementSession,
     ModuleType,
+    RateGroup,
     TriggerCondition,
     TriggerConfig,
     TriggerDirection,
@@ -216,6 +220,29 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(groups[0].resolved_sample_rate_hz, target_rate)
         self.assertEqual(groups[1].resolved_sample_rate_hz, 14.0)
 
+    def test_metadata_reflects_actual_tick_rate_and_native_rate_per_channel(self) -> None:
+        # Phase B: Metadaten muessen die TATSAECHLICHE Tick-Rate (nicht
+        # die rohe Zielrate) unter "sample_rate_hz" fuehren, da
+        # StorageWriter die time_s-Spalte damit berechnet - sowie die
+        # aufgeloesten Ratengruppen und die native Rate je Kanal.
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
+            Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
+        ]
+        target_rate = 51_200.0 / 31
+        config = MeasurementConfig("Mixed rates", target_rate, channels=channels)
+        session = MeasurementSession(config=config, start_time=datetime.now())
+
+        metadata = build_measurement_metadata(session, device_infos=[])
+
+        self.assertEqual(metadata["sample_rate_hz"], target_rate)
+        self.assertEqual(metadata["target_sample_rate_hz"], target_rate)
+        self.assertEqual(len(metadata["rate_groups"]), 2)
+
+        native_rates = {ch["hardware_channel"]: ch["native_sample_rate_hz"] for ch in metadata["channels"]}
+        self.assertEqual(native_rates["cDAQ1Mod1/ai0"], 14.0)
+        self.assertEqual(native_rates["cDAQ1Mod2/ai0"], target_rate)
+
     def test_ni9210_combined_with_invalid_ni9234_rate_still_raises(self) -> None:
         # Intrinsische Ratenverstoesse (hier: NI9234-Raster) bleiben
         # weiterhin Fehler - unabhaengig davon, ob zusaetzlich ein NI9210
@@ -369,6 +396,31 @@ class LiveViewStopTriggerTests(unittest.TestCase):
 
         self.assertEqual(live_view._recording_baseline_samples, 42)
         self.assertEqual(live_view.stop_requested.count, 0)
+
+    def test_sample_rate_label_shows_plain_rate_for_single_group(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        live_view._sample_rate_hz = 1651.6129032258063
+        live_view._rate_groups = []
+
+        self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz")
+
+    def test_sample_rate_label_shows_fixed_group_rate_for_multiple_groups(self) -> None:
+        live_view = LiveView.__new__(LiveView)
+        live_view._sample_rate_hz = 1651.6129032258063
+        live_view._rate_groups = [
+            RateGroup(
+                channels=[Channel("cDAQ1Mod1/ai0", "Vib", module_type=ModuleType.NI9234)],
+                resolved_sample_rate_hz=1651.6129032258063,
+                reason="Zielrate",
+            ),
+            RateGroup(
+                channels=[Channel("cDAQ1Mod2/ai0", "Temp", module_type=ModuleType.NI9210)],
+                resolved_sample_rate_hz=14.0,
+                reason="NI9210 (feste 14.0 S/s)",
+            ),
+        ]
+
+        self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz (+ NI9210 @ 14.0 Hz)")
 
 
 if __name__ == "__main__":
