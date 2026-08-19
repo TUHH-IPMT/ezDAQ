@@ -592,6 +592,16 @@ class SetupView(QWidget):
         wählbar sind und welches Modul zu welchem Kanal gehört, ist durch
         die tatsächlich angeschlossene Hardware vorgegeben (siehe
         `gui/widgets/channel_table.py::set_available_devices`).
+
+        Meldet zusätzlich per Dialog, falls unter den erkannten Geräten
+        welche mit einem NICHT unterstützten Modultyp sind (`DeviceInfo.
+        module_type is None`, siehe `hardware/nidaq_device.py::
+        _map_product_type`) - bei JEDER Geräteaktualisierung neu geprüft,
+        damit ein neu angeschlossenes, (noch) nicht unterstütztes Modul
+        nicht unbemerkt bleibt. Deren Kanäle sind in der Kanaltabelle
+        bereits nicht auswählbar (siehe
+        `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) - die
+        Meldung hier macht zusätzlich sichtbar, WARUM/WELCHE.
         """
         self._device_list.clear()
         devices_with_channels = [d for d in devices if d.num_channels > 0]
@@ -600,8 +610,13 @@ class SetupView(QWidget):
         if not devices_with_channels:
             self._device_list.addTopLevelItem(QTreeWidgetItem([t("no_devices_found")]))
             return
+        unsupported_devices: list[DeviceInfo] = []
         for device in devices_with_channels:
-            module_info = f" [{device.module_type.value}]" if device.module_type else ""
+            if device.module_type is None:
+                unsupported_devices.append(device)
+                module_info = f" [{t('device_module_unsupported')}]"
+            else:
+                module_info = f" [{device.module_type.value}]"
             device_item = QTreeWidgetItem(
                 [
                     f"{device.device_name} - {device.product_type}{module_info} "
@@ -618,6 +633,16 @@ class SetupView(QWidget):
         # mehreren Modulen mit jeweils vielen Kanälen deutlich Platz. Der
         # Nutzer klappt ein Gerät bei Bedarf einzeln auf.
         self._device_list.collapseAll()
+
+        if unsupported_devices:
+            module_list = "\n".join(
+                f"- {d.device_name} ({d.product_type})" for d in unsupported_devices
+            )
+            QMessageBox.warning(
+                self,
+                t("unsupported_modules_title"),
+                t("unsupported_modules_body", modules=module_list),
+            )
 
     def show_discovery_error(self, message: str) -> None:
         """Zeigt einen fehlgeschlagenen Geräteerkennungsversuch (z. B.

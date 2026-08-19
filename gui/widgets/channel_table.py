@@ -133,7 +133,15 @@ class HardwareChannelPickerDialog(QDialog):
     gruppierte Baumansicht übersichtlicher als eine lange, flache Liste.
     Kanäle, die bereits einer ANDEREN Zeile zugeordnet sind, werden
     angezeigt, aber deaktiviert (nicht auswählbar) - derselbe physische
-    Kanal darf nicht doppelt vergeben werden.
+    Kanal darf nicht doppelt vergeben werden. Ebenso deaktiviert (und
+    IMMER, auch wenn `current_channel` zufällig auf so ein Modul zeigt):
+    Kanäle eines Geräts, dessen Modultyp `hardware/nidaq_device.py::
+    _map_product_type` nicht erkennt (`DeviceInfo.module_type is None`) -
+    ohne bekannten Modultyp gäbe es keine passende Hardware-Geräteklasse
+    (siehe `core/measurement.py::_DEVICE_CLASSES`), eine Auswahl würde
+    beim Messstart fehlschlagen oder (schlimmer) über den bisherigen
+    NI9215-Fallback in `_apply_device_constraint` still falsch
+    konfiguriert.
     """
 
     def __init__(
@@ -172,7 +180,12 @@ class HardwareChannelPickerDialog(QDialog):
 
         selected_item: QTreeWidgetItem | None = None
         for device in devices:
-            module_info = f" [{device.module_type.value}]" if device.module_type else ""
+            is_unsupported_module = device.module_type is None
+            module_info = (
+                f" [{t('device_module_unsupported')}]"
+                if is_unsupported_module
+                else f" [{device.module_type.value}]"
+            )
             device_item = QTreeWidgetItem([f"{device.device_name} - {device.product_type}{module_info}"])
             device_item.setFlags(device_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             channels = device.physical_channels or [
@@ -180,10 +193,15 @@ class HardwareChannelPickerDialog(QDialog):
             ]
             for channel in channels:
                 is_used = channel in used_channels and channel != current_channel
-                label = t("hw_channel_already_used", channel=channel) if is_used else channel
+                if is_unsupported_module:
+                    label = t("hw_channel_unsupported_module", channel=channel)
+                elif is_used:
+                    label = t("hw_channel_already_used", channel=channel)
+                else:
+                    label = channel
                 channel_item = QTreeWidgetItem([label])
                 channel_item.setData(0, _ROLE_CHANNEL_VALUE, channel)
-                if is_used:
+                if is_used or is_unsupported_module:
                     channel_item.setFlags(
                         channel_item.flags()
                         & ~Qt.ItemFlag.ItemIsEnabled
@@ -1010,6 +1028,14 @@ class ChannelTableWidget(QWidget):
         Eine leere Liste (keine Geräteerkennung erfolgt/keine Hardware
         gefunden) zeigt im Auswahldialog nur einen entsprechenden Hinweis
         an (siehe `HardwareChannelPickerDialog`) - kein Freitextfeld mehr.
+
+        Geräte mit unbekanntem Modultyp (`DeviceInfo.module_type is None`,
+        siehe `hardware/nidaq_device.py::_map_product_type`) werden zwar im
+        Auswahldialog weiterhin ANGEZEIGT (dort aber deaktiviert, siehe
+        `HardwareChannelPickerDialog`), fließen aber NICHT in
+        `_available_hw_channels` ein - deren Kanäle sollen nie automatisch
+        als Vorgabe für eine neue Zeile herangezogen werden (siehe
+        `_on_add_clicked`).
         """
         self._available_devices = devices or []
         self._hw_channel_to_module = {}
@@ -1018,8 +1044,8 @@ class ChannelTableWidget(QWidget):
             channels = device.physical_channels or [
                 f"{device.device_name}/ai{i}" for i in range(device.num_channels)
             ]
-            self._available_hw_channels.extend(channels)
             if device.module_type is not None:
+                self._available_hw_channels.extend(channels)
                 for hw_channel in channels:
                     self._hw_channel_to_module[hw_channel] = device.module_type
         self._apply_available_hw_channels_to_rows()

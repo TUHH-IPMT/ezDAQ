@@ -327,6 +327,13 @@ _translations = {
             "\"Angeschlossene Geräte\" auf \"Geräte suchen\" klicken."
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
+        "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
+        "device_module_unsupported": "nicht unterstützt",
+        "unsupported_modules_title": "Nicht unterstützte Module",
+        "unsupported_modules_body": (
+            "Die folgenden Module werden derzeit nicht unterstützt und können "
+            "keinem Kanal zugewiesen werden:\n\n{modules}"
+        ),
         "no_hw_channel_available": "Kein freier Hardwarekanal mehr verfügbar.",
         "all_channels_assigned_title": "Alle Kanäle belegt",
         "all_channels_assigned_body": (
@@ -734,6 +741,13 @@ _translations = {
             "the \"Connected Devices\" section first."
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
+        "hw_channel_unsupported_module": "{channel} (module not supported)",
+        "device_module_unsupported": "not supported",
+        "unsupported_modules_title": "Unsupported Modules",
+        "unsupported_modules_body": (
+            "The following modules are currently not supported and cannot be "
+            "assigned to a channel:\n\n{modules}"
+        ),
         "no_hw_channel_available": "No free hardware channel available.",
         "all_channels_assigned_title": "All Channels Assigned",
         "all_channels_assigned_body": (
