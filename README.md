@@ -62,7 +62,7 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Persistent application settings (window geometry, last-used
   hardware/channels, language, theme)
 - Measurements can also be run entirely without the GUI from a Python
-  script (`core/measurement_runner.py`, see `doc/messung_per_skript.md`)
+  script (`core/measurement_runner.py`, see `doc/measurement_via_script.md`)
 
 ## Architecture
 

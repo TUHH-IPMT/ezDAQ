@@ -1,5 +1,7 @@
 # Messung per Python-Skript steuern
 
+*[English version](measurement_via_script.md)*
+
 `MeasurementController` + `MeasurementRunner` lassen sich ohne GUI direkt aus
 einem eigenen Skript verwenden. `MeasurementRunner` übernimmt dabei
 automatisch das Speichern (falls die Konfiguration das vorsieht) inklusive
