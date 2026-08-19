@@ -602,9 +602,21 @@ class SetupView(QWidget):
         bereits nicht auswählbar (siehe
         `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) - die
         Meldung hier macht zusätzlich sichtbar, WARUM/WELCHE.
+
+        Der Filter unten verwendet bewusst `d.has_any_channels` ZUSÄTZLICH
+        zu `d.num_channels > 0`, NICHT nur Letzteres: `num_channels` zählt
+        ausschließlich Analogeingangs-Kanäle (die einzige von dieser App
+        unterstützte Kanalart) - ein reines Analogausgangsmodul wie das
+        NI9263 hätte damit `num_channels == 0`, genau wie ein leerer
+        Chassis-Controller-Eintrag ohne jegliche Kanäle. Ohne
+        `has_any_channels` (siehe `DeviceInfo`) würde ein solches, real
+        angeschlossenes, aber nicht unterstütztes Modul hier fälschlich
+        wie "keine Hardware" behandelt und weder angezeigt noch gemeldet.
         """
         self._device_list.clear()
-        devices_with_channels = [d for d in devices if d.num_channels > 0]
+        devices_with_channels = [
+            d for d in devices if d.num_channels > 0 or d.has_any_channels
+        ]
         self._discovered_devices = devices_with_channels
         self._channel_table.set_available_devices(devices_with_channels)
         if not devices_with_channels:

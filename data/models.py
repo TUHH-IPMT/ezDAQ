@@ -960,13 +960,30 @@ class DeviceInfo:
         device_name: Von nidaqmx vergebener Gerätename, z. B. "cDAQ1Mod1".
         product_type: Produktbezeichnung, z. B. "NI 9215".
         module_type: Zugeordneter ModuleType, falls vom System unterstützt.
-        num_channels: Anzahl physisch verfügbarer Kanäle auf dem Modul.
+        num_channels: Anzahl physisch verfügbarer ANALOGER EINGANGS-Kanäle
+            auf dem Modul (diese App unterstützt aktuell ausschließlich
+            Analogeingang) - 0 auch bei einem real vorhandenen Modul, das
+            nur andere Kanaltypen hat (z. B. ein reines Analogausgangs-
+            modul wie das NI9263). Siehe `has_any_channels`, um SOLCHE
+            Module trotzdem von einem leeren Chassis-Eintrag ohne jegliche
+            Kanäle zu unterscheiden.
+        has_any_channels: Ob das Gerät IRGENDEINEN Kanal hat - Analogein-/
+            -ausgang, Digitalein-/-ausgang oder Zähler, unabhängig davon,
+            ob diese App den jeweiligen Kanaltyp unterstützt. Ein reiner
+            Chassis-Controller-Eintrag (z. B. "cDAQ1", ohne eigene Kanäle)
+            hat `False`; ein eingestecktes Modul - auch ein von dieser App
+            (noch) nicht unterstütztes wie ein reines AO-Modul - hat
+            `True`. Wird verwendet, um solche Module trotz `num_channels
+            == 0` als "erkannt, aber nicht unterstützt" zu melden statt
+            sie wie einen leeren Chassis-Eintrag stillschweigend
+            auszublenden (siehe `gui/setup_view.py::set_discovered_devices`).
     """
 
     device_name: str
     product_type: str
     module_type: Optional[ModuleType] = None
     num_channels: int = 0
+    has_any_channels: bool = False
     # Liste der physischen Kanalnamen, z. B. ["cDAQ1Mod1/ai0", ...]
     physical_channels: list[str] = field(default_factory=list)
 

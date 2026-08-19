@@ -688,12 +688,16 @@ class MainWindow(QMainWindow):
         self._discovery_worker = None
         self._setup_view.set_discovery_in_progress(False)
         self._setup_view.set_discovered_devices(devices)
-        # Nur Geräte MIT Kanälen zählen (dieselbe Filterung wie
-        # `SetupView.set_discovered_devices`) - `System.local().devices`
+        # Nur Geräte MIT Analogeingangs-Kanälen zählen - `System.local().devices`
         # liefert sonst auch reine Chassis-Einträge ohne eigene Kanäle
         # (z. B. "cDAQ9185-0217ED5E" zusätzlich zu dessen Modulen
         # "...Mod1"/"...Mod2") mit, was die Anzahl gegenüber der tatsächlich
-        # nutzbaren Hardware künstlich aufbläht.
+        # nutzbaren Hardware künstlich aufbläht. Bewusst ENGER als der
+        # Filter in `SetupView.set_discovered_devices` (der zusätzlich
+        # `has_any_channels` zulässt, um auch nicht unterstützte
+        # Nicht-AI-Module wie das NI9263 anzuzeigen/zu melden) - hier
+        # zählt explizit nur, was diese App tatsächlich als Kanal
+        # konfigurieren kann.
         usable_devices = [d for d in devices if d.num_channels > 0]
         self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
 

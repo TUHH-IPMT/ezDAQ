@@ -120,6 +120,7 @@ def discover_devices() -> list[DeviceInfo]:
                     product_type=device.product_type,
                     module_type=module_type,
                     num_channels=num_channels,
+                    has_any_channels=_has_any_channels(device),
                     physical_channels=phys_chs,
                 )
             )
@@ -205,6 +206,38 @@ def _map_product_type(product_type: str) -> Optional[ModuleType]:
         if module_type.value in normalized:
             return module_type
     return None
+
+
+def _has_any_channels(device: "nidaqmx.system.Device") -> bool:
+    """Prüft, ob `device` IRGENDEINEN Kanal hat - Analogein-/-ausgang,
+    Digitalein-/-ausgang oder Zähler.
+
+    Diese App unterstützt aktuell ausschließlich Analogeingang (siehe
+    `DeviceInfo.num_channels`, das bewusst nur `ai_physical_chans` zählt) -
+    ein reines Analogausgangsmodul wie das NI9263 hätte damit `num_channels
+    == 0`, genau wie ein leerer Chassis-Controller-Eintrag ohne jegliche
+    Kanäle. Ohne diese separate, kanaltyp-übergreifende Prüfung würde ein
+    physisch vorhandenes, aber (noch) nicht unterstütztes Nicht-AI-Modul
+    beim Filtern auf "hat Kanäle" (siehe
+    `gui/setup_view.py::set_discovered_devices`) mit einem leeren
+    Chassis-Eintrag verwechselt und dadurch fälschlich stillschweigend
+    ausgeblendet - siehe `DeviceInfo.has_any_channels`.
+    """
+    channel_lists = (
+        "ai_physical_chans",
+        "ao_physical_chans",
+        "di_lines",
+        "do_lines",
+        "ci_physical_chans",
+        "co_physical_chans",
+    )
+    for attr_name in channel_lists:
+        try:
+            if len(getattr(device, attr_name)) > 0:
+                return True
+        except DaqmxError:
+            continue
+    return False
 
 
 class NIDAQSharedTask:
