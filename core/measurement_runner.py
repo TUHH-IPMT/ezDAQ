@@ -1,19 +1,18 @@
 """
 core/measurement_runner.py
 
-`MeasurementRunner`: Komfort-Wrapper um `MeasurementController` für
-Skript-/Automatisierungs-Gebrauch (siehe `doku/messung_per_skript.md`).
+`MeasurementRunner`: convenience wrapper around `MeasurementController`
+for script/automation use (see `doku/messung_per_skript.md`).
 
-Hintergrund:
-    `MeasurementController` kümmert sich bewusst NUR um Hardware und
-    Ring Buffer (siehe `core/controller.py`) - das Anlegen/Starten/Stoppen
-    eines `StorageWriter` sowie das Schreiben der Metadaten-Datei ist in
-    der GUI Aufgabe von `gui/main_window.py`. Für ein eigenständiges
-    Skript wäre das dieselbe Handarbeit noch einmal - `MeasurementConfig`
-    (`save_to_disk`, `storage_format`) sagt aber bereits vollständig aus,
-    OB und WIE gespeichert werden soll. `MeasurementRunner` zieht genau
-    diese Orchestrierung heraus, damit ein Skript nur noch `start()`/
-    `stop()` aufrufen muss.
+Background:
+    `MeasurementController` deliberately takes care of ONLY hardware and
+    the ring buffer (see `core/controller.py`) - creating/starting/
+    stopping a `StorageWriter` as well as writing the metadata file is
+    the GUI's job in `gui/main_window.py`. For a standalone script that
+    would be the same manual work all over again - but `MeasurementConfig`
+    (`save_to_disk`, `storage_format`) already fully states WHETHER and
+    HOW to store the data. `MeasurementRunner` extracts exactly that
+    orchestration, so a script only has to call `start()`/`stop()`.
 """
 
 from __future__ import annotations
@@ -34,12 +33,12 @@ logger = logging.getLogger(__name__)
 
 
 class MeasurementRunner:
-    """Startet/stoppt eine Messung inklusive automatischer Datenspeicherung
-    und optionaler Live-Anzeige.
+    """Starts/stops a measurement including automatic data storage and
+    optional live display.
 
-    Entspricht dem, was `gui/main_window.py` bei "Messung starten"/
-    "Messung stoppen" tut - nur ohne GUI-Abhängigkeit, für den Gebrauch
-    aus einem eigenen Python-Skript.
+    Corresponds to what `gui/main_window.py` does on "Start Measurement"/
+    "Stop Measurement" - just without a GUI dependency, for use from a
+    standalone Python script.
     """
 
     def __init__(
@@ -48,17 +47,18 @@ class MeasurementRunner:
         storage_dir: Optional[Path] = None,
         live_view: Optional["LiveView"] = None,
     ) -> None:
-        """Initialisiert den Runner.
+        """Initializes the runner.
 
         Args:
-            controller: Ein (noch nicht gestarteter) `MeasurementController`.
-            storage_dir: Zielverzeichnis für Messdaten- und Metadaten-Datei.
-                Nur erforderlich, wenn Konfigurationen mit
-                `save_to_disk=True` gestartet werden sollen.
-            live_view: Optionales, bereits erzeugtes `LiveView`-Fenster. Wenn
-                gesetzt, schalten `start()`/`stop()` dessen Anzeige
-                automatisch mit ein/aus - kein eigener Aufruf von
-                `live_view.start_display()`/`.stop_display()` mehr nötig.
+            controller: A (not yet started) `MeasurementController`.
+            storage_dir: Target directory for the measurement data and
+                metadata file. Only required if configurations with
+                `save_to_disk=True` are to be started.
+            live_view: Optional, already-created `LiveView` window. If
+                set, `start()`/`stop()` automatically switch its display
+                on/off - no separate call to
+                `live_view.start_display()`/`.stop_display()` needed
+                anymore.
         """
         self._controller = controller
         self._storage_dir = storage_dir
@@ -67,13 +67,13 @@ class MeasurementRunner:
 
     @property
     def storage_writer(self) -> Optional[StorageWriter]:
-        """Der `StorageWriter` der laufenden Messung, oder None (kein
-        Speichern aktiv oder keine Messung gestartet)."""
+        """The `StorageWriter` of the running measurement, or None (no
+        storage active or no measurement started)."""
         return self._storage_writer
 
     @property
     def live_view(self) -> Optional["LiveView"]:
-        """Das mit dem Runner verknüpfte `LiveView`-Fenster, oder None."""
+        """The `LiveView` window associated with the runner, or None."""
         return self._live_view
 
     @live_view.setter
@@ -85,20 +85,20 @@ class MeasurementRunner:
         config: MeasurementConfig,
         discovered_devices: Optional[list[DeviceInfo]] = None,
     ) -> MeasurementSession:
-        """Startet eine Messung und - falls `config.save_to_disk` gesetzt
-        ist - automatisch den passenden `StorageWriter`.
+        """Starts a measurement and - if `config.save_to_disk` is set -
+        automatically the matching `StorageWriter`.
 
         Args:
-            config: Vollständige Messkonfiguration.
-            discovered_devices: Siehe `MeasurementController.start_measurement`.
+            config: Complete measurement configuration.
+            discovered_devices: See `MeasurementController.start_measurement`.
 
         Returns:
-            Die gestartete `MeasurementSession`.
+            The started `MeasurementSession`.
 
         Raises:
-            ValueError: falls `config.save_to_disk=True`, aber kein
-                `storage_dir` im Konstruktor angegeben wurde.
-            MeasurementConfigError, AcquisitionError, RuntimeError: siehe
+            ValueError: if `config.save_to_disk=True` but no
+                `storage_dir` was given in the constructor.
+            MeasurementConfigError, AcquisitionError, RuntimeError: see
                 `MeasurementController.start_measurement`.
         """
         if config.save_to_disk and self._storage_dir is None:
@@ -132,27 +132,27 @@ class MeasurementRunner:
         return session
 
     def stop(self, write_metadata: bool = True) -> Optional[MeasurementSession]:
-        """Stoppt die laufende Messung inklusive `StorageWriter`.
+        """Stops the running measurement including the `StorageWriter`.
 
-        Reihenfolge bewusst so gewählt (siehe `doku/messung_per_skript.md`):
-        zuerst der Controller (garantiert keine neuen Daten mehr im Ring
-        Buffer), erst danach der `StorageWriter` (kann den Rest gefahrlos
-        flushen) - andernfalls könnten die letzten Samples verloren gehen.
+        Order deliberately chosen this way (see `doku/messung_per_skript.md`):
+        the controller first (guarantees no more new data in the ring
+        buffer), only then the `StorageWriter` (can safely flush the
+        rest) - otherwise the last samples could be lost.
 
         Args:
-            write_metadata: Ob zusätzlich eine `{name}_info.json` mit
-                Mess-Metadaten geschrieben werden soll (nur relevant, wenn
-                tatsächlich gespeichert wurde).
+            write_metadata: Whether to additionally write a
+                `{name}_info.json` with measurement metadata (only
+                relevant if data was actually stored).
 
         Returns:
-            Die abgeschlossene `MeasurementSession`, oder None, falls keine
-            Messung lief.
+            The completed `MeasurementSession`, or None if no measurement
+            was running.
         """
-        # WICHTIG: `active_device_infos` VOR `stop_measurement()` auslesen.
-        # `MeasurementController._stop_measurement_locked()` leert die
-        # interne Geräteliste, bevor es zurückkehrt - danach ausgelesen
-        # wäre `active_device_infos` immer `[]` und die Metadaten-Datei
-        # würde nie echte Hardwareinformationen enthalten.
+        # IMPORTANT: read `active_device_infos` BEFORE `stop_measurement()`.
+        # `MeasurementController._stop_measurement_locked()` clears the
+        # internal device list before it returns - if read afterward,
+        # `active_device_infos` would always be `[]` and the metadata
+        # file would never contain real hardware information.
         device_infos = self._controller.active_device_infos
         session = self._controller.stop_measurement()
 

@@ -1,12 +1,12 @@
 """
 tests/test_rate_groups.py
 
-Reine Python/Dataclass-Tests fuer die Raster-Ratenlogik in
-`data/models.py` - insbesondere die Generalisierung von
-`resolve_rate_groups()` auf mehrere gleichzeitig vorhandene
-Raster-Modultypen (NI9234 + NI9235). Braucht bewusst KEIN
-`QApplication`/Qt, da `resolve_rate_groups()`/`Channel` reine
-Python-Logik ohne GUI-Abhaengigkeit sind.
+Pure Python/dataclass tests for the grid rate logic in
+`data/models.py` - specifically the generalization of
+`resolve_rate_groups()` to multiple grid-constrained module types
+present at the same time (NI9234 + NI9235). Deliberately does NOT
+need a `QApplication`/Qt, since `resolve_rate_groups()`/`Channel`
+are pure Python logic with no GUI dependency.
 """
 
 from __future__ import annotations
@@ -42,9 +42,9 @@ def _ni9215_channel(name: str = "Free") -> Channel:
 
 
 class Ni9234RegressionTests(unittest.TestCase):
-    """Verhalten fuer einen alleinstehenden NI9234 muss sich durch die
-    Generalisierung auf ein gemeinsames Raster-Grid-Konzept NICHT aendern -
-    inklusive der Randwerte n=1 (Maximalrate) und n=31 (Minimalrate)."""
+    """Behavior for a standalone NI9234 must NOT change due to the
+    generalization to a shared grid-rate concept - including the
+    boundary values n=1 (maximum rate) and n=31 (minimum rate)."""
 
     def test_valid_rate_at_n_equals_1_resolves_unchanged(self) -> None:
         groups = resolve_rate_groups([_ni9234_channel()], NI9234_BASE_SAMPLE_RATE_HZ)
@@ -63,7 +63,7 @@ class Ni9234RegressionTests(unittest.TestCase):
 
 
 class Ni9235GridTests(unittest.TestCase):
-    """Rastermathematik des NI9235 (fs = 50000 Hz / n, n = 5..63)."""
+    """Grid math for the NI9235 (fs = 50000 Hz / n, n = 5..63)."""
 
     def test_max_rate_at_n_equals_5(self) -> None:
         groups = resolve_rate_groups([_ni9235_channel()], NI9235_BASE_SAMPLE_RATE_HZ / 5)
@@ -77,22 +77,22 @@ class Ni9235GridTests(unittest.TestCase):
         self.assertAlmostEqual(groups[0].resolved_sample_rate_hz, rate, places=2)
 
     def test_invalid_intermediate_rate_raises_with_ni9235_specific_message(self) -> None:
-        # 9000 Hz liegt zwischen den gueltigen Werten fuer n=5 (10000) und
-        # n=6 (8333,3) - kein gueltiger NI9235-Rasterwert.
+        # 9000 Hz lies between the valid values for n=5 (10000) and
+        # n=6 (8333.3) - not a valid NI9235 grid value.
         with self.assertRaisesRegex(ValueError, "50000 Hz / n"):
             resolve_rate_groups([_ni9235_channel()], 9000.0)
 
 
 class MixedGridModuleTests(unittest.TestCase):
-    """NI9234 und NI9235 GLEICHZEITIG in einer Messung - die beiden Raster
-    ueberschneiden sich rechnerisch nie (128*n2 = 125*n1, teilerfremd,
-    kleinste Loesung n1=128 liegt ausserhalb 1..31), muessen also IMMER in
-    getrennte Ratengruppen aufgeteilt werden, OHNE Fehler."""
+    """NI9234 and NI9235 SIMULTANEOUSLY in one measurement - the two grids
+    never overlap mathematically (128*n2 = 125*n1, coprime, smallest
+    solution n1=128 lies outside 1..31), so they must ALWAYS be split into
+    separate rate groups, WITHOUT an error."""
 
     def test_mixed_modules_split_into_two_groups_without_error(self) -> None:
-        # Ziel ist eine EXAKT gueltige NI9234-Rate (n=10) - fuer das
-        # NI9235-Raster liegt dieselbe Zielrate nicht annaehernd nahe an
-        # einem gueltigen Wert (Naechstgelegenes: n=10 -> 5000.0 Hz).
+        # Target is an EXACTLY valid NI9234 rate (n=10) - for the NI9235
+        # grid, the same target rate is nowhere near a valid value
+        # (closest: n=10 -> 5000.0 Hz).
         target_rate = NI9234_BASE_SAMPLE_RATE_HZ / 10  # 5120.0 Hz
         ni9234_ch = _ni9234_channel()
         ni9235_ch = _ni9235_channel()
@@ -108,10 +108,10 @@ class MixedGridModuleTests(unittest.TestCase):
         self.assertEqual(by_rate[5000.0], [ni9235_ch])
 
     def test_free_module_joins_group_closest_to_raw_target(self) -> None:
-        # NI9215 hat kein eigenes Rasterlimit - bei einem Konflikt
-        # zwischen NI9234 (-> 5120.0, Abstand 0.0) und NI9235
-        # (-> 5000.0, Abstand 120.0) zur rohen Zielrate 5120.0 Hz landet
-        # der freie Kanal in der NAEHEREN Gruppe (NI9234, exakter Treffer).
+        # NI9215 has no grid limit of its own - given a conflict between
+        # NI9234 (-> 5120.0, distance 0.0) and NI9235 (-> 5000.0, distance
+        # 120.0) relative to the raw target rate of 5120.0 Hz, the free
+        # channel ends up in the CLOSER group (NI9234, exact match).
         target_rate = NI9234_BASE_SAMPLE_RATE_HZ / 10  # 5120.0 Hz
         ni9234_ch = _ni9234_channel()
         ni9235_ch = _ni9235_channel()
@@ -125,19 +125,19 @@ class MixedGridModuleTests(unittest.TestCase):
         self.assertNotIn(free_ch, by_rate[5000.0])
 
     def test_mixed_modules_at_a_rate_valid_for_neither_grid_does_not_raise(self) -> None:
-        # Wichtigster Regressionsschutz fuer die Generalisierung: anders
-        # als im Ein-Modul-Fall darf eine Zielrate, die fuer KEINES der
-        # beiden Raster exakt gueltig ist, bei >=2 gleichzeitig vorhandenen
-        # Rastermodulen KEINEN Fehler auslösen - jedes Modul bekommt
-        # einfach seine eigene naechstgelegene erreichbare Rate (exakt wie
-        # beim bestehenden NI9210-Fixed-Rate-Fall).
+        # Most important regression protection for the generalization:
+        # unlike the single-module case, a target rate that is not exactly
+        # valid for EITHER grid must NOT raise an error when >=2 grid-
+        # constrained modules are present at the same time - each module
+        # simply gets its own closest achievable rate (exactly like the
+        # existing NI9210 fixed-rate case).
         groups = resolve_rate_groups([_ni9234_channel(), _ni9235_channel()], 1000.0)
         self.assertEqual(len(groups), 2)
 
 
 class ChannelStrainFieldsSerializationTests(unittest.TestCase):
-    """`Channel.to_dict()`/`from_dict()`-Rundreise fuer die drei neuen
-    NI9235-Felder."""
+    """`Channel.to_dict()`/`from_dict()` round trip for the three new
+    NI9235 fields."""
 
     def test_round_trip_preserves_strain_fields(self) -> None:
         channel = Channel(

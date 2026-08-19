@@ -1,19 +1,19 @@
 """
 gui/serial_trigger.py
 
-Hintergrund-Lauscher für den seriellen (USB-)Mess-Trigger.
+Background listener for the serial (USB) measurement trigger.
 
-Anders als `gui/workers.py::BackgroundWorker` (bewusst als kurzlebiger
-Einzelauftrag dokumentiert) ist dieser `QThread` LANGE laufend: er wartet
-u. U. minutenlang auf ein bestimmtes Signal vom konfigurierten COM-Port,
-bevor er entweder auslöst oder vom Nutzer abgebrochen wird (siehe
+Unlike `gui/workers.py::BackgroundWorker` (deliberately documented as a
+short-lived, one-off job), this `QThread` runs for a LONG time: it may
+wait for minutes for a specific signal from the configured COM port
+before either triggering or being canceled by the user (see
 `gui/main_window.py::_on_start_measurement`/`_on_stop_measurement`).
 
-Lebt bewusst unter `gui/` statt unter `hardware/`: `hardware/nidaq_device.py`
-dokumentiert sich explizit als "EINZIGE Stelle der Anwendung, die nidaqmx
-direkt importiert" - der serielle Trigger hat mit NI-DAQmx nichts zu tun,
-und anders als dort gibt es hier keinen bestehenden Layering-Präzedenzfall,
-der GUI-seitige Qt-Threads verbieten würde.
+Deliberately lives under `gui/` rather than `hardware/`:
+`hardware/nidaq_device.py` explicitly documents itself as the "ONLY
+place in the application that imports nidaqmx directly" - the serial
+trigger has nothing to do with NI-DAQmx, and unlike there, no existing
+layering precedent here would forbid GUI-side Qt threads.
 """
 
 from __future__ import annotations
@@ -29,33 +29,34 @@ logger = logging.getLogger(__name__)
 
 
 class SerialTriggerListener(QThread):
-    """Wartet auf einem seriellen Port auf ein exaktes Byte-/Text-Signal.
+    """Waits on a serial port for an exact byte/text signal.
 
-    Liest fortlaufend vom konfigurierten COM-Port und vergleicht die
-    zuletzt empfangenen Bytes (gleitendes Fenster, siehe `run()`) gegen
-    `expected_message` - erst ein exakter Treffer löst aus (kein beliebiges
-    Byte). Das Fenster funktioniert auch, wenn die Nachricht über mehrere
-    `read()`-Aufrufe verteilt eintrifft.
+    Continuously reads from the configured COM port and compares the
+    most recently received bytes (sliding window, see `run()`) against
+    `expected_message` - only an exact match triggers (not just any
+    byte). The window also works when the message arrives split across
+    multiple `read()` calls.
 
-    WICHTIG: Der Vergleich findet erst statt, wenn ein `read()` KEINE neuen
-    Bytes mehr liefert (kurze Sendepause) - nicht bei jedem einzelnen
-    eintreffenden Byte. Ohne diese Pause würde eine LÄNGERE tatsächlich
-    gesendete Nachricht bereits vorzeitig auslösen, sobald zufällig ihr
-    Präfix mit `expected_message` übereinstimmt (z. B. löst
-    `expected_message = b"TRIGGE"` sonst schon aus, sobald die ersten 6 der
-    7 Bytes von "TRIGGER" angekommen sind - noch bevor das "R" eintrifft).
+    IMPORTANT: The comparison only happens once a `read()` returns NO
+    more new bytes (a brief pause in transmission) - not on every single
+    incoming byte. Without this pause, a LONGER, actually-sent message
+    would trigger prematurely as soon as its prefix happens to match
+    `expected_message` (e.g. `expected_message = b"TRIGGE"` would
+    otherwise already trigger as soon as the first 6 of the 7 bytes of
+    "TRIGGER" have arrived - before the "R" even arrives).
 
-    Diese Sendepause IST die dominante Latenzquelle bis zum Auslösen -
-    `read_timeout_seconds` wird direkt als Timeout von `serial.Serial()`
-    verwendet, d. h. `run()` wartet nach dem letzten empfangenen Byte genau
-    so lange auf weitere Bytes, bevor der Vergleich (und ggf. das Auslösen)
-    stattfindet. Die Standardwerte sind bewusst knapp gewählt (deutlich
-    unter der Byte-Übertragungszeit selbst einer langsamen Baudrate), damit
-    das Auslösen so nah wie möglich am tatsächlichen physischen Signal
-    liegt, ohne die Präfix-Erkennung oben zu gefährden.
+    This transmission pause IS the dominant source of latency until
+    triggering - `read_timeout_seconds` is used directly as the timeout
+    of `serial.Serial()`, i.e. `run()` waits exactly that long for
+    further bytes after the last one received, before the comparison
+    (and possibly the trigger) happens. The default values are chosen
+    deliberately tight (well below the byte transmission time of even a
+    slow baud rate), so that triggering stays as close as possible to
+    the actual physical signal without jeopardizing the prefix detection
+    described above.
 
-    Der Aufrufer MUSS eine Referenz halten, bis der Thread beendet ist
-    (siehe `BackgroundWorker`-Doku) - `gui/main_window.py` hält sie in
+    The caller MUST hold a reference until the thread has finished (see
+    `BackgroundWorker` docs) - `gui/main_window.py` holds it in
     `self._serial_listener`.
     """
 
@@ -80,10 +81,10 @@ class SerialTriggerListener(QThread):
         self._stop_event = threading.Event()
 
     def stop(self) -> None:
-        """Signalisiert dem Thread zu stoppen und wartet auf dessen Ende.
+        """Signals the thread to stop and waits for it to finish.
 
-        Idempotent: kann auch aufgerufen werden, wenn der Thread bereits
-        (z. B. nach einem Treffer oder Verbindungsfehler) beendet ist.
+        Idempotent: can also be called if the thread has already
+        finished (e.g. after a match or a connection error).
         """
         self._stop_event.set()
         self.wait(2000)
@@ -97,15 +98,16 @@ class SerialTriggerListener(QThread):
                     if chunk:
                         self.data_received.emit(bytes(chunk))
                         buffer.extend(chunk)
-                        # Gleitendes Fenster: nur die zuletzt empfangenen
-                        # len(expected_message) Bytes behalten - erlaubt
-                        # beliebige Bytes davor/dazwischen sowie eine über
-                        # mehrere Reads verteilt eintreffende Nachricht.
+                        # Sliding window: keep only the most recently
+                        # received len(expected_message) bytes - allows
+                        # arbitrary bytes before/between as well as a
+                        # message arriving split across multiple reads.
                         if len(buffer) > len(self._expected_message):
                             del buffer[: len(buffer) - len(self._expected_message)]
-                        # NICHT hier vergleichen: es koennten noch weitere
-                        # Bytes derselben Nachricht unterwegs sein (siehe
-                        # Klassendoc) - erst nach einer Sendepause unten.
+                        # Do NOT compare here: further bytes of the same
+                        # message could still be on their way (see class
+                        # docstring) - only after a transmission pause,
+                        # below.
                         continue
 
                     if self._expected_message and buffer and bytes(buffer) == self._expected_message:

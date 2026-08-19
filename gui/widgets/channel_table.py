@@ -1,11 +1,11 @@
 """
 gui/widgets/channel_table.py
 
-Wiederverwendbares Tabellen-Widget zur Bearbeitung einer Kanalkonfiguration.
+Reusable table widget for editing a channel configuration.
 
-Wird von `gui/setup_view.py` verwendet. Kapselt die Umwandlung zwischen
-`data.models.Channel`-Objekten und den einzelnen Zellen-Widgets
-(Checkbox, Textfelder, Comboboxen, Spinboxen).
+Used by `gui/setup_view.py`. Encapsulates the conversion between
+`data.models.Channel` objects and the individual cell widgets (checkbox,
+text fields, combo boxes, spin boxes).
 """
 
 from __future__ import annotations
@@ -66,18 +66,18 @@ _COLUMN_KEYS = [
     "col_parameters",
 ]
 
-# Erkennt den Modul-Teil eines Geräte-/Kanalnamens, z. B. "Mod2" in
-# "cDAQ9185-0217ED5EMod2". Der vorangestellte Chassis-Teil (oft eine lange
-# Seriennummer wie "cDAQ9185-0217ED5E") ist für die Unterscheidung der
-# Kanäle irrelevant - relevant ist nur, welches Modul/welcher Kanal
-# gemeint ist (siehe `_short_hw_channel_text`).
+# Detects the module part of a device/channel name, e.g. "Mod2" in
+# "cDAQ9185-0217ED5EMod2". The chassis part in front (often a long serial
+# number like "cDAQ9185-0217ED5E") is irrelevant for distinguishing
+# channels - only which module/channel is meant matters (see
+# `_short_hw_channel_text`).
 _MODULE_SUFFIX_PATTERN = re.compile(r"Mod\d+")
 
-# Welche Signaltypen ein Modul hardwareseitig unterstützt (siehe
-# `hardware/ni9215.py`/`hardware/ni9234.py`/`hardware/ni9235.py`, die
-# jeweils den falschen Signaltyp mit einem `AcquisitionError` ablehnen).
-# Die Kanaltabelle schränkt die Signaltyp-Auswahl pro Zeile entsprechend
-# ein, statt den Fehler erst beim Messstart auftreten zu lassen.
+# Which signal types a module supports at the hardware level (see
+# `hardware/ni9215.py`/`hardware/ni9234.py`/`hardware/ni9235.py`, each of
+# which rejects the wrong signal type with an `AcquisitionError`). The
+# channel table restricts the signal type selection per row accordingly,
+# instead of letting the error only surface when the measurement starts.
 _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
     ModuleType.NI9215: [SignalType.VOLTAGE],
     ModuleType.NI9234: [SignalType.VOLTAGE, SignalType.IEPE_ACCELERATION],
@@ -86,13 +86,13 @@ _MODULE_SIGNAL_TYPES: dict[ModuleType, list[SignalType]] = {
     ModuleType.NI9235: [SignalType.STRAIN],
 }
 
-# Übersetzte Anzeige-Labels für den Signaltyp-Auswahldialog/-Button. Der
-# eigentliche Wert (Channel.signal_type.value, z. B. "voltage") bleibt
-# unabhängig von der UI-Sprache stabil (Persistenz/Hardware-Vergleiche) -
-# er wird als Button-Property "signal_type" hinterlegt, siehe
-# `_create_signal_type_widget`. Bewusst OHNE Unterstrich-Präfix: wird auch
-# von `gui/sensor_database_dialog.py` importiert, um dieselbe
-# Übersetzungstabelle nicht zu duplizieren.
+# Translated display labels for the signal type selection dialog/button.
+# The actual value (Channel.signal_type.value, e.g. "voltage") stays
+# stable independent of the UI language (persistence/hardware
+# comparisons) - it is stored as the button property "signal_type", see
+# `_create_signal_type_widget`. Deliberately WITHOUT an underscore prefix:
+# also imported by `gui/sensor_database_dialog.py` so the same translation
+# table doesn't have to be duplicated.
 SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.VOLTAGE: "signal_type_voltage",
     SignalType.IEPE_ACCELERATION: "signal_type_iepe",
@@ -100,16 +100,17 @@ SIGNAL_TYPE_LABEL_KEYS: dict[SignalType, str] = {
     SignalType.STRAIN: "signal_type_strain",
 }
 
-# Übersetzte Anzeige-Labels je ADC-Timing-Modus (siehe
-# `data/models.py::ADC_TIMING_MODES`) - NUR beim NI9213 verfügbar (siehe
+# Translated display labels per ADC timing mode (see
+# `data/models.py::ADC_TIMING_MODES`) - available ONLY on the NI9213 (see
 # `ChannelParameterDialog`).
 _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
     "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
     "HIGH_SPEED": "adc_timing_mode_high_speed",
 }
 
-# Übersetzte Anzeige-Labels je NI9235-Viertelbrücken-Variante (siehe
-# `data/models.py::NI9235_BRIDGE_TYPES`) - analog `_ADC_TIMING_MODE_LABEL_KEYS`.
+# Translated display labels per NI9235 quarter-bridge variant (see
+# `data/models.py::NI9235_BRIDGE_TYPES`) - analogous to
+# `_ADC_TIMING_MODE_LABEL_KEYS`.
 _BRIDGE_TYPE_LABEL_KEYS: dict[str, str] = {
     "QUARTER_BRIDGE_I": "bridge_type_quarter_i",
     "QUARTER_BRIDGE_II": "bridge_type_quarter_ii",
@@ -127,22 +128,21 @@ _ROLE_CHANNEL_VALUE = int(Qt.ItemDataRole.UserRole)
 
 
 class HardwareChannelPickerDialog(QDialog):
-    """Dialog zur Auswahl eines Hardwarekanals, gruppiert nach Gerät/Modul.
+    """Dialog for selecting a hardware channel, grouped by device/module.
 
-    Ersetzt die vorherige Dropdown-Auswahl in der Kanaltabelle: bei
-    mehreren Modulen mit jeweils vielen Kanälen ist eine nach Gerät
-    gruppierte Baumansicht übersichtlicher als eine lange, flache Liste.
-    Kanäle, die bereits einer ANDEREN Zeile zugeordnet sind, werden
-    angezeigt, aber deaktiviert (nicht auswählbar) - derselbe physische
-    Kanal darf nicht doppelt vergeben werden. Ebenso deaktiviert (und
-    IMMER, auch wenn `current_channel` zufällig auf so ein Modul zeigt):
-    Kanäle eines Geräts, dessen Modultyp `hardware/nidaq_device.py::
-    _map_product_type` nicht erkennt (`DeviceInfo.module_type is None`) -
-    ohne bekannten Modultyp gäbe es keine passende Hardware-Geräteklasse
-    (siehe `core/measurement.py::_DEVICE_CLASSES`), eine Auswahl würde
-    beim Messstart fehlschlagen oder (schlimmer) über den bisherigen
-    NI9215-Fallback in `_apply_device_constraint` still falsch
-    konfiguriert.
+    Replaces the previous dropdown selection in the channel table: with
+    several modules each having many channels, a tree view grouped by
+    device is clearer than one long, flat list. Channels already assigned
+    to ANOTHER row are shown but disabled (not selectable) - the same
+    physical channel must not be assigned twice. Also disabled (and
+    ALWAYS, even if `current_channel` happens to point to such a module):
+    channels of a device whose module type `hardware/nidaq_device.py::
+    _map_product_type` does not recognize (`DeviceInfo.module_type is
+    None`) - without a known module type there is no matching hardware
+    device class (see `core/measurement.py::_DEVICE_CLASSES`), and a
+    selection would either fail when the measurement starts or (worse) be
+    silently misconfigured via the former NI9215 fallback in
+    `_apply_device_constraint`.
     """
 
     def __init__(
@@ -159,9 +159,9 @@ class HardwareChannelPickerDialog(QDialog):
         layout = QVBoxLayout(self)
 
         if not devices:
-            # Keine Geräteerkennung erfolgt (oder keine Hardware gefunden) -
-            # statt eines leeren Baums ein klarer Hinweis, was zu tun ist.
-            # Kein OK-Button, da es (noch) nichts zum Auswählen gibt.
+            # No device discovery has run yet (or no hardware was found) -
+            # instead of an empty tree, show a clear hint about what to do.
+            # No OK button, since there is (as yet) nothing to select.
             hint_label = QLabel(t("hw_channel_picker_no_devices"))
             hint_label.setWordWrap(True)
             layout.addWidget(hint_label)
@@ -190,12 +190,12 @@ class HardwareChannelPickerDialog(QDialog):
             device_item = QTreeWidgetItem([f"{device.device_name} - {device.product_type}{module_info}"])
             device_item.setFlags(device_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
             if is_unsupported_module:
-                # Reine Flags (ItemIsEnabled/-Selectable) reichen NICHT aus,
-                # um ein Item optisch als deaktiviert erkennbar zu machen -
-                # Qt wendet die Disabled-Farbgruppe der Palette dafür nicht
-                # zuverlässig automatisch an (siehe
-                # `gui/theme.py::disabled_text_color`). Deshalb hier UND
-                # unten bei den einzelnen Kanal-Items explizit gesetzt.
+                # Flags alone (ItemIsEnabled/-Selectable) are NOT enough to
+                # make an item visually recognizable as disabled - Qt does
+                # not reliably apply the palette's disabled color group for
+                # this automatically (see
+                # `gui/theme.py::disabled_text_color`). Therefore set
+                # explicitly here AND below on the individual channel items.
                 device_item.setForeground(0, QBrush(disabled_text_color()))
             channels = device.physical_channels or [
                 f"{device.device_name}/ai{i}" for i in range(device.num_channels)
@@ -262,12 +262,13 @@ class HardwareChannelPickerDialog(QDialog):
 
 
 class SignalTypePickerDialog(QDialog):
-    """Dialog zur Auswahl des Signaltyps einer Zeile.
+    """Dialog for selecting the signal type of a row.
 
-    Analog zu `HardwareChannelPickerDialog` (eigenes Fenster statt
-    Inline-Combobox) - hier ohne Gruppierung, da `allowed` bereits auf die
-    vom Modul der Zeile unterstützten Typen eingeschränkt ist (siehe
-    `_MODULE_SIGNAL_TYPES`) und damit nur ein bis zwei Einträge enthält.
+    Analogous to `HardwareChannelPickerDialog` (its own window instead of
+    an inline combo box) - without grouping here, since `allowed` is
+    already restricted to the types supported by the row's module (see
+    `_MODULE_SIGNAL_TYPES`) and therefore contains only one or two
+    entries.
     """
 
     def __init__(
@@ -331,21 +332,20 @@ class SignalTypePickerDialog(QDialog):
 
 
 class TwoPointCalibrationDialog(QDialog):
-    """Dialog zur 2-Punkt-Kalibrierung eines Kanals.
+    """Dialog for two-point calibration of a channel.
 
-    Berechnet Skalierung und Offset aus zwei bekannten Referenzpunkten
-    (gemessener Rohwert vs. bekannter Sollwert) - z. B. bei einem
-    Thermoelement Eispunkt (0 °C) und Siedepunkt (100 °C). Die beiden
-    Punkte werden mit dem Kanal gespeichert (siehe
-    `data/models.py::Channel.cal_point1_measured` usw.), damit die
-    Kalibrierung später nachvollzogen oder ein einzelner Punkt neu
-    gesetzt werden kann, ohne beide Punkte neu eingeben zu müssen -
-    `scale`/`offset` bleiben trotzdem die tatsächlich angewendeten Werte,
-    die Punkte selbst haben keinen direkten Effekt auf die Messung.
+    Computes scale and offset from two known reference points (measured
+    raw value vs. known target value) - e.g. for a thermocouple, the ice
+    point (0 °C) and boiling point (100 °C). The two points are stored
+    with the channel (see `data/models.py::Channel.cal_point1_measured`
+    etc.) so the calibration can be reviewed later, or a single point
+    re-set, without having to re-enter both points - `scale`/`offset`
+    remain the actually applied values regardless; the points themselves
+    have no direct effect on the measurement.
 
-    Rechnung (lineare Zwei-Punkt-Form):
-        scale  = (referenz2 - referenz1) / (gemessen2 - gemessen1)
-        offset = referenz1 - scale * gemessen1
+    Calculation (linear two-point form):
+        scale  = (reference2 - reference1) / (measured2 - measured1)
+        offset = reference1 - scale * measured1
     """
 
     def __init__(
@@ -435,27 +435,26 @@ class TwoPointCalibrationDialog(QDialog):
 
 
 class ChannelParameterDialog(QDialog):
-    """Dialog zur Bearbeitung der Kanalparameter.
+    """Dialog for editing channel parameters.
 
-    Skalierung und Offset sind IMMER editierbar, unabhängig vom Signaltyp:
-    auch wenn der Treiber bei IEPE/Thermoelement bereits physikalische
-    Einheiten liefert (g bzw. °C), ist eine zusätzliche lineare Umrechnung
-    sinnvoll (z. B. g -> m/s² über die Skalierung, oder °C -> °F über
-    Skalierung 1.8 + Offset 32) - beides sollte daher nicht automatisch
-    gesperrt/versteckt werden. Zusätzlich zeigt der Dialog NUR das Feld,
-    das für den aktuellen Signaltyp der Zeile hardwareseitig zwingend
-    nötig ist (Sensitivität bei IEPE, Thermoelement-Typ bei Thermoelement,
-    Gage-Faktor/Brückentyp/Zuleitungswiderstand bei Dehnung) - bei
-    Spannung entfällt dieses Zusatzfeld ganz. Der ADC-Timing-Modus
-    erscheint zusätzlich nur, wenn das Modul der Zeile ein NI9213 ist
-    (NI9210 hat eine feste Abtastrate ohne diese Option).
+    Scale and offset are ALWAYS editable, regardless of the signal type:
+    even when the driver already delivers physical units for IEPE/
+    thermocouple (g or °C respectively), an additional linear conversion
+    is often useful (e.g. g -> m/s² via scale, or °C -> °F via scale 1.8 +
+    offset 32) - so neither should be automatically locked/hidden. In
+    addition, the dialog shows ONLY the field that is hardware-mandatory
+    for the row's current signal type (sensitivity for IEPE, thermocouple
+    type for thermocouple, gage factor/bridge type/lead wire resistance
+    for strain) - for voltage, this extra field is omitted entirely. The
+    ADC timing mode is additionally shown only if the row's module is an
+    NI9213 (the NI9210 has a fixed sample rate without this option).
 
-    Ersetzt die vorherigen, immer sichtbaren Spalten
-    (Skalierung/Offset/Sensitivität/Thermoelement-Typ): mit wachsender
-    Modulanzahl (aktuell NI9215/NI9234/NI9210/NI9213/NI9235, siehe
-    `_MODULE_SIGNAL_TYPES`) würden das immer mehr, meist gesperrte Spalten
-    - ein neuer Modultyp mit eigenen Parametern braucht hier nur einen
-    weiteren Zweig in diesem einen Dialog statt einer neuen Tabellenspalte.
+    Replaces the previous, always-visible columns (scale/offset/
+    sensitivity/thermocouple type): with a growing number of modules
+    (currently NI9215/NI9234/NI9210/NI9213/NI9235, see
+    `_MODULE_SIGNAL_TYPES`), that would mean more and more, mostly locked
+    columns - a new module type with its own parameters only needs one
+    more branch in this single dialog instead of a new table column.
     """
 
     def __init__(
@@ -519,8 +518,8 @@ class ChannelParameterDialog(QDialog):
             self._thermocouple_combo.setCurrentIndex(index if index >= 0 else 0)
             form.addRow(t("param_thermocouple_type_label"), self._thermocouple_combo)
 
-            # ADC-Timing-Modus nur beim NI9213 verfügbar (NI9210 hat eine
-            # feste Abtastrate ohne diese Option) - siehe
+            # ADC timing mode available only on the NI9213 (the NI9210 has
+            # a fixed sample rate without this option) - see
             # hardware/ni9213.py.
             if module_type == ModuleType.NI9213:
                 self._adc_timing_combo = QComboBox()
@@ -550,24 +549,23 @@ class ChannelParameterDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Reiner Schnellzugriff auf den Sensor-Katalog (siehe
-        # gui/sensor_database_dialog.py) zum manuellen Nachschlagen des
-        # Sensitivitätswerts - KEINE automatische Übernahme, der Nutzer
-        # liest den Wert selbst ab und trägt ihn per Copy&Paste in das
-        # Sensitivitäts-Feld ein. Nur sichtbar, wenn es überhaupt ein
-        # Sensitivitäts-Feld gibt (IEPE) UND ein `SensorDatabaseManager`
-        # übergeben wurde.
+        # Pure quick access to the sensor catalog (see
+        # gui/sensor_database_dialog.py) for manually looking up the
+        # sensitivity value - NO automatic takeover, the user reads off
+        # the value themselves and enters it into the sensitivity field
+        # via copy & paste. Only visible if there is a sensitivity field
+        # at all (IEPE) AND a `SensorDatabaseManager` was passed in.
         if self._sensitivity_spin is not None and self._sensor_database is not None:
             open_db_button = QPushButton(t("menu_sensor_database"))
             open_db_button.clicked.connect(self._on_open_sensor_database_clicked)
             layout.addWidget(open_db_button)
 
-        # 2-Punkt-Kalibrierung: bequemer Weg, Skalierung/Offset aus zwei
-        # bekannten Referenzpunkten zu berechnen, statt sie von Hand
-        # auszurechnen (siehe `TwoPointCalibrationDialog`). Nur für
-        # Thermoelemente angeboten (typischer Anwendungsfall, z. B.
-        # Eispunkt/Siedepunkt) - bei Spannung/IEPE bleibt es aus, um die
-        # Auswahl nicht mit einer selten benötigten Option zu überladen.
+        # Two-point calibration: a convenient way to compute scale/offset
+        # from two known reference points instead of calculating them by
+        # hand (see `TwoPointCalibrationDialog`). Offered only for
+        # thermocouples (typical use case, e.g. ice point/boiling point) -
+        # left out for voltage/IEPE so as not to clutter the selection
+        # with a rarely needed option.
         if signal_type == SignalType.THERMOCOUPLE:
             cal_button = QPushButton(t("two_point_cal_button"))
             cal_button.clicked.connect(self._on_two_point_calibration_clicked)
@@ -638,16 +636,16 @@ class ChannelParameterDialog(QDialog):
 
 
 class _PickerCell(QWidget):
-    """Zellwidget für Spalten mit eigenem Auswahlfenster (Hardwarekanal,
-    Signaltyp): links ein Textlabel mit dem aktuellen Wert, rechts ein
-    kompakter, NUR mit dem Drei-Punkte-Symbol beschrifteter Button, der
-    den jeweiligen Auswahldialog öffnet.
+    """Cell widget for columns with their own selection window (hardware
+    channel, signal type): a text label with the current value on the
+    left, and a compact button on the right, labeled ONLY with the
+    ellipsis icon, that opens the respective selection dialog.
 
-    Bietet dieselbe kleine API wie ein `QPushButton`
-    (`setText`/`setToolTip`/`setIcon`/`setIconSize`/`clicked`), damit der
-    übrige Code in `ChannelTableWidget` (Property-Handling, Eliding,
-    Retheme, ...) unverändert weiterfunktioniert - Details siehe
-    `_create_hw_channel_widget`/`_create_signal_type_widget`.
+    Offers the same small API as a `QPushButton`
+    (`setText`/`setToolTip`/`setIcon`/`setIconSize`/`clicked`), so the
+    rest of the code in `ChannelTableWidget` (property handling, eliding,
+    re-theming, ...) keeps working unchanged - see
+    `_create_hw_channel_widget`/`_create_signal_type_widget` for details.
     """
 
     clicked = pyqtSignal()
@@ -656,30 +654,30 @@ class _PickerCell(QWidget):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 0, 4, 0)
-        # Deutlicher Abstand zwischen Text und Auswahl-Button, damit beide
-        # klar als getrennte Elemente erkennbar sind.
+        # Clear spacing between the text and the selection button, so both
+        # are clearly recognizable as separate elements.
         layout.setSpacing(10)
 
         self._label = QLabel()
         layout.addWidget(self._label, stretch=1)
 
         self._icon_button = QPushButton()
-        # Bewusst KEIN setFlat(True): der normale, theme-abhängig
-        # eingefärbte Button-Hintergrund (QPalette.ColorRole.Button, siehe
-        # gui/theme.py) macht deutlicher als ein flacher/transparenter
-        # Button, dass hier eine klickbare Fläche ist.
+        # Deliberately NO setFlat(True): the normal, theme-dependent
+        # colored button background (QPalette.ColorRole.Button, see
+        # gui/theme.py) makes it clearer than a flat/transparent button
+        # that this is a clickable area.
         self._icon_button.setFixedSize(22, 22)
         self._icon_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._icon_button.clicked.connect(self.clicked.emit)
-        # Explizite vertikale Zentrierung: der Button hat eine feste Größe
-        # und soll zur Höhe des Textlabels zentriert stehen, nicht die
-        # volle Zeilenhöhe ausfüllen.
+        # Explicit vertical centering: the button has a fixed size and
+        # should be centered on the text label's height, not fill the
+        # full row height.
         layout.addWidget(self._icon_button, alignment=Qt.AlignmentFlag.AlignVCenter)
 
     def setText(self, text: str) -> None:
         self._label.setText(text)
 
-    def setToolTip(self, text: str) -> None:  # noqa: D102 - siehe Klassendoc
+    def setToolTip(self, text: str) -> None:  # noqa: D102 - see class docstring
         self._label.setToolTip(text)
         super().setToolTip(text)
 
@@ -691,18 +689,18 @@ class _PickerCell(QWidget):
 
 
 class _IconTextButton(QPushButton):
-    """`QPushButton` mit eigenem Icon+Text-Layout statt der nativen
-    QPushButton-Darstellung (siehe `_create_parameter_widget`).
+    """`QPushButton` with its own icon+text layout instead of the native
+    QPushButton rendering (see `_create_parameter_widget`).
 
-    Grund: Qt's eingebautes Icon+Text-Layout zentriert beides bei manchen
-    Button-Höhen/Styles nicht zuverlässig auf derselben Achse - dasselbe
-    Problem trat bereits bei den Navigationskacheln auf (siehe
-    `gui/main_window.py::_build_navigation_and_workspace`: "Icon bleibt
-    oben kleben, Text landet separat vertikal mittig"). Icon und Text
-    werden hier stattdessen als eng zusammenhängendes Päckchen gebaut und
-    dieses als Ganzes im Button zentriert - beide Labels sind
-    `WA_TransparentForMouseEvents`, damit Klicks trotzdem den Button
-    auslösen statt an den Labels hängenzubleiben.
+    Reason: Qt's built-in icon+text layout does not reliably center both
+    on the same axis at some button heights/styles - the same problem
+    already occurred with the navigation tiles (see
+    `gui/main_window.py::_build_navigation_and_workspace`: "icon stays
+    stuck at the top, text ends up vertically centered separately"). Icon
+    and text are instead built here as a tightly coupled package, and this
+    package as a whole is centered in the button - both labels have
+    `WA_TransparentForMouseEvents` set, so clicks still trigger the button
+    instead of getting caught on the labels.
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -725,7 +723,7 @@ class _IconTextButton(QPushButton):
         layout.addLayout(content_layout)
         layout.addStretch(1)
 
-    def setText(self, text: str) -> None:  # noqa: D102 - siehe Klassendoc
+    def setText(self, text: str) -> None:  # noqa: D102 - see class docstring
         self._text_label.setText(text)
 
     def setIconPixmap(self, pixmap: QPixmap) -> None:
@@ -733,11 +731,10 @@ class _IconTextButton(QPushButton):
 
 
 class ChannelTableWidget(QWidget):
-    """Tabelle zur Bearbeitung von Kanälen (Setup-Ansicht).
+    """Table for editing channels (setup view).
 
-    Jede Zeile entspricht einem `Channel`. Über `set_channels()`/
-    `get_channels()` wird zwischen der Tabelle und den Datenmodellen
-    konvertiert.
+    Each row corresponds to a `Channel`. `set_channels()`/`get_channels()`
+    convert between the table and the data models.
     """
 
     def __init__(
@@ -763,38 +760,37 @@ class ChannelTableWidget(QWidget):
             _COL_ENABLED, QHeaderView.ResizeMode.Fixed
         )
         self._table.setColumnWidth(_COL_NUMBER, 52)
-        # Erste Spalte (Aktiv + Checkbox) bewusst etwas breiter halten.
+        # Deliberately keep the first column (Active + checkbox) a bit wider.
         self._table.setColumnWidth(_COL_ENABLED, 86)
-        # Nummerierung läuft über eigene erste Spalte statt Zeilenkopf.
+        # Numbering runs through its own first column instead of the row header.
         self._table.verticalHeader().setVisible(False)
-        # Mindesthöhe für ~6 Zeilen + Kopfzeile, damit die Tabelle in der
-        # Setup-Ansicht nicht auf eine einzelne, kaum nutzbare Zeile
-        # zusammengequetscht wird (siehe SetupView, die die gesamte Ansicht
-        # zusätzlich in einen QScrollArea einbettet).
+        # Minimum height for ~6 rows + header row, so the table doesn't get
+        # squeezed down to a single, barely usable row in the setup view
+        # (see SetupView, which additionally embeds the whole view in a
+        # QScrollArea).
         self._table.setMinimumHeight(230)
         self._table.horizontalHeader().sectionResized.connect(
             self._on_hw_channel_column_resized
         )
         layout.addWidget(self._table)
 
-        # Erkannte Geräte (Geräteerkennung) - bestimmen, welche
-        # Hardwarekanäle wählbar sind und welches Modul zu welchem Kanal
-        # gehört (siehe `set_available_devices`).
+        # Discovered devices (device discovery) - determine which hardware
+        # channels are selectable and which module belongs to which
+        # channel (see `set_available_devices`).
         self._available_devices: list[DeviceInfo] = []
         self._available_hw_channels: list[str] = []
         self._hw_channel_to_module: dict[str, ModuleType] = {}
 
-        # Live-View-Darstellung (Kurvenfarbe, Hintergrund, Y-Bereich,
-        # Autoskalierung) pro Kanal - die Tabelle hat dafür keine eigenen
-        # Spalten (wird über den "Kanal-Darstellung"-Dialog in
-        # gui/live_view.py gesetzt, siehe `apply_display_settings`), muss
-        # die Werte aber beim Auslesen (`_read_row`) mit an den `Channel`
-        # zurückgeben, damit sie beim Speichern der Konfiguration erhalten
-        # bleiben. Schlüssel ist (hardware_channel, display_name), NICHT
-        # `hardware_channel` allein - siehe
-        # `gui/live_view.py::_channel_display_key` für die Begründung
-        # (mehrere noch unzugewiesene Kanäle hätten sonst denselben
-        # leeren Schlüssel).
+        # Live view display settings (trace color, background, Y range,
+        # autoscale) per channel - the table has no columns of its own for
+        # these (set via the "channel display" dialog in gui/live_view.py,
+        # see `apply_display_settings`), but they must be passed back to
+        # the `Channel` when reading the table (`_read_row`) so they are
+        # preserved when the configuration is saved. The key is
+        # (hardware_channel, display_name), NOT `hardware_channel` alone -
+        # see `gui/live_view.py::_channel_display_key` for the rationale
+        # (several not-yet-assigned channels would otherwise share the
+        # same empty key).
         self._display_settings: dict[tuple[str, str], dict] = {}
 
         button_row = QHBoxLayout()
@@ -814,19 +810,19 @@ class ChannelTableWidget(QWidget):
         connect_theme_changed(self._retheme_action_button_icons)
 
     # ------------------------------------------------------------------ #
-    # Öffentliche API
+    # Public API
     # ------------------------------------------------------------------ #
 
     def retranslate_ui(self) -> None:
-        """Aktualisiert Spaltenköpfe und Buttons nach einem Sprachwechsel."""
+        """Updates column headers and buttons after a language change."""
         self._table.setHorizontalHeaderLabels([t(key) for key in _COLUMN_KEYS])
         self._add_button.setText(t("add_channel_button"))
         self._remove_button.setText(t("remove_channel_button"))
         for row in range(self._table.rowCount()):
-            # Der Hardwarekanal-Button zeigt ohne Auswahl einen
-            # übersetzten Platzhalter (siehe `_create_hw_channel_widget`) -
-            # bei bereits gewähltem Kanal steht dort der reine (nicht zu
-            # übersetzende) Kanalname, der bleibt unverändert.
+            # Without a selection, the hardware channel button shows a
+            # translated placeholder (see `_create_hw_channel_widget`) -
+            # once a channel is chosen, it shows the plain (not to be
+            # translated) channel name, which stays unchanged.
             hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
             if hw_widget is not None and not hw_widget.property("hw_channel"):
                 self._update_hw_channel_button_text(hw_widget)
@@ -836,14 +832,14 @@ class ChannelTableWidget(QWidget):
             self._apply_module_signal_constraint(row)
 
     def _apply_device_constraint(self, row: int) -> None:
-        """Aktualisiert den intern mitgeführten Modulwert des Hardwarekanal-Buttons.
+        """Updates the internally tracked module value of the hardware channel button.
 
-        Modul ist NIE eine freie Auswahl - es ist entweder durch die
-        erkannte Hardware eindeutig vorgegeben (siehe
-        `set_available_devices`/`_hw_channel_to_module`) oder stammt aus
-        einer geladenen Konfiguration ohne angeschlossene Hardware. Es
-        hat deshalb keine eigene Spalte, sondern wird direkt an der
-        Hardwarekanal-Zelle mitgeführt (siehe `_create_hw_channel_widget`).
+        The module is NEVER a free choice - it is either uniquely
+        determined by the discovered hardware (see
+        `set_available_devices`/`_hw_channel_to_module`) or comes from a
+        loaded configuration without connected hardware. It therefore has
+        no column of its own, but is tracked directly alongside the
+        hardware channel cell (see `_create_hw_channel_widget`).
         """
         hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
         if hw_widget is None:
@@ -859,8 +855,7 @@ class ChannelTableWidget(QWidget):
         hw_widget.setProperty("module_type", module_value)
         self._update_hw_channel_button_text(hw_widget)
 
-        # Modul kann sich geändert haben - Signaltyp-Einschränkung
-        # entsprechend nachziehen.
+        # The module may have changed - update the signal type constraint accordingly.
         self._apply_module_signal_constraint(row)
 
         if ModuleType(module_value) == ModuleType.NI9213:
@@ -890,21 +885,22 @@ class ChannelTableWidget(QWidget):
                 )
 
     def _apply_module_signal_constraint(self, row: int) -> None:
-        """Schränkt die Signaltyp-Auswahl einer Zeile auf das gewählte Modul ein.
+        """Restricts a row's signal type selection to the chosen module.
 
-        Ein NI9215 unterstützt nur Spannung, ein NI9234 sowohl Spannung als
-        auch IEPE-Beschleunigung (siehe `_MODULE_SIGNAL_TYPES`) - ein nicht
-        vom aktuellen Modul unterstützter Signaltyp wird hier automatisch
-        auf den ersten unterstützten zurückgesetzt, statt erst beim
-        Messstart als Fehler aufzufallen. Der Auswahldialog
-        (`SignalTypePickerDialog`, siehe `_on_choose_signal_type_clicked`)
-        bekommt dieselbe Einschränkung beim Öffnen frisch berechnet - hier
-        also keine feste Liste, die separat gepflegt werden müsste.
+        An NI9215 only supports voltage, an NI9234 supports both voltage
+        and IEPE acceleration (see `_MODULE_SIGNAL_TYPES`) - a signal type
+        not supported by the current module is automatically reset here to
+        the first supported one, instead of only surfacing as an error
+        when the measurement starts. The selection dialog
+        (`SignalTypePickerDialog`, see `_on_choose_signal_type_clicked`)
+        gets the same restriction freshly computed when it opens - so
+        there's no fixed list here that would need to be maintained
+        separately.
 
-        Ist NOCH KEIN Hardwarekanal zugewiesen, ist unklar, welches Modul
-        (und damit welche Signaltypen) überhaupt gelten - der Button wird
-        dann komplett gesperrt, statt eine geratene Vorgabe (aktuell
-        NI9215/Spannung) als scheinbar bewusste Auswahl anzubieten.
+        If NO hardware channel is assigned yet, it's unclear which module
+        (and therefore which signal types) even apply - the button is then
+        completely locked, instead of offering a guessed default (currently
+        NI9215/voltage) as an apparently deliberate choice.
         """
         hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
         signal_widget = self._table.cellWidget(row, _COL_SIGNAL)
@@ -924,25 +920,25 @@ class ChannelTableWidget(QWidget):
         self._update_signal_type_button_text(signal_widget)
         signal_widget.setEnabled(has_channel)
 
-        # Signaltyp kann sich durch die Einschränkung geändert haben -
-        # Sensitivität entsprechend nachziehen (siehe `_update_parameter_state`).
+        # The signal type may have changed due to the restriction - update
+        # sensitivity accordingly (see `_update_parameter_state`).
         self._update_parameter_state(row)
 
     def _update_parameter_state(self, row: int) -> None:
-        """Setzt bei Signaltyp-Wechsel die nun irrelevante Sensitivität
-        (als Property am Parameter-Button, siehe `ChannelParameterDialog`)
-        auf ihren neutralen Wert zurück.
+        """On a signal type change, resets the now-irrelevant sensitivity
+        (as a property on the parameter button, see
+        `ChannelParameterDialog`) to its neutral value.
 
-        Skalierung und Offset bleiben bei JEDEM Signaltyp erhalten - auch
-        wenn der Treiber bei IEPE/Thermoelement bereits physikalische
-        Einheiten liefert (g bzw. °C), ist eine zusätzliche lineare
-        Umrechnung sinnvoll (z. B. g -> m/s², °C -> °F) und wird daher
-        nicht automatisch zurückgesetzt. Sensitivität ist dagegen NUR für
-        IEPE relevant (siehe `hardware/ni9234.py`) und wird sonst auf 0
-        zurückgesetzt - ein nur im Dialog verstecktes Feld würde seinen
-        alten Wert beim Auslesen (`_read_row`) sonst trotzdem behalten.
-        Analog wird der Gage-Faktor (nur für STRAIN relevant, siehe
-        `hardware/ni9235.py`) zurückgesetzt, wenn der Signaltyp wechselt.
+        Scale and offset are preserved for EVERY signal type - even when
+        the driver already delivers physical units for IEPE/thermocouple
+        (g or °C respectively), an additional linear conversion is often
+        useful (e.g. g -> m/s², °C -> °F) and is therefore not
+        automatically reset. Sensitivity, on the other hand, is relevant
+        ONLY for IEPE (see `hardware/ni9234.py`) and is otherwise reset to
+        0 - a field merely hidden in the dialog would otherwise still keep
+        its old value when read out (`_read_row`). Similarly, the gage
+        factor (relevant only for STRAIN, see `hardware/ni9235.py`) is
+        reset when the signal type changes.
         """
         signal_widget = self._table.cellWidget(row, _COL_SIGNAL)
         param_widget = self._table.cellWidget(row, _COL_PARAMETERS)
@@ -961,31 +957,31 @@ class ChannelTableWidget(QWidget):
             param_widget.setProperty("gage_factor", 0.0)
 
     def set_channels(self, channels: list[Channel]) -> None:
-        """Befüllt die Tabelle mit den übergebenen Kanälen (ersetzt den Inhalt)."""
+        """Fills the table with the given channels (replaces the content)."""
         self._table.setRowCount(0)
         for channel in channels:
             self._add_row(channel)
         self._update_row_numbers()
-        # Falls verfügbare Hardware-Kanäle gesetzt sind, aktualisiere die Zellen
+        # If available hardware channels are set, refresh the cells
         if self._available_hw_channels:
             self._apply_available_hw_channels_to_rows()
 
     def get_channels(self) -> list[Channel]:
-        """Liest die aktuelle Tabelle als Liste von `Channel`-Objekten aus."""
+        """Reads the current table as a list of `Channel` objects."""
         channels: list[Channel] = []
         for row in range(self._table.rowCount()):
             channels.append(self._read_row(row))
         return channels
 
     # ------------------------------------------------------------------ #
-    # Interna
+    # Internals
     # ------------------------------------------------------------------ #
 
     def _on_add_clicked(self) -> None:
         if self._available_devices:
-            # Erster noch unbenutzter Kanal als Vorgabe - verhindert, dass
-            # mehrere neu hinzugefügte Zeilen denselben physischen Kanal
-            # doppelt zugewiesen bekommen (siehe `_used_hw_channels`).
+            # First not-yet-used channel as the default - prevents several
+            # newly added rows from ending up with the same physical
+            # channel assigned twice (see `_used_hw_channels`).
             used = self._used_hw_channels()
             default_hw_channel = next(
                 (ch for ch in self._available_hw_channels if ch not in used), None
@@ -996,11 +992,11 @@ class ChannelTableWidget(QWidget):
                 )
                 return
         else:
-            # Noch keine Geräteerkennung erfolgt - kein erfundener
-            # Platzhalterkanal mehr (der könnte nie zur tatsächlichen
-            # Hardware passen). Der Button zeigt "Kanal wählen...", der
-            # Dialog erklärt beim Klick, dass zuerst eine Geräteerkennung
-            # nötig ist (siehe `HardwareChannelPickerDialog`).
+            # No device discovery has run yet - no more made-up placeholder
+            # channel (it could never match the actual hardware). The
+            # button shows "Choose channel...", and the dialog explains on
+            # click that device discovery must run first (see
+            # `HardwareChannelPickerDialog`).
             default_hw_channel = ""
 
         default_channel = Channel(
@@ -1010,11 +1006,11 @@ class ChannelTableWidget(QWidget):
         self._add_row(default_channel)
 
     def _used_hw_channels(self, exclude_row: int | None = None) -> set[str]:
-        """Sammelt die aktuell in der Tabelle bereits zugeordneten Kanäle.
+        """Collects the channels already assigned in the table.
 
-        `exclude_row` lässt die eigene Zeile beim Öffnen des Auswahldialogs
-        aus - sonst würde ihr eigener, bereits gültiger Kanal fälschlich
-        als "belegt" erscheinen.
+        `exclude_row` leaves out the row itself when opening the selection
+        dialog - otherwise its own, already valid channel would incorrectly
+        appear as "in use".
         """
         used: set[str] = set()
         for row in range(self._table.rowCount()):
@@ -1027,24 +1023,24 @@ class ChannelTableWidget(QWidget):
         return used
 
     def set_available_devices(self, devices: list[DeviceInfo]) -> None:
-        """Setzt die aktuell erkannten Geräte/Module (Geräteerkennung).
+        """Sets the currently discovered devices/modules (device discovery).
 
-        Beschränkt die Hardwarekanal-Auswahl je Zeile auf die tatsächlich
-        vorhandenen physischen Kanäle ALLER erkannten Geräte (nicht nur
-        eines einzelnen) - welche Kanäle existieren, gibt die Hardware
-        vor, kein Freitext. Das Modul je Zeile wird passend dazu
-        automatisch abgeleitet, siehe `_apply_device_constraint`.
+        Restricts the hardware channel selection per row to the physical
+        channels actually present on ALL discovered devices (not just a
+        single one) - which channels exist is dictated by the hardware,
+        not free text. The module per row is automatically derived to
+        match, see `_apply_device_constraint`.
 
-        Eine leere Liste (keine Geräteerkennung erfolgt/keine Hardware
-        gefunden) zeigt im Auswahldialog nur einen entsprechenden Hinweis
-        an (siehe `HardwareChannelPickerDialog`) - kein Freitextfeld mehr.
+        An empty list (no device discovery has run / no hardware found)
+        only shows a corresponding hint in the selection dialog (see
+        `HardwareChannelPickerDialog`) - no more free-text field.
 
-        Geräte mit unbekanntem Modultyp (`DeviceInfo.module_type is None`,
-        siehe `hardware/nidaq_device.py::_map_product_type`) werden zwar im
-        Auswahldialog weiterhin ANGEZEIGT (dort aber deaktiviert, siehe
-        `HardwareChannelPickerDialog`), fließen aber NICHT in
-        `_available_hw_channels` ein - deren Kanäle sollen nie automatisch
-        als Vorgabe für eine neue Zeile herangezogen werden (siehe
+        Devices with an unknown module type (`DeviceInfo.module_type is
+        None`, see `hardware/nidaq_device.py::_map_product_type`) are
+        still SHOWN in the selection dialog (but disabled there, see
+        `HardwareChannelPickerDialog`), but do NOT flow into
+        `_available_hw_channels` - their channels should never
+        automatically be used as a default for a new row (see
         `_on_add_clicked`).
         """
         self._available_devices = devices or []
@@ -1071,27 +1067,28 @@ class ChannelTableWidget(QWidget):
             self._apply_device_constraint(row)
 
     def _create_hw_channel_widget(self, current_text: str, module_value: str = "") -> QWidget:
-        """Baut das Zellwidget für die Hardwarekanal-Spalte einer Zeile.
+        """Builds the cell widget for the hardware channel column of a row.
 
-        Immer ein Button, der `HardwareChannelPickerDialog` öffnet - auch
-        OHNE bekannte Geräte (der Dialog zeigt dann einen Hinweis statt
-        einer leeren Auswahl, siehe `HardwareChannelPickerDialog`). Kein
-        Freitextfeld mehr: ein beliebiger, frei eingetippter Kanalname
-        könnte nie zur tatsächlichen Hardware passen und denselben
-        physischen Kanal mehrfach vergeben.
+        Always a button that opens `HardwareChannelPickerDialog` - even
+        WITHOUT known devices (the dialog then shows a hint instead of an
+        empty selection, see `HardwareChannelPickerDialog`). No more free
+        text field: an arbitrary, freely typed channel name could never
+        match the actual hardware and could assign the same physical
+        channel more than once.
 
-        Das Modul bekommt bewusst KEINE eigene Spalte: es gehört
-        inhaltlich untrennbar zum Kanal (jeder physische Kanal hat genau
-        ein Modul) und wird deshalb direkt am Kanal-Button als
-        Klartext-Zusatz mitgeführt, z. B. "cDAQ1Mod1/ai0 (NI9215)".
+        The module deliberately gets NO column of its own: it is
+        inherently inseparable from the channel (every physical channel
+        has exactly one module) and is therefore tracked directly on the
+        channel button as a plain-text addition, e.g. "cDAQ1Mod1/ai0
+        (NI9215)".
 
-        WICHTIG: Dieser Anzeigetext ist strikt von den intern verwendeten
-        Werten getrennt - die eigentlichen Werte stecken in den
-        Button-Properties "hw_channel" bzw. "module_type" (siehe
+        IMPORTANT: This display text is strictly separate from the
+        internally used values - the actual values live in the button
+        properties "hw_channel" and "module_type" (see
         `_get_hw_channel_text_from_widget`/`_get_module_value_from_widget`),
-        NICHT im sichtbaren, zusammengesetzten Text. Ohne Auswahl zeigt
-        der Button nur einen Platzhalter, der selbst kein gültiger
-        Kanal-/Modulwert ist.
+        NOT in the visible, composed text. Without a selection, the button
+        only shows a placeholder, which is itself not a valid channel/
+        module value.
         """
         cell = _PickerCell()
         cell.setProperty("hw_channel", current_text or "")
@@ -1103,36 +1100,36 @@ class ChannelTableWidget(QWidget):
 
     @staticmethod
     def _apply_picker_button_icon(button: "_PickerCell") -> None:
-        """Setzt das Drei-Punkte-Symbol, das einen Button als "öffnet ein
-        Auswahlfenster" statt einer Direktaktion kennzeichnet (siehe
-        `_create_hw_channel_widget`/`_create_signal_type_widget`). Wird auch
-        bei Theme-Wechsel erneut aufgerufen (siehe `_retheme_action_button_icons`),
-        da die Symbolfarbe vom Theme abhängt."""
+        """Sets the ellipsis icon that marks a button as "opens a selection
+        window" rather than a direct action (see
+        `_create_hw_channel_widget`/`_create_signal_type_widget`). Also
+        called again on a theme change (see `_retheme_action_button_icons`),
+        since the icon color depends on the theme."""
         button.setIcon(QIcon(draw_ellipsis_icon(14)))
         button.setIconSize(QSize(14, 14))
 
     @staticmethod
     def _apply_parameter_button_icon(button: "_IconTextButton") -> None:
-        """Setzt das Drei-Punkte-Symbol für den Parameter-Button (siehe
-        `_create_parameter_widget`). Abstand zum Text und vertikale
-        Zentrierung übernimmt bereits `_IconTextButton`s eigenes Layout -
-        hier wird nur die (theme-abhängige) Pixmap gesetzt, auch erneut
-        bei Theme-Wechsel (siehe `_retheme_action_button_icons`)."""
+        """Sets the ellipsis icon for the parameter button (see
+        `_create_parameter_widget`). Spacing to the text and vertical
+        centering are already handled by `_IconTextButton`'s own layout -
+        only the (theme-dependent) pixmap is set here, also again on a
+        theme change (see `_retheme_action_button_icons`)."""
         button.setIconPixmap(draw_ellipsis_icon(14))
 
     def _update_hw_channel_button_text(self, button: "_PickerCell") -> None:
-        """Setzt den sichtbaren Button-Text aus den Properties zusammen.
+        """Assembles the visible button text from the properties.
 
-        Getrennt von den Properties selbst, damit Anzeige- und interner
-        Wert nie versehentlich vermischt werden (siehe
-        `_create_hw_channel_widget`). Angezeigt wird nur noch ab dem
-        Modul-Teil (z. B. "Mod2/ai0 (NI9234)" statt
-        "cDAQ9185-0217ED5EMod2/ai0 (NI9234)") - der Chassis-Seriennummer-
-        Präfix davor ist für die Unterscheidung der Kanäle irrelevant und
-        kostet nur Platz (siehe `_short_hw_channel_text`). Der volle Name
-        bleibt vollständig als Tooltip verfügbar; nur falls selbst der
-        gekürzte Text nicht in die Spalte passt, wird zusätzlich am Anfang
-        elidiert (siehe `_apply_elided_hw_text`).
+        Kept separate from the properties themselves, so the display value
+        and the internal value are never accidentally mixed up (see
+        `_create_hw_channel_widget`). Only the part from the module
+        onwards is displayed (e.g. "Mod2/ai0 (NI9234)" instead of
+        "cDAQ9185-0217ED5EMod2/ai0 (NI9234)") - the chassis serial number
+        prefix before it is irrelevant for distinguishing channels and
+        only costs space (see `_short_hw_channel_text`). The full name
+        remains fully available as a tooltip; only if even the shortened
+        text doesn't fit the column is it additionally elided at the start
+        (see `_apply_elided_hw_text`).
         """
         hw_channel = str(button.property("hw_channel") or "")
         module_value = str(button.property("module_type") or "")
@@ -1148,35 +1145,36 @@ class ChannelTableWidget(QWidget):
 
     @staticmethod
     def _short_hw_channel_text(hw_channel: str, module_value: str) -> str:
-        """Kürzt einen Hardwarekanal-Namen auf den Modul-Teil ("ab Mod").
+        """Shortens a hardware channel name to the module part onward ("from Mod").
 
-        "cDAQ9185-0217ED5EMod2/ai0" -> "Mod2/ai0". Enthält der Name (z. B.
-        bei einem manuell in NI MAX umbenannten Gerät) kein "Mod<N>", wird
-        der volle Name unverändert übernommen - besser ein langer Name als
-        ein durch falsches Kürzen unbrauchbarer.
+        "cDAQ9185-0217ED5EMod2/ai0" -> "Mod2/ai0". If the name (e.g. for a
+        device manually renamed in NI MAX) contains no "Mod<N>", the full
+        name is used unchanged - better a long name than one made useless
+        by incorrect shortening.
         """
         match = _MODULE_SUFFIX_PATTERN.search(hw_channel)
         short = hw_channel[match.start():] if match else hw_channel
         return f"{short} ({module_value})" if module_value else short
 
     def _apply_elided_hw_text(self, button: "_PickerCell") -> None:
-        """Kürzt den (bereits auf "ab Mod" reduzierten) Button-Text weiter,
-        falls er selbst dafür noch nicht in die aktuelle Spaltenbreite passt.
+        """Further shortens the button text (already reduced to "from Mod
+        onward") if it still doesn't fit the current column width on its own.
 
-        `ElideLeft` statt `ElideMiddle`: Modul/Kanal/Typ stehen am Ende des
-        Texts - das ist die eigentlich unterscheidende Information (welches
-        Modul, welcher Kanal) und soll so lange wie möglich vollständig
-        sichtbar bleiben, auch wenn dafür der Anfang wegfällt.
+        `ElideLeft` instead of `ElideMiddle`: module/channel/type are at
+        the end of the text - that's the actually distinguishing
+        information (which module, which channel) and should stay fully
+        visible as long as possible, even if that means the start gets
+        dropped.
 
-        Nutzt `QTableWidget.columnWidth()` statt `button.width()` als
-        Referenz: Direkt nach dem Erzeugen (bevor der Button in der Zelle
-        sitzt und Qt das Layout verarbeitet hat) wäre `button.width()`
-        noch 0. Wird bei Spaltenbreitenänderung erneut aufgerufen (siehe
-        `sectionResized`-Verbindung in `__init__`).
+        Uses `QTableWidget.columnWidth()` instead of `button.width()` as
+        the reference: right after creation (before the button sits in the
+        cell and Qt has processed the layout), `button.width()` would still
+        be 0. Called again on column width changes (see the
+        `sectionResized` connection in `__init__`).
         """
         display_text = str(button.property("display_text") or "")
-        # Platz für den separaten Drei-Punkte-Button (22px), den Abstand
-        # dazu (10px) und die Zellränder (siehe `_PickerCell`) abziehen.
+        # Subtract space for the separate ellipsis button (22px), the gap
+        # to it (10px), and the cell margins (see `_PickerCell`).
         available_width = self._table.columnWidth(_COL_HW_CHANNEL) - 22 - 10 - 14
         if available_width <= 0:
             button.setText(display_text)
@@ -1195,9 +1193,9 @@ class ChannelTableWidget(QWidget):
                 self._apply_elided_hw_text(widget)
 
     def _on_choose_hw_channel_clicked(self) -> None:
-        """Öffnet den Kanal-Auswahldialog für die Zeile des klickenden Buttons.
+        """Opens the channel selection dialog for the clicking button's row.
 
-        Ermittelt die betroffene Zeile über `sender()` (siehe
+        Determines the affected row via `sender()` (see
         `_find_row_for_widget`).
         """
         button = self.sender()
@@ -1219,11 +1217,11 @@ class ChannelTableWidget(QWidget):
         self._apply_device_constraint(row)
 
     def _create_signal_type_widget(self, current_value: str) -> "_PickerCell":
-        """Baut das Zellwidget für die Signaltyp-Spalte einer Zeile.
+        """Builds the cell widget for the signal type column of a row.
 
-        Wie beim Hardwarekanal (siehe `_create_hw_channel_widget`) ein
-        `_PickerCell`, das ein eigenes Auswahlfenster öffnet, statt einer
-        Inline-Combobox - konsistente Bedienung für beide Spalten.
+        As with the hardware channel (see `_create_hw_channel_widget`), a
+        `_PickerCell` that opens its own selection window instead of an
+        inline combo box - consistent handling for both columns.
         """
         cell = _PickerCell()
         cell.setProperty("signal_type", current_value)
@@ -1243,12 +1241,12 @@ class ChannelTableWidget(QWidget):
         button.setText(t(SIGNAL_TYPE_LABEL_KEYS[signal_type]))
 
     def _on_choose_signal_type_clicked(self) -> None:
-        """Öffnet den Signaltyp-Auswahldialog für die Zeile des klickenden Buttons.
+        """Opens the signal type selection dialog for the clicking button's row.
 
-        Die erlaubten Signaltypen werden hier - wie in
-        `_apply_module_signal_constraint` - frisch aus dem Modul der
-        Hardwarekanal-Zelle derselben Zeile abgeleitet, statt separat
-        mitgeführt zu werden.
+        The allowed signal types are, as in
+        `_apply_module_signal_constraint`, freshly derived here from the
+        module of the hardware channel cell in the same row, instead of
+        being tracked separately.
         """
         button = self.sender()
         row = self._find_row_for_widget(_COL_SIGNAL, button)
@@ -1272,14 +1270,14 @@ class ChannelTableWidget(QWidget):
         self._update_parameter_state(row)
 
     def _create_parameter_widget(self, channel: Channel) -> QPushButton:
-        """Baut das Zellwidget für die Parameter-Spalte einer Zeile: ein
-        einzelner, zellfüllender Button mit fixem Text (statt Label +
-        separatem Auswahl-Button wie bei Hardwarekanal/Signaltyp, siehe
-        `_PickerCell`) - öffnet `ChannelParameterDialog`, der je nach
-        Signaltyp der Zeile nur die relevanten Felder anzeigt. Die
-        aktuellen Werte werden bewusst NICHT im Button-Text zusammengefasst
-        (einfacher, konsistenter Button statt Wertevorschau), sondern nur
-        als Properties mitgeführt.
+        """Builds the cell widget for the parameter column of a row: a
+        single, cell-filling button with fixed text (instead of a label +
+        separate selection button as with hardware channel/signal type,
+        see `_PickerCell`) - opens `ChannelParameterDialog`, which shows
+        only the relevant fields depending on the row's signal type. The
+        current values are deliberately NOT summarized in the button text
+        (a simple, consistent button instead of a value preview), but only
+        tracked as properties.
         """
         sensitivity = channel.sensitivity_mv_per_unit if channel.sensitivity_mv_per_unit else 0.0
         gage_factor = channel.strain_gage_factor if channel.strain_gage_factor else 0.0
@@ -1304,15 +1302,15 @@ class ChannelTableWidget(QWidget):
 
     @staticmethod
     def _property_float_or_none(widget: QWidget, name: str) -> float | None:
-        """Liest eine optionale Float-Property (z. B. Kalibrierpunkt), die
-        entweder `None` oder eine Zahl ist - `widget.property()` liefert für
-        eine mit `None` gesetzte Property wieder `None` zurück, für eine
-        Zahl den passenden Python-Typ (siehe `_create_parameter_widget`)."""
+        """Reads an optional float property (e.g. a calibration point) that
+        is either `None` or a number - `widget.property()` returns `None`
+        again for a property set to `None`, and the matching Python type
+        for a number (see `_create_parameter_widget`)."""
         value = widget.property(name)
         return None if value is None else float(value)
 
     def _on_choose_parameters_clicked(self) -> None:
-        """Öffnet `ChannelParameterDialog` für die Zeile des klickenden Buttons."""
+        """Opens `ChannelParameterDialog` for the clicking button's row."""
         button = self.sender()
         row = self._find_row_for_widget(_COL_PARAMETERS, button)
         if row is None:
@@ -1370,14 +1368,13 @@ class ChannelTableWidget(QWidget):
     def _apply_adc_timing_mode_to_module(
         self, hw_widget: QWidget, value: str, exclude_row: int
     ) -> None:
-        """Überträgt einen neu gewählten ADC-Timing-Modus auf alle anderen
-        Zeilen desselben physischen Moduls.
+        """Propagates a newly chosen ADC timing mode to all other rows of
+        the same physical module.
 
-        nidaqmx verlangt denselben ADC-Timing-Modus für alle Kanäle
-        desselben Geräts (siehe `hardware/ni9213.py`) - ohne diese
-        Übertragung könnte der Nutzer widersprüchliche Werte pro Zeile
-        einstellen, was erst beim Messstart als Hardwarefehler auffallen
-        würde.
+        nidaqmx requires the same ADC timing mode for all channels of the
+        same device (see `hardware/ni9213.py`) - without this propagation,
+        the user could set conflicting values per row, which would only
+        surface as a hardware error when the measurement starts.
         """
         device_name = device_name_from_hw_channel(
             self._get_hw_channel_text_from_widget(hw_widget)
@@ -1398,11 +1395,11 @@ class ChannelTableWidget(QWidget):
                 other_param_widget.setProperty("adc_timing_mode", value)
 
     def _find_row_for_widget(self, column: int, widget: QWidget) -> int | None:
-        """Findet die Zeile eines Zellwidgets in `column` (siehe `sender()`-
-        Aufrufer wie `_on_choose_hw_channel_clicked`/
-        `_on_choose_signal_type_clicked`) - Zeilenindizes können sich durch
-        `_on_remove_clicked` verschieben, daher keine feste Nummer beim
-        Verbinden erfassen."""
+        """Finds the row of a cell widget in `column` (see `sender()`
+        callers such as `_on_choose_hw_channel_clicked`/
+        `_on_choose_signal_type_clicked`) - row indices can shift due to
+        `_on_remove_clicked`, so no fixed number is captured when
+        connecting."""
         for row in range(self._table.rowCount()):
             if self._table.cellWidget(row, column) is widget:
                 return row
@@ -1429,8 +1426,8 @@ class ChannelTableWidget(QWidget):
         enabled_checkbox.setChecked(channel.enabled)
         self._table.setCellWidget(row, _COL_ENABLED, self._center(enabled_checkbox))
 
-        # Hardwarekanal-Button (immer, siehe `_create_hw_channel_widget`) -
-        # führt das Modul direkt mit, keine eigene Spalte dafür.
+        # Hardware channel button (always, see `_create_hw_channel_widget`) -
+        # tracks the module directly alongside it, no column of its own for that.
         self._table.setCellWidget(
             row,
             _COL_HW_CHANNEL,
@@ -1453,21 +1450,21 @@ class ChannelTableWidget(QWidget):
         self._table.setCellWidget(
             row, _COL_PARAMETERS, self._create_parameter_widget(channel)
         )
-        # Leitet - falls der Hardwarekanal einem bekannten Gerät zugeordnet
-        # ist - das Modul daraus ab (siehe `_apply_device_constraint`) und
-        # zieht Signaltyp-/Parameter-Einschränkung entsprechend nach.
+        # If the hardware channel is assigned to a known device, derive the
+        # module from it (see `_apply_device_constraint`) and update the
+        # signal type/parameter restriction accordingly.
         self._apply_device_constraint(row)
         self._update_row_numbers()
 
-        # Live-View-Darstellung des übergebenen Kanals übernehmen (z. B.
-        # beim Laden einer gespeicherten Konfiguration) - siehe
-        # `_display_settings`/`_read_row`. Schlüssel ist (hardware_channel,
-        # display_name), NICHT `hardware_channel` allein: mehrere noch
-        # unzugewiesene Kanäle (leerer `hardware_channel`, z. B. vor dem
-        # Anschließen der Hardware) hätten sonst alle denselben Schlüssel
-        # und würden sich gegenseitig überschreiben - siehe
-        # `gui/live_view.py::_channel_display_key` für dieselbe Problematik
-        # dort.
+        # Take over the live view display settings of the given channel
+        # (e.g. when loading a saved configuration) - see
+        # `_display_settings`/`_read_row`. The key is (hardware_channel,
+        # display_name), NOT `hardware_channel` alone: several not-yet-
+        # assigned channels (empty `hardware_channel`, e.g. before
+        # connecting the hardware) would otherwise all share the same key
+        # and overwrite each other - see
+        # `gui/live_view.py::_channel_display_key` for the same issue
+        # there.
         self._display_settings[(channel.hardware_channel, channel.display_name)] = {
             "plot_color": channel.plot_color,
             "plot_background": channel.plot_background,
@@ -1522,13 +1519,13 @@ class ChannelTableWidget(QWidget):
             signal_type=signal_type,
             module_type=module_type,
             enabled=enabled,
-            # min_range/max_range sind hier bewusst NICHT editierbar (kein
-            # Tabellenfeld dafuer) - explizit None statt den Channel-
-            # Dataclass-Default (-10.0/10.0 V) uebernehmen zu lassen, damit
-            # die Hardware-Schicht (hardware/ni9234.py etc.) ihren
-            # jeweils korrekten Modul-Messbereich als Fallback anwendet
-            # (z. B. NI9234 fest ±5V) statt eines pauschalen ±10V, das die
-            # NI9234-Hardware beim Messstart hart ablehnt.
+            # min_range/max_range are deliberately NOT editable here (no
+            # table field for them) - explicitly None instead of letting
+            # the Channel dataclass default (-10.0/10.0 V) take over, so
+            # the hardware layer (hardware/ni9234.py etc.) applies its own
+            # correct module measurement range as a fallback (e.g. NI9234
+            # fixed at ±5V) instead of a blanket ±10V, which the NI9234
+            # hardware hard-rejects when the measurement starts.
             min_range=None,
             max_range=None,
             sensitivity_mv_per_unit=sensitivity if sensitivity > 0 else None,
@@ -1567,35 +1564,34 @@ class ChannelTableWidget(QWidget):
         )
 
     def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:
-        """Übernimmt vom "Kanal-Darstellung"-Dialog (siehe
-        `gui/live_view.py::ChannelDisplayDialog`) gesetzte Werte, damit sie
-        beim nächsten Auslesen der Tabelle (`_read_row`, z. B. beim
-        Speichern der Konfiguration) erhalten bleiben. `settings` ist nach
-        (`hardware_channel`, `display_name`) geschlüsselt (siehe
-        `gui/live_view.py::_channel_display_key`), NICHT `hardware_channel`
-        allein, siehe `_add_row` für das erwartete Dict-Format je Kanal.
+        """Takes over values set by the "channel display" dialog (see
+        `gui/live_view.py::ChannelDisplayDialog`) so they are preserved on
+        the next readout of the table (`_read_row`, e.g. when saving the
+        configuration). `settings` is keyed by (`hardware_channel`,
+        `display_name`) (see `gui/live_view.py::_channel_display_key`),
+        NOT `hardware_channel` alone - see `_add_row` for the expected
+        dict format per channel.
         """
         for key, values in settings.items():
             self._display_settings[key] = values
 
     def update_display_settings(self, key: tuple[str, str], values: dict) -> None:
-        """Aktualisiert NUR die uebergebenen Felder fuer EINEN Kanal (Merge
-        statt Ersetzen wie `apply_display_settings`) - z. B. fuer die
-        Popout-Fenstergeometrie (siehe `gui/main_window.py`), die
-        unabhaengig vom Kanal-Darstellung-Dialog aktualisiert wird und
-        daher nicht dessen bereits gespeicherte Werte ueberschreiben darf.
-        Legt bei Bedarf einen neuen Eintrag an, falls noch keiner
-        existiert."""
+        """Updates ONLY the given fields for ONE channel (merge instead of
+        replace, unlike `apply_display_settings`) - e.g. for the popout
+        window geometry (see `gui/main_window.py`), which is updated
+        independently of the channel display dialog and must therefore not
+        overwrite its already stored values. Creates a new entry if
+        needed, in case none exists yet."""
         existing = self._display_settings.get(key, {})
         self._display_settings[key] = {**existing, **values}
 
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))
         self._remove_button.setIcon(QIcon(draw_minus_icon(16)))
-        # Drei-Punkte-Symbol der Hardwarekanal-/Signaltyp-/Parameter-Buttons
-        # ist theme-abhängig eingefärbt (siehe `_apply_picker_button_icon`/
-        # `_apply_parameter_button_icon`) - bei bestehenden Zeilen nach
-        # einem Theme-Wechsel erneuern.
+        # The ellipsis icon of the hardware channel/signal type/parameter
+        # buttons is colored theme-dependently (see
+        # `_apply_picker_button_icon`/`_apply_parameter_button_icon`) -
+        # refresh it on existing rows after a theme change.
         for row in range(self._table.rowCount()):
             for column in (_COL_HW_CHANNEL, _COL_SIGNAL):
                 widget = self._table.cellWidget(row, column)
@@ -1617,12 +1613,12 @@ class ChannelTableWidget(QWidget):
 
     @staticmethod
     def _get_hw_channel_text_from_widget(widget) -> str:
-        """Liest den Kanalwert aus dem Hardwarekanal-Zellwidget (immer ein
-        `_PickerCell`, siehe `_create_hw_channel_widget`).
+        """Reads the channel value from the hardware channel cell widget
+        (always a `_PickerCell`, see `_create_hw_channel_widget`).
 
-        Der tatsächliche Wert steckt in der Property "hw_channel", NICHT
-        im sichtbaren Button-Text - der zeigt bei fehlender Auswahl einen
-        Platzhalter, der selbst kein gültiger Kanalname ist.
+        The actual value lives in the "hw_channel" property, NOT in the
+        visible button text - that shows a placeholder when nothing is
+        selected, which is itself not a valid channel name.
         """
         if widget is None:
             return ""
@@ -1630,15 +1626,16 @@ class ChannelTableWidget(QWidget):
 
     @staticmethod
     def _get_module_value_from_widget(widget) -> str:
-        """Liest den intern mitgeführten Modulwert vom Hardwarekanal-Button
-        (Property "module_type", siehe `_create_hw_channel_widget`)."""
+        """Reads the internally tracked module value from the hardware
+        channel button (property "module_type", see
+        `_create_hw_channel_widget`)."""
         if widget is None:
             return ""
         return str(widget.property("module_type") or "")
 
     @staticmethod
     def _center(widget: QWidget) -> QWidget:
-        """Zentriert ein Widget in einer Tabellenzelle (z. B. Checkbox)."""
+        """Centers a widget in a table cell (e.g. a checkbox)."""
         container = QWidget()
         layout = QHBoxLayout(container)
         layout.addWidget(widget)

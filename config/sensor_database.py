@@ -1,14 +1,15 @@
 """
 config/sensor_database.py
 
-Persistenz für den Sensor-Katalog (siehe data/sensor_models.py) - analog
-zu config/configuration_manager.py, aber bewusst in einer EIGENEN Datei
-gespeichert, komplett getrennt von Mess-/Kanalkonfigurationen (siehe
-data/sensor_models.py Moduldoc).
+Persistence for the sensor catalog (see data/sensor_models.py) -
+analogous to config/configuration_manager.py, but deliberately stored
+in its OWN file, completely separate from measurement/channel
+configurations (see data/sensor_models.py module doc).
 
-Der Schreibschutz gegen versehentliche Änderungen (festes Passwort) lebt
-bewusst NICHT hier, sondern direkt in `gui/sensor_database_dialog.py` -
-dieser Manager ist reine Persistenz, ohne Kenntnis von Zugriffsschutz.
+The write protection against accidental changes (fixed password)
+deliberately does NOT live here, but directly in
+`gui/sensor_database_dialog.py` - this manager is pure persistence,
+with no knowledge of access protection.
 """
 
 from __future__ import annotations
@@ -26,17 +27,17 @@ logger = logging.getLogger(__name__)
 
 
 class SensorDatabaseManager:
-    """Lädt, verwaltet und speichert den Sensor-Katalog.
+    """Loads, manages, and saves the sensor catalog.
 
-    Anders als `ConfigurationManager`s Kanalkonfiguration (die explizit
-    per "Speichern" geschrieben wird) speichert jede ändernde Methode
-    hier SOFORT auf die Festplatte - der Katalog verhält sich damit eher
-    wie eine kleine, dauerhaft gepflegte Datenbank als wie ein Formular
-    mit OK/Abbrechen (siehe gui/sensor_database_dialog.py).
+    Unlike `ConfigurationManager`'s channel configuration (which is
+    written explicitly via "Save"), every mutating method here saves
+    IMMEDIATELY to disk - the catalog therefore behaves more like a
+    small, permanently maintained database than a form with OK/Cancel
+    (see gui/sensor_database_dialog.py).
 
-    Fehlerverhalten: wie beim `ConfigurationManager` wird eine fehlende
-    oder fehlerhafte Datei geloggt und als leerer Katalog behandelt - die
-    Anwendung startet in jedem Fall.
+    Error handling: as with `ConfigurationManager`, a missing or
+    corrupted file is logged and treated as an empty catalog - the
+    application always starts.
     """
 
     def __init__(self, config_dir: Optional[Path] = None) -> None:
@@ -68,14 +69,14 @@ class SensorDatabaseManager:
             logger.error("Sensor-Datenbank konnte nicht gespeichert werden: %s", exc)
 
     def list_sensors(self) -> list[SensorEntry]:
-        """Gibt alle Sensoren zurück, nach Name sortiert."""
+        """Returns all sensors, sorted by name."""
         return sorted(self._sensors, key=lambda s: s.name.lower())
 
     def list_categories(self) -> list[str]:
-        """Gibt alle aktuell verwendeten Kategorienamen zurück (sortiert,
-        ohne Duplikate/Leerstrings) - für die Autovervollständigung in
-        `gui/sensor_database_dialog.py`, damit keine Tippfehler-Duplikate
-        entstehen (z. B. "Kraft" vs. "Kraftmessung")."""
+        """Returns all currently used category names (sorted, without
+        duplicates/empty strings) - for autocompletion in
+        `gui/sensor_database_dialog.py`, to avoid typo duplicates
+        (e.g. "Force" vs. "Force measurement")."""
         return sorted({s.category for s in self._sensors if s.category}, key=str.lower)
 
     def get_sensor(self, sensor_id: str) -> Optional[SensorEntry]:
@@ -86,10 +87,10 @@ class SensorDatabaseManager:
         self._save()
 
     def update_sensor(self, sensor: SensorEntry) -> None:
-        """Ersetzt den bestehenden Sensor mit derselben `id` durch `sensor`.
+        """Replaces the existing sensor with the same `id` with `sensor`.
 
-        Unbekannte `id` (sollte im Normalfall nicht vorkommen) wird als
-        neuer Eintrag behandelt, statt den Aufruf zu verwerfen.
+        An unknown `id` (should not normally occur) is treated as a new
+        entry, instead of discarding the call.
         """
         for index, existing in enumerate(self._sensors):
             if existing.id == sensor.id:

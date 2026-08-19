@@ -1,55 +1,53 @@
 """
 core/rate_merge.py
 
-Fasst pro Zyklus gelesene Rohblöcke mehrerer Geräte-Gruppen mit
-UNTERSCHIEDLICHEN, intrinsisch unvereinbaren Abtastraten (siehe
-`data/models.py::resolve_rate_groups`) zu einem einzigen, gemeinsam
-getakteten Block zusammen, bevor dieser in den (einzigen) Ring Buffer
-geschrieben wird.
+Merges raw blocks read each cycle from multiple device groups with
+DIFFERENT, intrinsically incompatible sample rates (see
+`data/models.py::resolve_rate_groups`) into a single, jointly clocked
+block, before it is written to the (single) ring buffer.
 
-Der Regelfall (alle Geräte in EINER Gruppe, z. B. zwei NI9234 oder
-NI9234+NI9215) braucht diese Datei nicht - dafür bleibt der bisherige,
-direkte Lesepfad über `_read_group_block()` unverändert bestehen (siehe
-`core/acquisition.py`). `RateMerger` kommt ausschließlich zum Einsatz,
-wenn `resolve_rate_groups()` mehr als eine Gruppe zurückgegeben hat
-(aktuell: NI9210 zusammen mit mindestens einem anderen Modul).
+The normal case (all devices in ONE group, e.g. two NI9234 or
+NI9234+NI9215) doesn't need this file - for that, the previous, direct
+read path via `_read_group_block()` remains unchanged (see
+`core/acquisition.py`). `RateMerger` is used exclusively when
+`resolve_rate_groups()` has returned more than one group (currently:
+NI9210 together with at least one other module).
 
-Algorithmus (Zero-Order-Hold/Forward-Fill der langsameren Gruppe(n) auf
-das Taktraster der schnellsten Gruppe):
-    Für die schnellste Gruppe wird pro Zyklus wie gewohnt genau
-    `samples_to_read` Samples gelesen. Für jede langsamere Gruppe wird
-    NICHT bei jedem Zyklus neu gelesen (bei ~14 S/s vs. ~1651,6 S/s
-    kommt im Schnitt nur alle ~118 schnellen Takte ein neues echtes
-    Sample hinzu) - stattdessen wird anhand der GLOBALEN, seit Messstart
-    gezählten Anzahl schneller Takte berechnet, wie viele neue Samples
-    der langsamen Gruppe in diesem Zyklus FÄLLIG sind:
+Algorithm (zero-order hold/forward-fill of the slower group(s) onto the
+clock grid of the fastest group):
+    For the fastest group, exactly `samples_to_read` samples are read
+    per cycle as usual. For each slower group, a NEW READ IS NOT
+    performed on every cycle (at ~14 S/s vs. ~1651.6 S/s, on average only
+    every ~118 fast ticks does a new real sample arrive) - instead, the
+    number of new samples of the slower group DUE this cycle is computed
+    from the GLOBAL count of fast ticks since measurement start:
 
-        due(t) = floor(t * langsame_rate / schnelle_rate)
+        due(t) = floor(t * slow_rate / fast_rate)
 
-    WICHTIG: "fällig laut dieser Formel" heißt NICHT "vom Treiber schon
-    tatsächlich geliefert" - die Formel weiß nichts davon, ob die
-    Hardware ihre (bei 14 S/s bis zu ~71ms lange) Wandlung für dieses
-    Sample bereits abgeschlossen hat. Ein blockierender Read über genau
-    die fällige Anzahl (frühere Version dieser Datei) konnte deshalb bis
-    zu einer vollen Wandlungsperiode der langsamen Gruppe blockieren,
-    während die schnelle Gruppe parallel weiterlief - an echter Hardware
-    reproduziert: das führt nach ~10-20s zu einem "application is not
-    able to keep up with the hardware acquisition"-Fehler auf dem
-    SCHNELLEN Task, weil dessen eigener (begrenzter) Treiberpuffer
-    während der Blockade überläuft.
+    IMPORTANT: "due according to this formula" does NOT mean "actually
+    already delivered by the driver" - the formula knows nothing about
+    whether the hardware has already finished its conversion for this
+    sample (which, at 14 S/s, can take up to ~71ms). A blocking read for
+    exactly the due count (an earlier version of this file) could
+    therefore block for up to a full conversion period of the slow
+    group, while the fast group kept running in parallel - reproduced on
+    real hardware: after ~10-20s this leads to an "application is not
+    able to keep up with the hardware acquisition" error on the FAST
+    task, because its own (limited) driver buffer overflows during the
+    block.
 
-    Deshalb wird pro Zyklus NIEMALS mehr von der langsamen Gruppe
-    angefordert, als `BaseDevice.available_samples()` (nicht-blockierende
-    Statusabfrage) gerade wirklich meldet - ist ein laut `due()`
-    fälliges Sample noch nicht da, wird der zuletzt bekannte Wert
-    einfach länger gehalten statt zu warten; der Rückstand wird über
-    `self._delivered` (tatsächlich zugestellte Anzahl je Gruppe, NICHT
-    dasselbe wie `due()`) verfolgt und in einem späteren Zyklus
-    automatisch nachgeholt, sobald die Hardware die Samples wirklich
-    liefert. Auf absoluten Takt-Indizes basierend (statt inkrementeller
-    Rundung), vermeidet Drift über eine lange Messung hinweg
-    (Bresenham-artiges Verfahren) - an echter Hardware über 45s/1850
-    Zyklen validiert (Differenz zum theoretischen due()-Wert < 1 Sample).
+    Therefore, per cycle NEVER more is requested from the slow group
+    than `BaseDevice.available_samples()` (a non-blocking status query)
+    actually reports right now - if a sample that is due according to
+    `due()` isn't there yet, the last known value is simply held longer
+    instead of waiting; the backlog is tracked via `self._delivered`
+    (the number actually delivered per group, NOT the same as `due()`)
+    and automatically caught up in a later cycle, as soon as the
+    hardware actually delivers the samples. Based on absolute tick
+    indices (rather than incremental rounding), this avoids drift over
+    the course of a long measurement (a Bresenham-like approach) -
+    validated against real hardware over 45s/1850 cycles (difference
+    from the theoretical due() value < 1 sample).
 """
 
 from __future__ import annotations
@@ -65,12 +63,12 @@ from hardware.base_device import BaseDevice
 
 @dataclass
 class DeviceGroup:
-    """Bündelt die Geräte EINER `data.models.RateGroup`, nachdem sie via
-    `core.measurement.create_devices()` erzeugt und konfiguriert wurden.
+    """Bundles the devices of ONE `data.models.RateGroup`, after they have
+    been created and configured via `core.measurement.create_devices()`.
 
-    Bei mehr als einem Gerät teilen sie sich intern einen
-    `NIDAQSharedTask` (siehe `hardware/nidaq_device.py`) - genau wie
-    heute im Ein-Gruppen-Fall.
+    With more than one device, they internally share a `NIDAQSharedTask`
+    (see `hardware/nidaq_device.py`) - exactly as in today's single-group
+    case.
     """
 
     devices: list[BaseDevice]
@@ -82,11 +80,11 @@ class DeviceGroup:
 
 
 def _read_group_block(devices: list[BaseDevice], samples_to_read: int, timeout: float) -> np.ndarray:
-    """Liest EINEN kombinierten Rohdaten-Block (alle Geräte dieser einen
-    Gruppe, entlang der Kanalachse zusammengefügt) - identische Logik zum
-    bisherigen `AcquisitionThread._read_blocks_from_devices`, nur auf
-    eine einzelne Gruppe statt "alle Geräte der Messung" bezogen, und
-    bereits fertig konkateniert zurückgegeben.
+    """Reads ONE combined raw data block (all devices of this one group,
+    joined along the channel axis) - identical logic to the previous
+    `AcquisitionThread._read_blocks_from_devices`, just applied to a
+    single group instead of "all devices of the measurement", and
+    already returned fully concatenated.
     """
     num_channels = sum(len(d.active_channels) for d in devices)
     if not devices or samples_to_read <= 0:
@@ -103,19 +101,18 @@ def _read_group_block(devices: list[BaseDevice], samples_to_read: int, timeout: 
 
 
 def _group_available_samples(devices: list[BaseDevice]) -> int:
-    """Kleinste über alle Geräte EINER Gruppe aktuell verfügbare
-    (nicht-blockierend abgefragte) Samplezahl - bei einem gemeinsamen
-    Task (>1 Gerät in der Gruppe) melden ohnehin alle denselben Wert,
-    `min()` ist hier nur defensiv."""
+    """Smallest currently available (non-blocking-queried) sample count
+    across all devices of ONE group - with a shared task (>1 device in
+    the group) all report the same value anyway, `min()` here is purely
+    defensive."""
     if not devices:
         return 0
     return min(d.available_samples() for d in devices)
 
 
 class RateMerger:
-    """Verschmilzt eine schnelle Gruppe mit einer oder mehreren
-    langsameren Gruppen zu einem gemeinsam getakteten Block (siehe
-    Moduldocstring).
+    """Merges one fast group with one or more slower groups into a
+    jointly clocked block (see module docstring).
     """
 
     def __init__(self, groups: list[DeviceGroup], read_timeout_seconds: float) -> None:
@@ -124,29 +121,30 @@ class RateMerger:
         self._groups = groups
         self._timeout = read_timeout_seconds
         self._fast_index = max(range(len(groups)), key=lambda i: groups[i].resolved_sample_rate_hz)
-        # Letzter bekannter Wert je langsamer Gruppe (Zero-Order-Hold-
-        # Zustand), initial 0.0 - bis zum ersten echten Sample entspricht
-        # das dem ohnehin nullinitialisierten Ring-Buffer-Zustand.
+        # Last known value per slow group (zero-order-hold state),
+        # initially 0.0 - until the first real sample, this matches the
+        # ring buffer's own zero-initialized state anyway.
         self._last_known: dict[int, np.ndarray] = {
             i: np.zeros((groups[i].channel_count, 1), dtype=np.float64)
             for i in range(len(groups))
             if i != self._fast_index
         }
-        # Anzahl TATSÄCHLICH gelesener (nicht nur laut due() fälliger)
-        # Samples je langsamerer Gruppe seit Messstart - kann hinter
-        # due() zurückbleiben, wenn der Treiber ein fälliges Sample noch
-        # nicht geliefert hat (siehe Moduldocstring); der Rückstand wird
-        # in einem späteren Zyklus automatisch nachgeholt.
+        # Number of ACTUALLY read (not just due() according to due())
+        # samples per slower group since measurement start - can lag
+        # behind due() if the driver hasn't delivered a due sample yet
+        # (see module docstring); the backlog is automatically caught up
+        # in a later cycle.
         self._delivered: dict[int, int] = {
             i: 0 for i in range(len(groups)) if i != self._fast_index
         }
         self._fast_ticks_emitted = 0
 
     def read_merged_block(self, samples_to_read: int) -> np.ndarray:
-        """Liest genau `samples_to_read` Samples bezogen auf die
-        SCHNELLSTE Gruppe und liefert einen kombinierten
-        `(gesamt_kanalzahl, samples_to_read)`-Block, Kanalreihenfolge wie
-        `self._groups` (Gruppe für Gruppe, siehe `resolve_rate_groups`).
+        """Reads exactly `samples_to_read` samples relative to the
+        FASTEST group and returns a combined
+        `(total_channel_count, samples_to_read)` block, with channel
+        order matching `self._groups` (group by group, see
+        `resolve_rate_groups`).
         """
         fast_group = self._groups[self._fast_index]
         start_idx = self._fast_ticks_emitted
@@ -161,12 +159,12 @@ class RateMerger:
             delivered_before = self._delivered[i]
             due_after = math.floor(end_idx * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz)
             owed = due_after - delivered_before
-            # NIE blockierend mehr anfordern, als der Treiber JETZT schon
-            # wirklich hat (siehe Moduldocstring) - sonst blockiert ein
-            # einzelnes, laut due() zwar fälliges, aber von der Hardware
-            # noch nicht fertig gewandeltes Sample den gesamten Zyklus,
-            # während die schnelle Gruppe parallel weiterläuft und ihr
-            # eigener (begrenzter) Treiberpuffer überläuft.
+            # NEVER blockingly request more than the driver actually has
+            # RIGHT NOW (see module docstring) - otherwise a single
+            # sample that is due according to due(), but not yet
+            # finished being converted by the hardware, would block the
+            # entire cycle, while the fast group keeps running in
+            # parallel and its own (limited) driver buffer overflows.
             num_to_read = min(owed, _group_available_samples(group.devices)) if owed > 0 else 0
             new_block = _read_group_block(group.devices, num_to_read, self._timeout)
             delivered_after = delivered_before + num_to_read
@@ -177,16 +175,16 @@ class RateMerger:
             raw_counts = np.floor(
                 local_ticks * group.resolved_sample_rate_hz / fast_group.resolved_sample_rate_hz
             ).astype(np.int64)
-            # Auf tatsächlich zugestellte Samples begrenzen (0..num_to_read):
-            # ist ein Sample laut Formel zwar schon fällig, aber noch
-            # nicht geliefert, wird der zuletzt bekannte Wert einfach
-            # länger gehalten statt zu warten - der dadurch entstehende
-            # Rückstand steckt in `due_after - delivered_after` und wird
-            # automatisch im nächsten Zyklus nachgeholt (siehe oben).
+            # Clamp to actually delivered samples (0..num_to_read): if a
+            # sample is due according to the formula but not yet
+            # delivered, the last known value is simply held longer
+            # instead of waiting - the resulting backlog sits in
+            # `due_after - delivered_after` and is automatically caught
+            # up in the next cycle (see above).
             counts = np.clip(raw_counts - delivered_before, 0, num_to_read)
-            # counts läuft monoton von 0..num_to_read - Fancy-Indexing auf
-            # `extended` liefert direkt den vektorisierten
-            # Forward-Fill-Block, ein Python-Loop über Samples entfällt.
+            # counts runs monotonically from 0..num_to_read - fancy
+            # indexing on `extended` directly yields the vectorized
+            # forward-fill block, no Python loop over samples needed.
             filled = extended[:, counts]
             self._last_known[i] = filled[:, -1:]
             blocks[i] = filled

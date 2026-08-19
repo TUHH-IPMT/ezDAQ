@@ -1,12 +1,11 @@
 """
 hardware/ni9234.py
 
-Konkrete Implementierung für das NI 9234 Modul (4-Kanal IEPE-fähiger
-dynamischer Signaleingang, typischerweise für Beschleunigungssensoren
-und Mikrofone).
+Concrete implementation for the NI 9234 module (4-channel IEPE-capable
+dynamic signal input, typically for accelerometers and microphones).
 
-Siehe `hardware/nidaq_device.py` für den gemeinsamen Task-Lebenszyklus
-und den Hinweis zum Hardware-Testvorbehalt.
+See `hardware/nidaq_device.py` for the shared task lifecycle
+and the note on the hardware testing caveat.
 """
 
 from __future__ import annotations
@@ -28,29 +27,29 @@ if NIDAQMX_AVAILABLE:
 
 logger = logging.getLogger(__name__)
 
-# IEPE-Konstantstromspeisung des NI 9234 laut NI-Datenblatt/Betriebsanleitung:
-# Minimum 2.0 mA, typisch 2.1 mA (software-schaltbar an/aus, nicht in der
-# Höhe konfigurierbar). Quelle: NI 9234 Operating Instructions and
-# Specifications, Abschnitt "IEPE excitation current".
+# IEPE constant-current excitation of the NI 9234 per NI datasheet/operating
+# instructions: minimum 2.0 mA, typically 2.1 mA (software-switchable
+# on/off, not configurable in magnitude). Source: NI 9234 Operating
+# Instructions and Specifications, "IEPE excitation current" section.
 NI9234_IEPE_EXCITATION_AMPS = 0.002
 
-# Physikalischer Eingangsbereich des NI 9234 laut Datenblatt (±5 V).
+# Physical input range of the NI 9234 per datasheet (±5 V).
 NI9234_MIN_VOLTAGE = -5.0
 NI9234_MAX_VOLTAGE = 5.0
 
 
 class NI9234(NIDAQDevice):
-    """NI 9234: 4-Kanal Eingang für Spannung oder IEPE-Beschleunigung/Mikrofone.
+    """NI 9234: 4-channel input for voltage or IEPE acceleration/microphones.
 
-    Unterstützt zwei Betriebsarten pro Kanal:
-        * `SignalType.IEPE_ACCELERATION`: interne IEPE-Konstantstromspeisung
-          aktiv, der NI-DAQmx-Treiber rechnet über `sensitivity_mv_per_unit`
-          (Sensorempfindlichkeit in mV/g) bereits hardwareseitig in g um -
-          dieses Feld ist dafür zwingend erforderlich.
-        * `SignalType.VOLTAGE`: normaler Spannungseingang ohne IEPE-Speisung,
-          identisch zum NI9215-Verhalten (lineare Skalierung über
-          `channel.scale`/`channel.offset`), nur mit dem kleineren
-          ±5-V-Bereich des NI9234.
+    Supports two operating modes per channel:
+        * `SignalType.IEPE_ACCELERATION`: internal IEPE constant-current
+          excitation active, the NI-DAQmx driver already converts to g in
+          hardware via `sensitivity_mv_per_unit` (sensor sensitivity in
+          mV/g) - this field is mandatory for that.
+        * `SignalType.VOLTAGE`: normal voltage input without IEPE
+          excitation, identical to NI9215 behavior (linear scaling via
+          `channel.scale`/`channel.offset`), just with the NI9234's
+          smaller ±5 V range.
     """
 
     def __init__(self, device_info: DeviceInfo, channels: list[Channel]) -> None:
@@ -100,28 +99,28 @@ class NI9234(NIDAQDevice):
                 units=VoltageUnits.VOLTS,
             )
 
-        # Das NI9234 hat als Delta-Sigma-ADC eine feste Filterverzögerung
-        # zwischen analogem Abtastzeitpunkt und digital ausgelesenem Sample
-        # (laut Datenblatt ca. 40 Sample-Clock-Perioden + 3,2 µs) - anders
-        # als z. B. das NI9215 (SAR-ADC, praktisch keine Verzögerung).
-        # NI-DAQmx kompensiert das bei C-Series-DSA-Modulen NICHT automatisch,
-        # auch nicht in einem gemeinsamen Task mit anderen Modulen (Channel
-        # Expansion) - ohne diese Property wären NI9234-Kanäle gegenüber
-        # z. B. NI9215-Kanälen im selben Task zeitlich versetzt (~1
-        # Sample-Periode bei niedrigen Abtastraten). Quelle: NI-Knowledgebase
+        # Being a delta-sigma ADC, the NI9234 has a fixed filter delay
+        # between the analog sampling instant and the digitally read-out
+        # sample (per datasheet approx. 40 sample clock periods + 3.2 us) -
+        # unlike, say, the NI9215 (SAR ADC, practically no delay).
+        # NI-DAQmx does NOT compensate for this automatically on C Series
+        # DSA modules, not even in a shared task with other modules (channel
+        # expansion) - without this property, NI9234 channels would be
+        # time-offset relative to, say, NI9215 channels in the same task
+        # (~1 sample period at low sample rates). Source: NI Knowledge Base
         # "Synchronized Data Delayed When Using NI DAQ Devices with
         # Delta-Sigma-ADC".
         #
-        # BEST EFFORT: gegen echte Hardware (cDAQ-9185 + NI9234, aktuelle
-        # Treiberversion) lehnt DAQmx diese Property IMMER ab (-200452
+        # BEST EFFORT: against real hardware (cDAQ-9185 + NI9234, current
+        # driver version) DAQmx ALWAYS rejects this property (-200452
         # "Specified property is not supported by the device or is not
-        # applicable to the task") - reproduzierbar sowohl für Voltage- als
-        # auch für IEPE-Accel-Kanäle und unabhängig davon, ob sie vor oder
-        # nach der Sample-Clock-Timing-Konfiguration gesetzt wird. Offenbar
-        # von dieser Treiber-/Firmware-Kombination schlicht nicht
-        # unterstützt. Bricht die Messung deshalb NICHT ab, wenn das
-        # Setzen fehlschlägt - nur die (kleine, bei niedrigen Abtastraten
-        # spürbare) Zeitversatz-Korrektur entfällt dann.
+        # applicable to the task") - reproducible for both voltage and
+        # IEPE accel channels alike, and regardless of whether it is set
+        # before or after the sample clock timing configuration.
+        # Apparently simply not supported by this driver/firmware
+        # combination. Therefore does NOT abort the measurement if
+        # setting it fails - only the (small, but noticeable at low
+        # sample rates) time-offset correction is then skipped.
         try:
             ai_channel.ai_remove_filter_delay = True
         except DaqmxError:

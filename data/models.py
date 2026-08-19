@@ -1,17 +1,17 @@
 """
 data/models.py
 
-Zentrale Datenmodelle der Anwendung.
+Central data models of the application.
 
-Dieses Modul enthält reine Datenstrukturen (keine Hardware- oder GUI-Logik).
-Alle anderen Schichten (hardware, core, gui, analysis) verwenden diese
-Modelle als gemeinsame "Sprache", um Kanäle, Geräte und Messungen zu
-beschreiben.
+This module contains pure data structures (no hardware or GUI logic).
+All other layers (hardware, core, gui, analysis) use these models as a
+shared "language" to describe channels, devices, and measurements.
 
-Design-Entscheidung:
-    Die Modelle sind bewusst als `dataclasses` mit Type Hints umgesetzt.
-    Das hält sie leichtgewichtig, JSON-serialisierbar (siehe data/metadata.py)
-    und einfach erweiterbar, ohne dass GUI- oder Hardware-Code sie kennen muss.
+Design decision:
+    The models are deliberately implemented as `dataclasses` with type
+    hints. That keeps them lightweight, JSON-serializable (see
+    data/metadata.py), and easy to extend without GUI or hardware code
+    having to know about them.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from typing import Optional
 
 
 class ModuleType(str, Enum):
-    """Unterstützte NI-cDAQ-Modultypen.
+    """Supported NI cDAQ module types.
 
-    Wird als String-Enum umgesetzt, damit der Wert direkt und lesbar in
-    JSON-Konfigurationen und Metadaten gespeichert werden kann.
+    Implemented as a string enum so the value can be stored directly and
+    readably in JSON configurations and metadata.
     """
 
     NI9215 = "NI9215"
@@ -38,28 +38,29 @@ class ModuleType(str, Enum):
 
 NI9210_FIXED_SAMPLE_RATE_HZ = 14.0
 
-# Das NI9234 hat (anders als der SAR-ADC des NI9215) einen Delta-Sigma-ADC:
-# die Abtastrate ist nicht frei wählbar, sondern nur als ganzzahliger Teiler
-# des internen Master-Timebase (13,1072 MHz, intern bereits durch 256
-# geteilt) möglich: fs = 51.200 Hz / n, n ganzzahlig 1..31 (51.200 S/s bis
-# ca. 1.651,6 S/s). Quelle: NI 9234 Operating Instructions and
-# Specifications, Abschnitt "Understanding NI 9234 Data Rates". Der
-# NI-DAQmx-Treiber nimmt zwar auch abweichende Werte entgegen (und rundet
-# intern auf die nächste gültige Rate), ohne hier vorab zu validieren würde
-# die App aber weiterhin mit der ungerundeten, tatsächlich nicht
-# gemessenen Rate rechnen (Metadaten, Zeitachse, FFT in der Analyse-Ansicht).
+# Unlike the SAR ADC of the NI9215, the NI9234 has a delta-sigma ADC:
+# the sample rate is not freely selectable, only as an integer divider
+# of the internal master timebase (13.1072 MHz, already divided by 256
+# internally): fs = 51,200 Hz / n, n integer 1..31 (51,200 S/s down to
+# approx. 1,651.6 S/s). Source: NI 9234 Operating Instructions and
+# Specifications, section "Understanding NI 9234 Data Rates". The
+# NI-DAQmx driver does accept other values too (and rounds internally to
+# the nearest valid rate), but without validating this up front, the app
+# would keep computing with the unrounded rate that isn't actually being
+# measured (metadata, time axis, FFT in the analysis view).
 NI9234_BASE_SAMPLE_RATE_HZ = 51_200.0
 NI9234_MIN_RATE_DIVISOR = 1
 NI9234_MAX_RATE_DIVISOR = 31
 
-# Das NI9235 (120-Ω-Viertelbrücke-DMS-Modul) hat ebenfalls einen
-# Delta-Sigma-ADC mit demselben Rastermuster, aber einem ANDEREN Master-
-# Timebase (12,8 MHz statt 13,1072 MHz): fs = (12.8 MHz / 256) / n =
-# 50.000 Hz / n. Am internen Timebase ist n auf 5..63 begrenzt (10.000 S/s
-# bis ca. 793,65 S/s) - anders als beim NI9234 NICHT bei n=1, da die
-# Hardware oberhalb von 10 kS/s keine gültige Rate mehr liefert. Quelle:
-# NI-9235 Specifications (ni.com, 2022-07-11), Abschnitt "Data Rates" /
-# "Data rate range (fs) using internal master timebase".
+# The NI9235 (120 Ω quarter-bridge strain gauge module) also has a
+# delta-sigma ADC with the same grid pattern, but a DIFFERENT master
+# timebase (12.8 MHz instead of 13.1072 MHz): fs = (12.8 MHz / 256) / n =
+# 50,000 Hz / n. On the internal timebase, n is limited to 5..63
+# (10,000 S/s down to approx. 793.65 S/s) - unlike the NI9234, NOT
+# starting at n=1, since the hardware no longer provides a valid rate
+# above 10 kS/s. Source: NI-9235 Specifications (ni.com, 2022-07-11),
+# section "Data Rates" / "Data rate range (fs) using internal master
+# timebase".
 NI9235_BASE_SAMPLE_RATE_HZ = 50_000.0
 NI9235_MIN_RATE_DIVISOR = 5
 NI9235_MAX_RATE_DIVISOR = 63
@@ -67,13 +68,12 @@ NI9235_MAX_RATE_DIVISOR = 63
 
 @dataclass(frozen=True)
 class GridRateSpec:
-    """Beschreibt das Abtastraten-Raster eines Delta-Sigma-Moduls (fs =
-    `base_hz` / n, n ganzzahlig `min_divisor`..`max_divisor`).
+    """Describes the sample-rate grid of a delta-sigma module (fs =
+    `base_hz` / n, n integer `min_divisor`..`max_divisor`).
 
-    Ermöglicht es, dieselbe Rasterprüf-/Rundungslogik für mehrere Module
-    mit strukturell gleichem, aber zahlenmäßig unterschiedlichem Raster
-    (aktuell NI9234 und NI9235) zu teilen, siehe
-    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`.
+    Lets multiple modules with a structurally identical but numerically
+    different grid (currently NI9234 and NI9235) share the same grid
+    validation/rounding logic, see `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`.
     """
 
     module_label: str
@@ -82,11 +82,11 @@ class GridRateSpec:
     max_divisor: int
 
 
-# Module mit einem Delta-Sigma-Raster (fs = base_hz / n), das sich NICHT
-# frei auf eine beliebige Zielrate einstellen lässt, sondern nur snappen.
-# Ein künftiges weiteres Rastermodul braucht nur einen Eintrag hier - siehe
-# `resolve_rate_groups()`, das generisch über alle vorhandenen Einträge
-# iteriert (nicht mehr NI9234-spezifisch).
+# Modules with a delta-sigma grid (fs = base_hz / n) that CANNOT be
+# freely set to an arbitrary target rate, only snapped. A future
+# additional grid module only needs an entry here - see
+# `resolve_rate_groups()`, which generically iterates over all existing
+# entries (no longer NI9234-specific).
 _GRID_SAMPLE_RATE_SPEC_BY_MODULE: dict[ModuleType, GridRateSpec] = {
     ModuleType.NI9234: GridRateSpec("NI9234", NI9234_BASE_SAMPLE_RATE_HZ, NI9234_MIN_RATE_DIVISOR, NI9234_MAX_RATE_DIVISOR),
     ModuleType.NI9235: GridRateSpec("NI9235", NI9235_BASE_SAMPLE_RATE_HZ, NI9235_MIN_RATE_DIVISOR, NI9235_MAX_RATE_DIVISOR),
@@ -94,119 +94,119 @@ _GRID_SAMPLE_RATE_SPEC_BY_MODULE: dict[ModuleType, GridRateSpec] = {
 
 
 def _grid_valid_sample_rates(spec: GridRateSpec) -> list[float]:
-    """Alle gültigen Abtastraten eines Rastermoduls (absteigend sortiert)."""
+    """All valid sample rates of a grid module (sorted descending)."""
     return [spec.base_hz / n for n in range(spec.min_divisor, spec.max_divisor + 1)]
 
 
 def _nearest_grid_sample_rate(sample_rate_hz: float, spec: GridRateSpec) -> float:
-    """Die gültige Rasterrate von `spec`, die `sample_rate_hz` am nächsten liegt.
+    """The valid grid rate of `spec` closest to `sample_rate_hz`.
 
-    Ausschließlich für die Rasterprüfung in `_is_valid_grid_sample_rate`
-    gedacht (symmetrische Toleranz um einen gültigen Wert). Für den
-    Vorschlag in Fehlermeldungen wird bewusst NICHT diese Funktion,
-    sondern `_next_grid_sample_rate_at_or_above` verwendet - siehe dort.
+    Intended exclusively for the grid check in `_is_valid_grid_sample_rate`
+    (symmetric tolerance around a valid value). The suggestion in error
+    messages deliberately does NOT use this function but
+    `_next_grid_sample_rate_at_or_above` instead - see there.
     """
     return min(_grid_valid_sample_rates(spec), key=lambda rate: abs(rate - sample_rate_hz))
 
 
 def _next_grid_sample_rate_at_or_above(sample_rate_hz: float, spec: GridRateSpec) -> float:
-    """Die kleinste gültige Rasterrate von `spec`, die `sample_rate_hz`
-    nicht unterschreitet - also aufrunden statt auf den nächstgelegenen Wert.
+    """The smallest valid grid rate of `spec` that does not fall below
+    `sample_rate_hz` - i.e. round up instead of to the nearest value.
 
-    Begründung: Eine zu hohe Abtastrate kostet nur Speicherplatz, eine zu
-    niedrige verliert dagegen unwiederbringlich Signalanteile (das
-    Antialiasing-Filter des Moduls zieht mit der Rate mit, ein zu niedrig
-    gewähltes Raster schneidet also echte Frequenzanteile weg). Bei
-    Vibrations-/Dehnungsmessungen ist die Bandbreite meist die eigentliche
-    Anforderung - deshalb im Zweifel nach oben.
+    Rationale: a sample rate that's too high only costs disk space, while
+    one that's too low irrecoverably loses signal content (the module's
+    anti-aliasing filter tracks the rate, so a grid choice that's too low
+    cuts off real frequency content). For vibration/strain measurements,
+    bandwidth is usually the actual requirement - hence rounding up when
+    in doubt.
 
-    Wird NUR als Vorschlag in der Fehlermeldung verwendet, NICHT
-    automatisch angewendet: der Nutzer muss die gültige Rate selbst
-    eintragen, damit nie stillschweigend etwas anderes gemessen wird als
-    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick).
+    Used ONLY as a suggestion in the error message, NOT applied
+    automatically: the user has to enter the valid rate themselves, so
+    the app never silently measures something other than what was
+    configured (exactly the DIAdem/NI MAX pitfall).
 
-    Liegt die Anfrage über der höchsten unterstützten Rate, wird diese
-    zurückgegeben - darüber geht hardwareseitig nichts.
+    If the request exceeds the highest supported rate, that rate is
+    returned - nothing goes beyond that on the hardware side.
     """
     candidates = [rate for rate in _grid_valid_sample_rates(spec) if rate >= sample_rate_hz]
     return min(candidates) if candidates else spec.base_hz / spec.min_divisor
 
 
 def _is_valid_grid_sample_rate(sample_rate_hz: float, spec: GridRateSpec, tolerance_hz: float = 0.05) -> bool:
-    """Prüft `sample_rate_hz` gegen das Raster von `spec` (fs = base_hz / n).
+    """Checks `sample_rate_hz` against the grid of `spec` (fs = base_hz / n).
 
-    `tolerance_hz` deckt die Rundung der GUI-Eingabe ab (Spinbox mit einer
-    Nachkommastelle, siehe `gui/setup_view.py::_sample_rate_spin`) - viele
-    gültige Raten (z. B. 51200/3 = 17066,666...) sind mit einer
-    Nachkommastelle ohnehin nicht exakt darstellbar.
+    `tolerance_hz` covers rounding from the GUI input (spinbox with one
+    decimal place, see `gui/setup_view.py::_sample_rate_spin`) - many
+    valid rates (e.g. 51200/3 = 17066.666...) can't be represented
+    exactly with one decimal place anyway.
     """
     return abs(sample_rate_hz - _nearest_grid_sample_rate(sample_rate_hz, spec)) <= tolerance_hz
 
 
 def grid_valid_sample_rates(module_type: ModuleType) -> list[float]:
-    """Öffentliche, modultyp-generische Fassung von `_grid_valid_sample_rates`."""
+    """Public, module-type-generic version of `_grid_valid_sample_rates`."""
     return _grid_valid_sample_rates(_GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
 
 
 def nearest_grid_sample_rate(module_type: ModuleType, sample_rate_hz: float) -> float:
-    """Öffentliche, modultyp-generische Fassung von `_nearest_grid_sample_rate`."""
+    """Public, module-type-generic version of `_nearest_grid_sample_rate`."""
     return _nearest_grid_sample_rate(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
 
 
 def next_grid_sample_rate_at_or_above(module_type: ModuleType, sample_rate_hz: float) -> float:
-    """Öffentliche, modultyp-generische Fassung von `_next_grid_sample_rate_at_or_above`."""
+    """Public, module-type-generic version of `_next_grid_sample_rate_at_or_above`."""
     return _next_grid_sample_rate_at_or_above(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type])
 
 
 def is_valid_grid_sample_rate(module_type: ModuleType, sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
-    """Öffentliche, modultyp-generische Fassung von `_is_valid_grid_sample_rate`."""
+    """Public, module-type-generic version of `_is_valid_grid_sample_rate`."""
     return _is_valid_grid_sample_rate(sample_rate_hz, _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type], tolerance_hz)
 
 
 def ni9234_valid_sample_rates() -> list[float]:
-    """Alle 31 gültigen Abtastraten des NI9234 (absteigend sortiert).
+    """All 31 valid sample rates of the NI9234 (sorted descending).
 
-    Dünner Wrapper um die generische Rasterlogik (siehe
-    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`) - Verhalten unverändert gegenüber
-    der Zeit, als diese Funktion NI9234-spezifisch implementiert war.
+    Thin wrapper around the generic grid logic (see
+    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`) - behavior unchanged from when
+    this function was implemented NI9234-specifically.
     """
     return grid_valid_sample_rates(ModuleType.NI9234)
 
 
 def nearest_ni9234_sample_rate(sample_rate_hz: float) -> float:
-    """Die gültige NI9234-Abtastrate, die `sample_rate_hz` am nächsten liegt.
+    """The valid NI9234 sample rate closest to `sample_rate_hz`.
 
-    Ausschließlich für die Rasterprüfung in `is_valid_ni9234_sample_rate`
-    gedacht (symmetrische Toleranz um einen gültigen Wert). Für den
-    Vorschlag in Fehlermeldungen wird bewusst NICHT diese Funktion,
-    sondern `next_ni9234_sample_rate_at_or_above` verwendet - siehe dort.
+    Intended exclusively for the grid check in `is_valid_ni9234_sample_rate`
+    (symmetric tolerance around a valid value). The suggestion in error
+    messages deliberately does NOT use this function but
+    `next_ni9234_sample_rate_at_or_above` instead - see there.
     """
     return nearest_grid_sample_rate(ModuleType.NI9234, sample_rate_hz)
 
 
 def next_ni9234_sample_rate_at_or_above(sample_rate_hz: float) -> float:
-    """Die kleinste gültige NI9234-Abtastrate, die `sample_rate_hz` nicht
-    unterschreitet - also aufrunden statt auf den nächstgelegenen Wert.
+    """The smallest valid NI9234 sample rate that does not fall below
+    `sample_rate_hz` - i.e. round up instead of to the nearest value.
 
-    Wird NUR als Vorschlag in der Fehlermeldung verwendet, NICHT
-    automatisch angewendet: der Nutzer muss die gültige Rate selbst
-    eintragen, damit nie stillschweigend etwas anderes gemessen wird als
-    eingestellt (genau der DIAdem-/NI-MAX-Fallstrick).
+    Used ONLY as a suggestion in the error message, NOT applied
+    automatically: the user has to enter the valid rate themselves, so
+    the app never silently measures something other than what was
+    configured (exactly the DIAdem/NI MAX pitfall).
     """
     return next_grid_sample_rate_at_or_above(ModuleType.NI9234, sample_rate_hz)
 
 
 def is_valid_ni9234_sample_rate(sample_rate_hz: float, tolerance_hz: float = 0.05) -> bool:
-    """Prüft `sample_rate_hz` gegen das NI9234-Raster (fs = 51200 Hz / n)."""
+    """Checks `sample_rate_hz` against the NI9234 grid (fs = 51200 Hz / n)."""
     return is_valid_grid_sample_rate(ModuleType.NI9234, sample_rate_hz, tolerance_hz)
 
 
 class SignalType(str, Enum):
-    """Physikalischer Signaltyp eines Kanals.
+    """Physical signal type of a channel.
 
-    Wird u. a. von der Hardware-Schicht genutzt, um zu entscheiden, welche
-    nidaqmx-Kanalfunktion (z. B. `ai_voltage_chan` vs. `ai_accel_chan`)
-    für einen Kanal aufgerufen werden muss.
+    Used, among other things, by the hardware layer to decide which
+    nidaqmx channel function (e.g. `ai_voltage_chan` vs. `ai_accel_chan`)
+    needs to be called for a channel.
     """
 
     VOLTAGE = "voltage"
@@ -215,18 +215,19 @@ class SignalType(str, Enum):
     STRAIN = "strain"
 
 
-# Von der Anwendung angebotene Thermoelement-Typen (NI9210/NI9213, siehe
-# `hardware/ni9210.py`). Werte entsprechen direkt den Mitgliedsnamen von
-# `nidaqmx.constants.ThermocoupleType` (z. B. `ThermocoupleType["K"]"),
-# damit hier keine zusätzliche Übersetzungstabelle gepflegt werden muss.
-# Die selteneren Typen A/C (Wolfram-Rhenium) sind bewusst nicht enthalten.
+# Thermocouple types offered by the application (NI9210/NI9213, see
+# `hardware/ni9210.py`). Values correspond directly to the member names
+# of `nidaqmx.constants.ThermocoupleType` (e.g. `ThermocoupleType["K"]`),
+# so no additional translation table needs to be maintained here. The
+# rarer types A/C (tungsten-rhenium) are deliberately not included.
 THERMOCOUPLE_TYPES = ["K", "J", "T", "E", "N", "R", "S", "B"]
 
-# Praxisnahe Messbereiche je Thermoelement-Typ in °C (grobe Richtwerte
-# gemäß IEC 60584 für den Regelmessbereich), verwendet als min_val/max_val
-# für `add_ai_thrmcpl_chan` (siehe `hardware/ni9210.py`). Kein exaktes
-# Kalibrierlabor-Datenblatt - für die unterstützte Anwendung (Temperatur-
-# Überwachung, keine metrologische Präzisionsmessung) ausreichend.
+# Practical measurement ranges per thermocouple type in °C (rough
+# reference values per IEC 60584 for the standard measuring range), used
+# as min_val/max_val for `add_ai_thrmcpl_chan` (see `hardware/ni9210.py`).
+# Not an exact calibration-lab datasheet - sufficient for the supported
+# use case (temperature monitoring, not metrological precision
+# measurement).
 THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
     "K": (-200.0, 1372.0),
     "J": (-210.0, 1200.0),
@@ -238,37 +239,37 @@ THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
     "B": (250.0, 1820.0),
 }
 
-# ADC-Timing-Modi, die den Kompromiss zwischen Geschwindigkeit und
-# effektiver Auflösung steuern - NUR beim NI9213 hardwareseitig verfügbar,
-# NICHT beim NI9210 (dieses hat eine feste Abtastrate von 14 S/s ohne
-# konfigurierbaren Timing-Modus). Werte entsprechen direkt den
-# Mitgliedsnamen von `nidaqmx.constants.ADCTimingMode`, siehe
-# `hardware/ni9213.py`. Der volle DAQmx-Treiber kennt zusätzlich
-# "AUTOMATIC", "BEST_50_HZ_REJECTION", "BEST_60_HZ_REJECTION" und "CUSTOM"
-# - bewusst nicht angeboten, da weder NI-MAX noch DIAdem diese in ihrer
-# Bedienoberfläche zur Auswahl stellen (nur HIGH_RESOLUTION/HIGH_SPEED)
-# und für die drei erstgenannten auch keine verifizierten Wandlungszeiten
-# auffindbar waren (siehe Git-Historie/doc/offene_punkte.md).
+# ADC timing modes that control the trade-off between speed and
+# effective resolution - available in hardware ONLY on the NI9213, NOT
+# on the NI9210 (which has a fixed sample rate of 14 S/s with no
+# configurable timing mode). Values correspond directly to the member
+# names of `nidaqmx.constants.ADCTimingMode`, see `hardware/ni9213.py`.
+# The full DAQmx driver additionally knows "AUTOMATIC",
+# "BEST_50_HZ_REJECTION", "BEST_60_HZ_REJECTION", and "CUSTOM" -
+# deliberately not offered here, since neither NI-MAX nor DIAdem present
+# them for selection in their UI (only HIGH_RESOLUTION/HIGH_SPEED), and
+# no verified conversion times could be found for the first three
+# either (see git history/doc/offene_punkte.md).
 ADC_TIMING_MODES = [
     "HIGH_RESOLUTION",
     "HIGH_SPEED",
 ]
 
-# Vom NI9235 hardwareseitig unterstützte Brückenvarianten - AUSSCHLIESSLICH
-# Viertelbrücke (siehe hardware/ni9235.py), Halb-/Vollbrücke sind auf diesem
-# Modul physisch nicht verdrahtet. Werte entsprechen direkt den
-# Mitgliedsnamen von `nidaqmx.constants.StrainGageBridgeType`.
-#   QUARTER_BRIDGE_I:  ein aktiver Messgitter (Standardfall).
-#   QUARTER_BRIDGE_II: ein aktives Messgitter + ein Dummy-Gitter.
+# Bridge variants supported by the NI9235 in hardware - EXCLUSIVELY
+# quarter-bridge (see hardware/ni9235.py), half-/full-bridge are not
+# physically wired on this module. Values correspond directly to the
+# member names of `nidaqmx.constants.StrainGageBridgeType`.
+#   QUARTER_BRIDGE_I:  one active strain gage element (default case).
+#   QUARTER_BRIDGE_II: one active strain gage element + one dummy element.
 NI9235_BRIDGE_TYPES = ["QUARTER_BRIDGE_I", "QUARTER_BRIDGE_II"]
 
-# Wandlungszeit pro Kanal je ADC-Timing-Modus (Sekunden) - der NI9213-ADC
-# ist zwischen den Kanälen EINES physischen Moduls multiplext, die
-# maximal erreichbare Abtastrate ergibt sich laut NI-9213-Datenblatt aus
-# fs_max = min(1 / (Wandlungszeit * aktive Kanalzahl), 100 S/s) - "if you
-# are using fewer than all channels, the sample rate might be faster".
-# Beide Werte sind über mehrere unabhängige NI-Community-Zitate aus dem
-# Datenblatt bestätigt.
+# Conversion time per channel per ADC timing mode (seconds) - the
+# NI9213 ADC is multiplexed across the channels of ONE physical module;
+# per the NI 9213 datasheet, the maximum achievable sample rate is given
+# by fs_max = min(1 / (conversion time * number of active channels),
+# 100 S/s) - "if you are using fewer than all channels, the sample rate
+# might be faster". Both values are confirmed via several independent
+# NI community citations from the datasheet.
 NI9213_CONVERSION_TIME_S: dict[str, float] = {
     "HIGH_RESOLUTION": 0.055,
     "HIGH_SPEED": 0.00074,
@@ -277,15 +278,15 @@ NI9213_MAX_SAMPLE_RATE_HZ = 100.0
 
 
 def ni9213_device_groups(channels: list["Channel"]) -> dict[str, list["Channel"]]:
-    """Gruppiert die aktiven NI9213-Kanäle nach physischem Gerät (z. B.
-    "cDAQ1Mod3"), da der ADC pro Modul (nicht pro Messkonfiguration)
-    multiplext ist - zwei separate NI9213-Module teilen sich keine
-    gemeinsame Wandlerbandbreite.
+    """Groups the active NI9213 channels by physical device (e.g.
+    "cDAQ1Mod3"), since the ADC is multiplexed per module (not per
+    measurement configuration) - two separate NI9213 modules don't
+    share a common converter bandwidth.
 
-    Eigenständige, bewusst einfache String-Gruppierung statt eines
-    Imports aus `core/measurement.py::group_channels_by_device` -
-    `data/models.py` hängt bewusst nicht von `core/` ab (siehe
-    Moduldocstring oben).
+    A self-contained, deliberately simple string grouping instead of an
+    import from `core/measurement.py::group_channels_by_device` -
+    `data/models.py` deliberately does not depend on `core/` (see module
+    docstring above).
     """
     groups: dict[str, list[Channel]] = {}
     for channel in channels:
@@ -297,14 +298,13 @@ def ni9213_device_groups(channels: list["Channel"]) -> dict[str, list["Channel"]
 
 
 def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
-    """Maximal erreichbare Abtastrate für EIN physisches NI9213-Modul.
+    """Maximum achievable sample rate for ONE physical NI9213 module.
 
-    `channels_on_device`: nur die aktiven Kanäle dieses einen Geräts
-    (siehe `ni9213_device_groups`). Nimmt bei uneinheitlichem
-    `adc_timing_mode` innerhalb der Gruppe (sollte über die GUI nicht
-    vorkommen, siehe `hardware/ni9213.py`, aber z. B. bei einer von Hand
-    bearbeiteten Konfigurationsdatei möglich) defensiv den langsamsten
-    beteiligten Modus an.
+    `channels_on_device`: only the active channels of this one device
+    (see `ni9213_device_groups`). If `adc_timing_mode` is inconsistent
+    within the group (shouldn't happen via the GUI, see
+    `hardware/ni9213.py`, but possible e.g. with a manually edited
+    configuration file), defensively assumes the slowest mode involved.
     """
     if not channels_on_device:
         return NI9213_MAX_SAMPLE_RATE_HZ
@@ -315,43 +315,41 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
     return min(NI9213_MAX_SAMPLE_RATE_HZ, 1.0 / (conversion_time_s * len(channels_on_device)))
 
 
-# Modultypen mit einer hardwareseitig FESTEN Abtastrate, die sich nicht an
-# eine gemeinsame Zielrate anpassen lässt (aktuell nur der NI9210 mit
-# 14 S/s). NI9234/NI9235 (Raster-Module, siehe
-# `_GRID_SAMPLE_RATE_SPEC_BY_MODULE` weiter oben) und NI9213 (max.
-# erreichbare Rate abhängig von Kanalzahl/Timing-Modus) fehlen hier
-# bewusst: alle drei können EINE gemeinsame Zielrate erfüllen, solange
-# diese auf ihrem jeweiligen Raster bzw. unterhalb ihres Maximums liegt -
-# sie bleiben deshalb grundsätzlich in der gemeinsamen "Zielraten"-Gruppe
-# (Ausnahme: zwei GLEICHZEITIG vorhandene Raster-Module mit für die
-# Zielrate unterschiedlich gesnappten Raten, siehe `resolve_rate_groups()`).
-# Ein künftiges Modul mit einer ähnlich starren EINZELNEN Rate muss nur
-# hier ergänzt werden - `resolve_rate_groups()` bildet daraus automatisch
-# eine eigene Gruppe, ohne dass die Gruppierungslogik selbst angepasst
-# werden muss.
+# Module types with a hardware-side FIXED sample rate that cannot be
+# adapted to a shared target rate (currently only the NI9210 at 14 S/s).
+# NI9234/NI9235 (grid modules, see `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`
+# above) and NI9213 (max. achievable rate depends on channel count/timing
+# mode) are deliberately excluded here: all three can satisfy ONE shared
+# target rate as long as it lies on their respective grid, or below their
+# maximum - they therefore fundamentally stay in the shared "target rate"
+# group (exception: two grid modules present AT THE SAME TIME with rates
+# that snap differently for the target rate, see `resolve_rate_groups()`).
+# A future module with a similarly rigid SINGLE rate only needs to be
+# added here - `resolve_rate_groups()` automatically forms its own group
+# from it, without the grouping logic itself needing to be adjusted.
 _FIXED_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
     ModuleType.NI9210: NI9210_FIXED_SAMPLE_RATE_HZ,
 }
 
-# Toleranz für den Vergleich "feste Modul-Rate == Zielrate" - deckt
-# Rundung der GUI-Eingabe ab (siehe `is_valid_ni9234_sample_rate` für
-# dieselbe Toleranz an anderer Stelle).
+# Tolerance for comparing "fixed module rate == target rate" - covers
+# rounding of the GUI input (see `is_valid_ni9234_sample_rate` for the
+# same tolerance used elsewhere).
 _FIXED_RATE_TOLERANCE_HZ = 0.05
 
 
 @dataclass
 class RateGroup:
-    """Eine Menge aktiver Kanäle, die hardwareseitig dieselbe Abtastrate
-    teilen können und daher (der bevorzugte Fall) in einem einzigen
-    nidaqmx-Task mit echter Sample-Clock-Synchronität laufen.
+    """A set of active channels that can share the same sample rate in
+    hardware, and therefore (the preferred case) run in a single nidaqmx
+    task with true sample-clock synchronicity.
 
-    Mehrere `RateGroup`s in einer Messung entstehen NUR, wenn (a) ein Modul
-    eine mit den übrigen Kanälen unvereinbare, hardwareseitig fixe Rate hat
-    (siehe `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, aktuell: NI9210, feste
-    14 S/s), oder (b) zwei gleichzeitig vorhandene Raster-Module (siehe
-    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`, aktuell NI9234/NI9235) für die
-    Zielrate auf unterschiedliche Raten snappen - das ist die Ausnahme,
-    nicht der Regelfall. Siehe `resolve_rate_groups`.
+    Multiple `RateGroup`s in one measurement arise ONLY when (a) a
+    module has a hardware-fixed rate that's incompatible with the other
+    channels (see `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, currently: NI9210,
+    fixed 14 S/s), or (b) two grid modules present at the same time (see
+    `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`, currently NI9234/NI9235) snap to
+    different rates for the target rate - this is the exception, not the
+    default case. See `resolve_rate_groups`.
     """
 
     channels: list["Channel"]
@@ -362,39 +360,38 @@ class RateGroup:
 def resolve_rate_groups(
     channels: list["Channel"], target_sample_rate_hz: float
 ) -> list[RateGroup]:
-    """Teilt aktive Kanäle in Gruppen mit gemeinsam nutzbarer Abtastrate auf.
+    """Splits active channels into groups with a jointly usable sample rate.
 
-    Ein Kanal von einem Modul aus `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`
-    (feste, nicht an eine Zielrate ANPASSBARE Rate) bekommt NUR dann
-    eine eigene Gruppe, wenn seine feste Rate von `target_sample_rate_hz`
-    abweicht - entspricht die Zielrate zufällig genau der festen Rate
-    (z. B. ein NI9210 bei einer Zielrate von exakt 14 S/s), gibt es
-    keinen Konflikt und der Kanal bleibt in der gemeinsamen
-    "Zielraten"-Gruppe. Mehrere tatsächlich abweichende feste Raten
-    werden NACH IHRER JEWEILIGEN RATE gruppiert (nicht nach Modultyp) -
-    zwei unterschiedliche Module mit zufällig derselben festen Rate
-    landen so in derselben Gruppe. Alle übrigen (an eine Zielrate
-    anpassbaren) Module bleiben IMMER in der gemeinsamen
-    "Zielraten"-Gruppe (der bevorzugte, echt synchronisierte Fall) -
-    diese Gruppe wird niemals aus Bequemlichkeit aufgeteilt.
+    A channel from a module in `_FIXED_SAMPLE_RATE_HZ_BY_MODULE` (a fixed
+    rate that is NOT adaptable to a target rate) only gets its own group
+    if its fixed rate differs from `target_sample_rate_hz` - if the
+    target rate happens to exactly match the fixed rate (e.g. an NI9210
+    at a target rate of exactly 14 S/s), there's no conflict and the
+    channel stays in the shared "target rate" group. Multiple actually
+    differing fixed rates are grouped BY THEIR RESPECTIVE RATE (not by
+    module type) - two different modules that happen to share the same
+    fixed rate end up in the same group this way. All other modules
+    (adaptable to a target rate) ALWAYS stay in the shared "target rate"
+    group (the preferred, truly synchronized case) - this group is never
+    split for convenience.
 
     Args:
-        channels: Aktive Kanäle (z. B. `MeasurementConfig.active_channels()`).
-        target_sample_rate_hz: Vom Nutzer eingestellte Zielrate.
+        channels: Active channels (e.g. `MeasurementConfig.active_channels()`).
+        target_sample_rate_hz: Target rate set by the user.
 
     Returns:
-        Eine Gruppe pro tatsächlich vorkommender Rate (Zielraten-Gruppe
-        zuerst, falls vorhanden, danach die Gruppen fester Rate in der
-        Reihenfolge ihres ersten Auftretens in `channels`) - diese
-        Reihenfolge bestimmt später die Kanalreihenfolge im Ring Buffer
-        (siehe `core/controller.py::start_measurement`).
+        One group per rate that actually occurs (target-rate group
+        first, if present, then the fixed-rate groups in the order of
+        their first occurrence in `channels`) - this order later
+        determines the channel order in the ring buffer (see
+        `core/controller.py::start_measurement`).
 
     Raises:
-        ValueError: falls die Zielrate für ein Modul OHNE feste Rate
-            (NI9234-Raster, NI9213-Maximalrate) intrinsisch unerreichbar
-            ist - das ist unabhängig davon, welche anderen Module in der
-            Messung sind, also KEIN "Teilen"-Problem, sondern eine echte
-            Fehlkonfiguration.
+        ValueError: if the target rate is intrinsically unreachable for
+            a module WITHOUT a fixed rate (NI9234 grid, NI9213 maximum
+            rate) - this is independent of which other modules are in
+            the measurement, so it's NOT a "sharing" problem but a
+            genuine misconfiguration.
     """
     fixed_channels: list[Channel] = []
     adaptive_channels: list[Channel] = []
@@ -403,19 +400,19 @@ def resolve_rate_groups(
         if fixed_rate is not None and abs(target_sample_rate_hz - fixed_rate) > _FIXED_RATE_TOLERANCE_HZ:
             fixed_channels.append(ch)
         else:
-            # Kein Konflikt: entweder kein Modul mit fester Rate, oder
-            # die feste Rate entspricht bereits der Zielrate - der Kanal
-            # kann im gemeinsamen Task bleiben (siehe Docstring oben).
+            # No conflict: either no module with a fixed rate, or the
+            # fixed rate already matches the target rate - the channel
+            # can stay in the shared task (see docstring above).
             adaptive_channels.append(ch)
 
     groups: list[RateGroup] = []
 
     if adaptive_channels:
-        # Alle Raster-Modultypen (siehe `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`),
-        # die unter den adaptiven Kanälen tatsächlich vorkommen - sortiert,
-        # damit die Gruppen-Reihenfolge bei gleicher Eingabe deterministisch
-        # bleibt. Jeder wird GEGEN SEIN EIGENES Raster geprüft/gesnappt,
-        # nicht mehr nur das NI9234 (siehe Docstring oben, Fall (b)).
+        # All grid module types (see `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`)
+        # that actually occur among the adaptive channels - sorted so
+        # the group order stays deterministic for the same input. Each
+        # is checked/snapped against ITS OWN grid, no longer just the
+        # NI9234 (see docstring above, case (b)).
         grid_module_types = sorted(
             (
                 {ch.module_type for ch in adaptive_channels}
@@ -425,12 +422,12 @@ def resolve_rate_groups(
         )
         resolved_by_module: dict[ModuleType, float] = {}
         if len(grid_module_types) == 1:
-            # Regelfall: GENAU EIN Rastermodultyp vorhanden. Verhalten
-            # unveraendert gegenueber vor dieser Generalisierung: eine
-            # Zielrate, die nicht (innerhalb Toleranz) auf DIESEM Raster
-            # liegt, ist ein echter Konfigurationsfehler - der Nutzer soll
-            # bewusst einen gueltigen Wert eintragen statt dass die App
-            # unbemerkt auf einen ganz anderen Wert ausweicht.
+            # Default case: EXACTLY ONE grid module type present. Behavior
+            # unchanged from before this generalization: a target rate
+            # that doesn't lie on THIS grid (within tolerance) is a
+            # genuine configuration error - the user should deliberately
+            # enter a valid value instead of the app silently falling
+            # back to a completely different one.
             module_type = grid_module_types[0]
             spec = _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type]
             if not _is_valid_grid_sample_rate(target_sample_rate_hz, spec):
@@ -440,30 +437,30 @@ def resolve_rate_groups(
                     f"{spec.base_hz:.0f} Hz / n (n = {spec.min_divisor}..{spec.max_divisor}); "
                     f"nächster gültiger Wert nach oben: {suggestion:.1f} S/s."
                 )
-            # Auf die EXAKTE gültige Rasterrate einrasten, NICHT die rohe
-            # (z. B. auf eine Nachkommastelle gerundete) Zielrate
-            # verwenden: DAQmx rundet einen Wert, der auch nur minimal
-            # ÜBER einer gültigen Rate liegt, auf die NÄCHSTHÖHERE
-            # gültige Rate auf (nicht auf die nächstgelegene) - z. B.
-            # würde 17066,7 Hz (0,03 Hz über der exakt gültigen
-            # 17066,67 Hz) intern auf 25600 Hz hochspringen, ohne dass
-            # App/Metadaten/Live-View das bemerken. Hier bereits an der
-            # Quelle auf den exakten Wert einrasten stellt sicher, dass
-            # die überall angezeigte/gespeicherte Rate tatsächlich die
-            # ist, die DAQmx auch wirklich konfiguriert - an echter
-            # Hardware verifiziert (`task.timing.samp_clk_rate`).
+            # Snap to the EXACT valid grid rate, do NOT use the raw
+            # target rate (e.g. rounded to one decimal place): DAQmx
+            # rounds a value that lies even minimally ABOVE a valid rate
+            # up to the NEXT-HIGHER valid rate (not to the nearest one)
+            # - e.g. 17066.7 Hz (0.03 Hz above the exactly valid
+            # 17066.67 Hz) would internally jump up to 25600 Hz, without
+            # the app/metadata/live view noticing. Snapping to the exact
+            # value here, right at the source, ensures that the rate
+            # shown/saved everywhere is actually the one DAQmx really
+            # configures - verified on real hardware
+            # (`task.timing.samp_clk_rate`).
             resolved_by_module[module_type] = _nearest_grid_sample_rate(target_sample_rate_hz, spec)
         else:
-            # >=2 Rastermodultypen GLEICHZEITIG vorhanden (z. B. NI9234 +
-            # NI9235): die beiden Raster überschneiden sich rechnerisch nie
-            # (siehe Modul-Kommentar bei `NI9235_BASE_SAMPLE_RATE_HZ`) -
-            # die rohe Zielrate kann also grundsätzlich nur für HÖCHSTENS
-            # eines der beiden Raster "gültig" sein. Anders als im
-            # Ein-Modul-Fall ist das hier KEIN Konfigurationsfehler,
-            # sondern der Regelfall (exakt wie beim NI9210-Fixed-Rate-Fall:
-            # jedes Modul bekommt einfach die für sein eigenes Raster
-            # nächstgelegene Rate, ohne Fehlermeldung) - deshalb hier KEINE
-            # `_is_valid_grid_sample_rate`-Gate, nur bedingungslos snappen.
+            # >=2 grid module types present AT THE SAME TIME (e.g.
+            # NI9234 + NI9235): the two grids mathematically never
+            # overlap (see the module comment at
+            # `NI9235_BASE_SAMPLE_RATE_HZ`) - so the raw target rate can
+            # generally only be "valid" for AT MOST one of the two
+            # grids. Unlike the single-module case, this is NOT a
+            # configuration error but the default case here (exactly
+            # like the NI9210 fixed-rate case: each module simply gets
+            # the rate nearest to it on its own grid, without an error
+            # message) - hence NO `_is_valid_grid_sample_rate` gate here,
+            # just unconditional snapping.
             for module_type in grid_module_types:
                 spec = _GRID_SAMPLE_RATE_SPEC_BY_MODULE[module_type]
                 resolved_by_module[module_type] = _nearest_grid_sample_rate(target_sample_rate_hz, spec)
@@ -490,15 +487,14 @@ def resolve_rate_groups(
                 )
             )
         else:
-            # >=2 Raster-Modultypen (z. B. NI9234 + NI9235) snappen für
-            # DIESE Zielrate auf unterschiedliche Raten - ein gemeinsamer
-            # Task würde eines der beiden Module stillschweigend falsch
-            # takten. Aufteilung in separate Gruppen, analog zum
-            # bestehenden Fixed-Rate-Split unten. Kanäle OHNE eigenes
-            # Rasterlimit (z. B. NI9215) wandern in die Gruppe, deren
-            # gesnappte Rate der rohen Zielrate am nächsten liegt - eine
-            # bewusste, aber nicht hardwareseitig erzwungene Wahl (das
-            # Modul toleriert jede Taktrate).
+            # >=2 grid module types (e.g. NI9234 + NI9235) snap to different
+            # rates for THIS target rate - a shared task would silently
+            # clock one of the two modules wrong. Split into separate
+            # groups, analogous to the existing fixed-rate split below.
+            # Channels without their own grid limit (e.g. NI9215) join the
+            # group whose snapped rate is closest to the raw target rate -
+            # a deliberate but not hardware-enforced choice (the module
+            # tolerates any clock rate).
             per_module: dict[ModuleType, list[Channel]] = {}
             for ch in adaptive_channels:
                 key = (
@@ -540,14 +536,14 @@ def resolve_rate_groups(
 
 
 class StorageFormat(str, Enum):
-    """Von der Anwendung unterstützte Speicherformate für Messdaten."""
+    """Storage formats supported by the application for measurement data."""
 
     PARQUET = "parquet"
     CSV = "csv"
 
 
 class RecordingStopUnit(str, Enum):
-    """Einheit für das konfigurierte Aufnahme-Limit (siehe
+    """Unit for the configured recording limit (see
     `MeasurementConfig.recording_stop_value`/`recording_unlimited`)."""
 
     SAMPLES = "samples"
@@ -556,8 +552,8 @@ class RecordingStopUnit(str, Enum):
     HOURS = "hours"
 
 
-# Umrechnungsfaktor auf Sekunden je Zeiteinheit - SAMPLES bewusst nicht
-# enthalten, da dafür Messwerte statt Sekunden verglichen werden (siehe
+# Conversion factor to seconds per time unit - SAMPLES deliberately not
+# included, since that compares sample counts rather than seconds (see
 # `MeasurementConfig.is_recording_limit_reached`).
 _RECORDING_STOP_UNIT_TO_SECONDS: dict[RecordingStopUnit, float] = {
     RecordingStopUnit.SECONDS: 1.0,
@@ -567,12 +563,12 @@ _RECORDING_STOP_UNIT_TO_SECONDS: dict[RecordingStopUnit, float] = {
 
 
 class TriggerKind(str, Enum):
-    """Art einer einzelnen Trigger-Bedingung (siehe `TriggerCondition`).
+    """Kind of a single trigger condition (see `TriggerCondition`).
 
-    NONE (Standard) = keine automatische Bedingung (manuelles Verhalten).
-    THRESHOLD/SERIAL lösen automatisch aus, sobald die jeweils
-    konfigurierte Bedingung eintritt - der "Scharf"-Zustand (Hardware
-    läuft bereits, wartet auf die Start-Bedingung) lebt in
+    NONE (default) = no automatic condition (manual behavior).
+    THRESHOLD/SERIAL fire automatically as soon as the respective
+    configured condition occurs - the "armed" state (hardware already
+    running, waiting for the start condition) lives in
     `gui/live_view.py::LiveView.enter_armed_state`.
     """
 
@@ -582,7 +578,7 @@ class TriggerKind(str, Enum):
 
 
 class TriggerDirection(str, Enum):
-    """Vergleichsrichtung des Schwellwert-Triggers (siehe
+    """Comparison direction of the threshold trigger (see
     `TriggerCondition.threshold_direction`)."""
 
     RISES_ABOVE = "rises_above"
@@ -592,21 +588,22 @@ class TriggerDirection(str, Enum):
 
 @dataclass
 class TriggerCondition:
-    """Eine einzelne Trigger-Bedingung - wird sowohl für den Start als auch
-    für das Stopp einer Messung verwendet (siehe `TriggerConfig.start`/
-    `TriggerConfig.stop`), jeweils unabhängig konfigurierbar.
+    """A single trigger condition - used for both the start and the stop
+    of a measurement (see `TriggerConfig.start`/`TriggerConfig.stop`),
+    each independently configurable.
 
     Attributes:
-        kind: Art der Bedingung.
-        threshold_channel_hardware_id: Hardwarekanal (`Channel.hardware_channel`)
-            des zu überwachenden Kanals - nur bei `kind=THRESHOLD` relevant.
-        threshold_value: Schwellwert in der physikalischen Einheit des Kanals.
-        threshold_direction: Vergleichsrichtung (siehe `TriggerDirection`).
-        serial_port: Serielle Schnittstelle (z. B. "COM3") - nur bei
-            `kind=SERIAL` relevant.
-        serial_baud_rate: Baudrate der seriellen Verbindung.
-        serial_expected_message: Exaktes Byte-/Text-Signal, dessen Empfang
-            die Bedingung auslöst (kein beliebiges Byte) - siehe
+        kind: Kind of condition.
+        threshold_channel_hardware_id: Hardware channel
+            (`Channel.hardware_channel`) of the channel to monitor - only
+            relevant for `kind=THRESHOLD`.
+        threshold_value: Threshold value in the channel's physical unit.
+        threshold_direction: Comparison direction (see `TriggerDirection`).
+        serial_port: Serial interface (e.g. "COM3") - only relevant for
+            `kind=SERIAL`.
+        serial_baud_rate: Baud rate of the serial connection.
+        serial_expected_message: Exact byte/text signal whose receipt
+            fires the condition (not just any byte) - see
             `gui/serial_trigger.py::SerialTriggerListener`.
     """
 
@@ -646,36 +643,38 @@ class TriggerCondition:
 
 @dataclass
 class TriggerConfig:
-    """Konfiguration für automatischen Mess-Start UND/ODER -Stopp.
+    """Configuration for automatic measurement start AND/OR stop.
 
-    Bewusst als eigenes, verschachteltes Dataclass statt flacher Felder
-    auf `MeasurementConfig`.
+    Deliberately a separate, nested dataclass rather than flat fields on
+    `MeasurementConfig`.
 
-    `start.kind == NONE` = manueller Start (Klick auf "Messung starten",
-    bisheriges Standardverhalten). `stop.kind == NONE` = kein
-    Trigger-Stopp - das bestehende, separate Aufnahme-Limit
+    `start.kind == NONE` = manual start (clicking "Start Measurement",
+    the previous default behavior). `stop.kind == NONE` = no trigger
+    stop - the existing, separate recording limit
     (`MeasurementConfig.recording_unlimited`/`recording_stop_value`/
-    `recording_stop_unit`) sowie der manuelle Stopp-Button wirken davon
-    UNABHÄNGIG weiter (wer zuerst eintrifft, stoppt die Messung - gleiche
-    "oder"-Beziehung wie schon zwischen manuellem Stopp und Aufnahme-Limit).
+    `recording_stop_unit`) and the manual stop button keep working
+    INDEPENDENTLY of that (whichever fires first stops the measurement -
+    the same "or" relationship that already existed between the manual
+    stop and the recording limit).
 
     Attributes:
-        start: Bedingung für den automatischen Start.
-        stop: Bedingung für den automatischen Stopp.
-        pretrigger_seconds: Wie viele Sekunden VOR dem Start-Trigger-
-            Zeitpunkt zusätzlich rückwirkend aufgezeichnet werden sollen
-            (wie ein Oszilloskop-Trigger) - nur bei `start.kind=THRESHOLD`
-            relevant, siehe `core/ringbuffer.py::RingBuffer.register_reader`.
-            Für den Stopp gibt es bewusst KEINEN Vorlauf - ein Stopp-Trigger
-            beendet die Aufzeichnung einfach zum Zeitpunkt des Auslösens.
-        auto_rearm: Ob nach JEDEM Stopp (manuell, per Trigger oder
-            Aufnahme-Limit) automatisch eine neue Messung mit derselben
-            Konfiguration gestartet wird, statt auf einen erneuten
-            manuellen Klick auf "Messung starten" zu warten - macht
-            `start`/`stop` erst zu einem echten, unbeaufsichtigt
-            durchlaufenden Trigger-Zyklus (siehe
-            `gui/main_window.py::_on_stop_measurement`). Nur relevant,
-            wenn mindestens `start.kind` oder `stop.kind` != NONE ist.
+        start: Condition for the automatic start.
+        stop: Condition for the automatic stop.
+        pretrigger_seconds: How many seconds BEFORE the start-trigger
+            instant should additionally be recorded retroactively (like
+            an oscilloscope trigger) - only relevant for
+            `start.kind=THRESHOLD`, see
+            `core/ringbuffer.py::RingBuffer.register_reader`. The stop
+            deliberately has NO pre-roll - a stop trigger simply ends the
+            recording at the instant it fires.
+        auto_rearm: Whether, after EVERY stop (manual, via trigger, or
+            recording limit), a new measurement with the same
+            configuration is started automatically instead of waiting
+            for another manual click on "Start Measurement" - this is
+            what turns `start`/`stop` into a true, unattended, repeating
+            trigger cycle (see
+            `gui/main_window.py::_on_stop_measurement`). Only relevant
+            when at least `start.kind` or `stop.kind` != NONE.
     """
 
     start: TriggerCondition = field(default_factory=TriggerCondition)
@@ -703,76 +702,74 @@ class TriggerConfig:
 
 @dataclass
 class Channel:
-    """Repräsentiert einen einzelnen Messkanal.
+    """Represents a single measurement channel.
 
     Attributes:
-        hardware_channel: Physischer Hardwarekanal, z. B. "cDAQ1Mod1/ai0".
-        display_name: Frei wählbarer Anzeigename für GUI und Auswertung,
-            z. B. "Kraft Zylinder 1".
-        unit: Physikalische Einheit des skalierten Werts, z. B. "N", "m/s^2".
-        scale: Skalierungsfaktor der linearen Transformation.
-        offset: Offset der linearen Transformation.
-        signal_type: Physikalischer Signaltyp (Spannung, IEPE-Beschleunigung, ...).
-        module_type: Modul, an dem der Kanal hängt (NI9215, NI9234, ...).
-        enabled: Ob der Kanal für die nächste Messung aktiv ist.
-        min_range: Optionaler unterer Messbereich (z. B. -10.0 V bei NI9215).
-        max_range: Optionaler oberer Messbereich (z. B. +10.0 V bei NI9215).
-        sensitivity_mv_per_unit: Sensorempfindlichkeit in mV/Einheit,
-            relevant für IEPE-Beschleunigungssensoren (NI9234).
-        thermocouple_type: Thermoelement-Typ (z. B. "K", "J", "T", ...),
-            relevant für Thermoelement-Kanäle (NI9210/NI9213), siehe
+        hardware_channel: Physical hardware channel, e.g. "cDAQ1Mod1/ai0".
+        display_name: Freely choosable display name for GUI and analysis,
+            e.g. "Force Cylinder 1".
+        unit: Physical unit of the scaled value, e.g. "N", "m/s^2".
+        scale: Scaling factor of the linear transformation.
+        offset: Offset of the linear transformation.
+        signal_type: Physical signal type (voltage, IEPE acceleration, ...).
+        module_type: Module the channel is on (NI9215, NI9234, ...).
+        enabled: Whether the channel is active for the next measurement.
+        min_range: Optional lower measurement range (e.g. -10.0 V for NI9215).
+        max_range: Optional upper measurement range (e.g. +10.0 V for NI9215).
+        sensitivity_mv_per_unit: Sensor sensitivity in mV/unit, relevant
+            for IEPE acceleration sensors (NI9234).
+        thermocouple_type: Thermocouple type (e.g. "K", "J", "T", ...),
+            relevant for thermocouple channels (NI9210/NI9213), see
             `THERMOCOUPLE_TYPES`.
-        strain_gage_factor: k-Faktor des angeschlossenen Dehnungsmessstreifens
-            (typisch ~2.0), relevant für NI9235-Kanäle. `None` = nicht
-            gesetzt (analog `sensitivity_mv_per_unit`).
-        strain_bridge_type: Viertelbrücken-Variante (siehe
-            `NI9235_BRIDGE_TYPES`) - hängt von der physischen Verkabelung
-            ab (mit/ohne Dummy-Gitter), relevant für NI9235-Kanäle.
-        lead_wire_resistance_ohm: Zuleitungswiderstand in Ω zur
-            Kompensation der Leitungslänge (siehe NI9235 "Lead Wire
-            Desensitization"), relevant für NI9235-Kanäle. 0.0 = keine
-            Kompensation (Standard).
-        cal_point1_measured / cal_point1_reference: Erster Referenzpunkt
-            einer optionalen 2-Punkt-Kalibrierung (gemessener Rohwert vs.
-            bekannter Sollwert, z. B. Eispunkt 0 °C bei einem
-            Thermoelement) - `None`, solange nicht kalibriert. Werden
-            zusammen mit `cal_point2_*` nur zur Nachvollziehbarkeit
-            gespeichert; `scale`/`offset` bleiben die tatsächlich
-            angewendeten Werte (siehe
+        strain_gage_factor: k-factor of the connected strain gauge
+            (typically ~2.0), relevant for NI9235 channels. `None` = not
+            set (analogous to `sensitivity_mv_per_unit`).
+        strain_bridge_type: Quarter-bridge variant (see
+            `NI9235_BRIDGE_TYPES`) - depends on the physical wiring
+            (with/without dummy gage), relevant for NI9235 channels.
+        lead_wire_resistance_ohm: Lead wire resistance in Ω to compensate
+            for cable length (see NI9235 "Lead Wire Desensitization"),
+            relevant for NI9235 channels. 0.0 = no compensation (default).
+        cal_point1_measured / cal_point1_reference: First reference point
+            of an optional 2-point calibration (measured raw value vs.
+            known reference value, e.g. ice point 0 °C for a
+            thermocouple) - `None` as long as uncalibrated. Stored
+            together with `cal_point2_*` only for traceability;
+            `scale`/`offset` remain the values actually applied (see
             `gui/widgets/channel_table.py::TwoPointCalibrationDialog`).
-        cal_point2_measured / cal_point2_reference: Zweiter Referenzpunkt
-            der 2-Punkt-Kalibrierung, z. B. Siedepunkt 100 °C.
-        adc_timing_mode: ADC-Timing-Modus (siehe `ADC_TIMING_MODES`), NUR
-            beim NI9213 hardwareseitig verfügbar (NI9210 hat eine feste
-            Abtastrate). Muss laut nidaqmx für alle Kanäle desselben
-            physischen Moduls identisch sein - die Kanaltabelle überträgt
-            eine Änderung deshalb automatisch auf alle Kanäle desselben
-            Moduls, siehe `gui/widgets/channel_table.py`.
-        plot_color: Individuelle Kurvenfarbe in der Live View (z. B.
-            "#64b5f6"), `None` = Theme-Standardfarbe (siehe
+        cal_point2_measured / cal_point2_reference: Second reference
+            point of the 2-point calibration, e.g. boiling point 100 °C.
+        adc_timing_mode: ADC timing mode (see `ADC_TIMING_MODES`), ONLY
+            available in hardware on the NI9213 (NI9210 has a fixed
+            sample rate). Per nidaqmx, must be identical for all channels
+            of the same physical module - the channel table therefore
+            automatically propagates a change to all channels of the same
+            module, see `gui/widgets/channel_table.py`.
+        plot_color: Individual curve color in the live view (e.g.
+            "#64b5f6"), `None` = theme default color (see
             `gui/live_view.py::ChannelDisplayDialog`).
-        plot_background: Individuelle Plot-Hintergrundfarbe, `None` =
-            Theme-Standardhintergrund.
-        plot_grid_color: Individuelle Gitterlinienfarbe, `None` =
-            Theme-Standard (Vordergrundfarbe, siehe
+        plot_background: Individual plot background color, `None` =
+            theme default background.
+        plot_grid_color: Individual gridline color, `None` = theme
+            default (foreground color, see
             `gui/live_view.py::_channel_grid_color`).
-        plot_y_min: Unterer Y-Achsen-Anzeigebereich der Live View. Anders
-            als `min_range`/`max_range` (Hardware-Messbereich) rein eine
-            Darstellungseinstellung - `None` fällt auf `min_range` bzw.
-            -10.0 zurück.
-        plot_y_max: Oberer Y-Achsen-Anzeigebereich der Live View, `None`
-            fällt auf `max_range` bzw. 10.0 zurück.
-        plot_autoscale: Ob die Y-Achse bei Über-/Unterschreiten von
-            `plot_y_min`/`plot_y_max` automatisch auf den tatsächlichen
-            Wertebereich umschaltet - ist dies `False`, bleibt der feste
-            Bereich immer aktiv.
-        plot_visible: Ob der Kanal in der Live View als eigener Subplot
-            angezeigt wird. Betrifft NUR die Anzeige, nicht die Erfassung/
-            Speicherung - ein Kanal mit `plot_visible=False` wird
-            weiterhin normal aufgezeichnet, taucht aber nicht im
-            Live-View-Raster auf (siehe `gui/live_view.py::_rebuild_plots`).
+        plot_y_min: Lower Y-axis display range of the live view. Unlike
+            `min_range`/`max_range` (hardware measurement range), a
+            purely display-related setting - `None` falls back to
+            `min_range` or -10.0.
+        plot_y_max: Upper Y-axis display range of the live view, `None`
+            falls back to `max_range` or 10.0.
+        plot_autoscale: Whether the Y axis automatically switches to the
+            actual value range when `plot_y_min`/`plot_y_max` is
+            exceeded/undershot - if `False`, the fixed range always
+            stays active.
+        plot_visible: Whether the channel is shown as its own subplot in
+            the live view. Affects ONLY the display, not
+            acquisition/storage - a channel with `plot_visible=False` is
+            still recorded normally, it just doesn't appear in the live
+            view grid (see `gui/live_view.py::_rebuild_plots`).
 
-    Die physikalische Umrechnung erfolgt gemäß:
+    The physical conversion is computed as:
         physikalischer_wert = rohwert * scale + offset
     """
 
@@ -803,46 +800,45 @@ class Channel:
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
     plot_time_window_seconds: float = 5.0
-    # Ob der eigentliche Kurvenverlauf angezeigt wird (Hauptraster UND
-    # eigenes Fenster) - unabhaengig von `plot_show_value` unten: beide
-    # zusammen abgeschaltet zeigt gar nichts (siehe `plot_visible` dafuer).
-    # Standard ist NUR das Diagramm (siehe `plot_show_value`), NUR dieses
-    # Feld aus zeigt ausschliesslich den Zahlenwert ohne Diagramm (siehe
+    # Whether the actual curve trace is shown (main grid AND own window) -
+    # independent of `plot_show_value` below: both switched off together
+    # shows nothing at all (see `plot_visible` for that). Default is ONLY
+    # the chart (see `plot_show_value`), turning ONLY this field off shows
+    # exclusively the numeric value without a chart (see
     # `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`).
     plot_show_graph: bool = True
-    # Grosse, aktuelle Messwertanzeige neben dem Subplot im Hauptraster
-    # (siehe `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
-    # standardmaessig AUS: pro Kanal bewusst zuschaltbar statt bei vielen
-    # Kanälen von vornherein unnötig Platz zu kosten.
+    # Large, current value readout next to the subplot in the main grid
+    # (see `gui/live_view.py::ChannelDisplayDialog`/`_rebuild_plots`) -
+    # OFF by default: deliberately opt-in per channel instead of costing
+    # unnecessary space up front with many channels.
     plot_show_value: bool = False
-    # Anzahl Vorkommastellen fuer `plot_show_value` - passt ein Messwert
-    # NICHT hinein, wird statt einer irrefuehrend abgeschnittenen Zahl ein
-    # Rauten-Platzhalter angezeigt (wie in DIAdem/LabVIEW-Digitalanzeigen),
-    # statt die Anzeigebreite laufend nachzuziehen. Im Dialog gemeinsam mit
-    # `plot_value_decimal_digits` als EIN Format-Muster editierbar (z. B.
-    # "000.0000"), siehe `gui/live_view.py::ChannelDisplayDialog`.
+    # Number of integer digits for `plot_show_value` - if a reading
+    # doesn't fit, a placeholder of hash marks is shown (like DIAdem/
+    # LabVIEW digital displays) instead of a misleadingly truncated
+    # number, rather than continuously readjusting the display width. In
+    # the dialog, editable together with `plot_value_decimal_digits` as
+    # ONE format pattern (e.g. "000.0000"), see
+    # `gui/live_view.py::ChannelDisplayDialog`.
     plot_value_integer_digits: int = 3
-    # Anzahl Nachkommastellen - siehe `plot_value_integer_digits`.
+    # Number of decimal digits - see `plot_value_integer_digits`.
     plot_value_decimal_digits: int = 3
     plot_visible: bool = True
-    # Zeigt den Kanal (statt im Hauptraster der Live View) in einem
-    # eigenen Fenster an (siehe `gui/live_view.py::ChannelPopoutWindow`) -
-    # schliesst sich mit `plot_visible` nicht aus: ein Kanal ist entweder
-    # gar nicht (plot_visible=False), im Hauptraster (plot_popout=False)
-    # oder in seinem eigenen Fenster (plot_popout=True) sichtbar, nie an
-    # zwei Stellen gleichzeitig.
+    # Shows the channel in its own window (instead of the live view's
+    # main grid) (see `gui/live_view.py::ChannelPopoutWindow`) - not
+    # mutually exclusive with `plot_visible`: a channel is visible either
+    # nowhere (plot_visible=False), in the main grid (plot_popout=False),
+    # or in its own window (plot_popout=True), never in two places at once.
     plot_popout: bool = False
-    # Zuletzt bekannte Position/Groesse des eigenen Fensters (siehe
-    # `gui/live_view.py::ChannelPopoutWindow`) - wird kontinuierlich
-    # aktualisiert, waehrend das Fenster offen ist, und beim naechsten
-    # App-Start/Messstart wiederverwendet, damit die Anordnung erhalten
-    # bleibt. `None` (alle vier), solange das Fenster noch nie
-    # verschoben/in der Groesse geaendert wurde - dann gilt die
-    # Standardposition/-groesse aus `ChannelPopoutWindow.__init__`. Wird
-    # beim Wiederherstellen gegen die AKTUELL angeschlossenen Bildschirme
-    # geprueft (siehe `gui/theme.py::is_position_on_screen`), damit ein
-    # Fenster, das zuletzt auf einem inzwischen entfernten zweiten Monitor
-    # stand, nicht unerreichbar wird.
+    # Last known position/size of the own window (see
+    # `gui/live_view.py::ChannelPopoutWindow`) - continuously updated
+    # while the window is open, and reused on the next app start/
+    # measurement start so the arrangement is preserved. `None` (all
+    # four) as long as the window has never been moved/resized - the
+    # default position/size from `ChannelPopoutWindow.__init__` then
+    # applies. Checked against the CURRENTLY connected screens when
+    # restoring (see `gui/theme.py::is_position_on_screen`), so a window
+    # that was last on a second monitor that has since been removed
+    # doesn't become unreachable.
     plot_popout_x: Optional[int] = None
     plot_popout_y: Optional[int] = None
     plot_popout_width: Optional[int] = None
@@ -896,7 +892,7 @@ class Channel:
 
     @classmethod
     def from_dict(cls, data: dict) -> "Channel":
-        """Erstellt einen Channel aus einem Dictionary (z. B. aus JSON)."""
+        """Creates a Channel from a dictionary (e.g. from JSON)."""
         return cls(
             hardware_channel=data["hardware_channel"],
             display_name=data.get("display_name", data["hardware_channel"]),
@@ -945,8 +941,8 @@ class Channel:
 
     @staticmethod
     def _optional_int(value) -> Optional[int]:
-        """Wandelt einen aus JSON geladenen Wert (kann `None`, `int` oder
-        `float` sein) robust in `Optional[int]` um - siehe
+        """Robustly converts a value loaded from JSON (can be `None`,
+        `int`, or `float`) to `Optional[int]` - see
         `plot_popout_x`/`plot_popout_y`/`plot_popout_width`/
         `plot_popout_height`."""
         return None if value is None else int(value)
@@ -954,29 +950,29 @@ class Channel:
 
 @dataclass
 class DeviceInfo:
-    """Beschreibt ein erkanntes physisches NI-cDAQ-Modul/Gerät.
+    """Describes a detected physical NI cDAQ module/device.
 
     Attributes:
-        device_name: Von nidaqmx vergebener Gerätename, z. B. "cDAQ1Mod1".
-        product_type: Produktbezeichnung, z. B. "NI 9215".
-        module_type: Zugeordneter ModuleType, falls vom System unterstützt.
-        num_channels: Anzahl physisch verfügbarer ANALOGER EINGANGS-Kanäle
-            auf dem Modul (diese App unterstützt aktuell ausschließlich
-            Analogeingang) - 0 auch bei einem real vorhandenen Modul, das
-            nur andere Kanaltypen hat (z. B. ein reines Analogausgangs-
-            modul wie das NI9263). Siehe `has_any_channels`, um SOLCHE
-            Module trotzdem von einem leeren Chassis-Eintrag ohne jegliche
-            Kanäle zu unterscheiden.
-        has_any_channels: Ob das Gerät IRGENDEINEN Kanal hat - Analogein-/
-            -ausgang, Digitalein-/-ausgang oder Zähler, unabhängig davon,
-            ob diese App den jeweiligen Kanaltyp unterstützt. Ein reiner
-            Chassis-Controller-Eintrag (z. B. "cDAQ1", ohne eigene Kanäle)
-            hat `False`; ein eingestecktes Modul - auch ein von dieser App
-            (noch) nicht unterstütztes wie ein reines AO-Modul - hat
-            `True`. Wird verwendet, um solche Module trotz `num_channels
-            == 0` als "erkannt, aber nicht unterstützt" zu melden statt
-            sie wie einen leeren Chassis-Eintrag stillschweigend
-            auszublenden (siehe `gui/setup_view.py::set_discovered_devices`).
+        device_name: Device name assigned by nidaqmx, e.g. "cDAQ1Mod1".
+        product_type: Product designation, e.g. "NI 9215".
+        module_type: Mapped ModuleType, if supported by the system.
+        num_channels: Number of physically available ANALOG INPUT
+            channels on the module (this app currently supports analog
+            input only) - 0 even for a physically present module that
+            only has other channel types (e.g. a pure analog-output
+            module like the NI9263). See `has_any_channels` to
+            distinguish SUCH modules from an empty chassis entry with no
+            channels at all.
+        has_any_channels: Whether the device has ANY channel at all -
+            analog in/out, digital in/out, or counter - regardless of
+            whether this app supports that particular channel type. A
+            pure chassis controller entry (e.g. "cDAQ1", with no channels
+            of its own) has `False`; an inserted module - even one this
+            app doesn't (yet) support, like a pure AO module - has
+            `True`. Used to report such modules as "detected but not
+            supported" despite `num_channels == 0`, instead of silently
+            hiding them like an empty chassis entry (see
+            `gui/setup_view.py::set_discovered_devices`).
     """
 
     device_name: str
@@ -984,33 +980,35 @@ class DeviceInfo:
     module_type: Optional[ModuleType] = None
     num_channels: int = 0
     has_any_channels: bool = False
-    # Liste der physischen Kanalnamen, z. B. ["cDAQ1Mod1/ai0", ...]
+    # List of physical channel names, e.g. ["cDAQ1Mod1/ai0", ...]
     physical_channels: list[str] = field(default_factory=list)
 
 
 @dataclass
 class MeasurementConfig:
-    """Konfiguration für eine einzelne Messung/Aufnahme.
+    """Configuration for a single measurement/recording.
 
     Attributes:
-        name: Bezeichner der Messung, z. B. "measurement_001".
-        sample_rate_hz: Zielrate in Hz. Gilt direkt für alle Kanäle außer
-            dem NI9210 (feste 14 S/s, siehe `resolve_rate_groups`).
-        channels: Liste der aktiven Kanäle für diese Messung.
-        storage_format: Gewähltes Speicherformat (Parquet/CSV).
-        samples_per_read: Blockgröße pro Lesevorgang vom DAQ-Gerät.
-        ring_buffer_size: Kapazität des Ring Buffers in Samples pro Kanal.
-        recording_unlimited: True (Standard/bisheriges Verhalten) = die
-            Messung läuft, bis der Nutzer manuell stoppt oder der
-            Speicherplatz ausgeht. False = die Messung stoppt automatisch,
-            sobald `recording_stop_value`/`recording_stop_unit` erreicht ist
-            (siehe `is_recording_limit_reached`).
-        recording_stop_value: Grenzwert in der Einheit `recording_stop_unit`
-            - nur relevant, wenn `recording_unlimited` False ist.
-        recording_stop_unit: Einheit des Grenzwerts (Messwerte oder Zeit).
-        trigger: Konfiguration für automatischen Mess-Start UND/ODER
-            -Stopp (siehe `TriggerConfig`) - das Aufnahme-Limit oben gilt
-            unabhängig davon zusätzlich weiter (wer zuerst greift, stoppt).
+        name: Identifier of the measurement, e.g. "measurement_001".
+        sample_rate_hz: Target rate in Hz. Applies directly to all
+            channels except the NI9210 (fixed 14 S/s, see
+            `resolve_rate_groups`).
+        channels: List of active channels for this measurement.
+        storage_format: Chosen storage format (Parquet/CSV).
+        samples_per_read: Block size per read from the DAQ device.
+        ring_buffer_size: Capacity of the ring buffer in samples per channel.
+        recording_unlimited: True (default/previous behavior) = the
+            measurement runs until the user manually stops it or storage
+            space runs out. False = the measurement stops automatically
+            once `recording_stop_value`/`recording_stop_unit` is reached
+            (see `is_recording_limit_reached`).
+        recording_stop_value: Limit in the unit `recording_stop_unit` -
+            only relevant if `recording_unlimited` is False.
+        recording_stop_unit: Unit of the limit (samples or time).
+        trigger: Configuration for automatic measurement start AND/OR
+            stop (see `TriggerConfig`) - the recording limit above
+            continues to apply independently and in addition (whichever
+            fires first stops it).
     """
 
     name: str
@@ -1030,26 +1028,26 @@ class MeasurementConfig:
             raise ValueError(
                 "recording_stop_value muss bei begrenzten Messungen größer als 0 sein."
             )
-        # Wirft ValueError NUR noch bei intrinsisch unerreichbaren Raten
-        # (NI9234-Raster, NI9213-Maximalrate) - ein NI9210 zusammen mit
-        # schnelleren Modulen ist KEIN Fehler mehr, sondern führt zu zwei
-        # getrennten Abtast-Gruppen (siehe `resolve_rate_groups` und
+        # Only raises ValueError for intrinsically unreachable rates
+        # (NI9234 grid, NI9213 maximum rate) - an NI9210 combined with
+        # faster modules is NO LONGER an error, it results in two
+        # separate sampling groups (see `resolve_rate_groups` and
         # `core/controller.py::start_measurement`).
         resolve_rate_groups(self.active_channels(), self.sample_rate_hz)
 
     def active_channels(self) -> list[Channel]:
-        """Gibt nur die aktivierten Kanäle zurück."""
+        """Returns only the enabled channels."""
         return [ch for ch in self.channels if ch.enabled]
 
     def target_recording_stop_samples(self) -> int:
-        """Rechnet das konfigurierte Limit (Messwerte oder Zeit) einmalig in
-        eine Ziel-Samplezahl bezogen auf `sample_rate_hz` um.
+        """Converts the configured limit (samples or time) once into a
+        target sample count relative to `sample_rate_hz`.
 
-        Samples sind die zuverlässigste Bezugsgröße für ein Aufnahme-Limit:
-        sie werden vom Hardware-Sample-Clock des DAQ-Moduls getaktet, nicht
-        softwareseitig per Wanduhrzeit (`datetime.now()`) - ein Grenzwert
-        lässt sich damit unabhängig von GUI-/Thread-Verzögerungen zuverlässig
-        auswerten (siehe `is_recording_limit_reached`).
+        Samples are the most reliable basis for a recording limit: they
+        are clocked by the DAQ module's hardware sample clock, not by
+        software wall-clock time (`datetime.now()`) - a limit can
+        therefore be evaluated reliably regardless of GUI/thread delays
+        (see `is_recording_limit_reached`).
         """
         if self.recording_stop_unit == RecordingStopUnit.SAMPLES:
             return int(round(self.recording_stop_value))
@@ -1057,14 +1055,13 @@ class MeasurementConfig:
         return int(round(self.recording_stop_value * seconds_per_unit * self.sample_rate_hz))
 
     def is_recording_limit_reached(self, samples_acquired: int) -> bool:
-        """Prüft, ob das konfigurierte Aufnahme-Limit erreicht ist.
+        """Checks whether the configured recording limit has been reached.
 
-        Zentrale Stelle für die Grenzwert-Logik (Messwerte vs. Zeiteinheiten,
-        siehe `target_recording_stop_samples`), damit `gui/live_view.py` nur
-        noch die tatsächlich erfasste Samplezahl liefern muss. Gibt bei
-        `recording_unlimited=True` immer False zurück (bisheriges
-        Standardverhalten: laufen, bis manuell gestoppt oder die Festplatte
-        voll ist).
+        Central place for the limit logic (samples vs. time units, see
+        `target_recording_stop_samples`), so `gui/live_view.py` only has
+        to supply the actually acquired sample count. Always returns
+        False when `recording_unlimited=True` (previous default
+        behavior: run until manually stopped or the disk is full).
         """
         if self.recording_unlimited:
             return False
@@ -1088,7 +1085,7 @@ class MeasurementConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "MeasurementConfig":
-        """Erstellt eine MeasurementConfig aus einem Dictionary (z. B. aus JSON)."""
+        """Creates a MeasurementConfig from a dictionary (e.g. from JSON)."""
         return cls(
             name=data["name"],
             sample_rate_hz=data.get("sample_rate_hz", 1000.0),
@@ -1110,16 +1107,17 @@ class MeasurementConfig:
 
 @dataclass
 class MeasurementSession:
-    """Repräsentiert eine konkrete, laufende oder abgeschlossene Messung.
+    """Represents a concrete, running or completed measurement.
 
-    Trennt bewusst die statische Konfiguration (`MeasurementConfig`) von den
-    Laufzeit-/Ergebnisinformationen einer Aufnahme (Start-/Endzeit, Pfad).
+    Deliberately separates the static configuration (`MeasurementConfig`)
+    from the runtime/result information of a recording (start/end time,
+    path).
 
     Attributes:
-        config: Die verwendete Messkonfiguration.
-        start_time: Zeitpunkt des Messstarts.
-        end_time: Zeitpunkt des Messendes (None solange die Messung läuft).
-        file_path: Pfad zur gespeicherten Messdatei, sobald vorhanden.
+        config: The measurement configuration used.
+        start_time: Instant the measurement started.
+        end_time: Instant the measurement ended (None while it's running).
+        file_path: Path to the saved measurement file, once available.
     """
 
     config: MeasurementConfig
@@ -1129,12 +1127,12 @@ class MeasurementSession:
 
     @property
     def is_running(self) -> bool:
-        """True, solange die Messung gestartet, aber nicht beendet ist."""
+        """True as long as the measurement has started but not ended."""
         return self.start_time is not None and self.end_time is None
 
     @property
     def duration_seconds(self) -> Optional[float]:
-        """Dauer der Messung in Sekunden, falls Start- und Endzeit vorliegen."""
+        """Duration of the measurement in seconds, if start and end times are available."""
         if self.start_time is None:
             return None
         end = self.end_time or datetime.now()

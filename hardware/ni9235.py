@@ -1,12 +1,12 @@
 """
 hardware/ni9235.py
 
-Konkrete Implementierung für das NI 9235 Modul (8-Kanal
-Dehnungsmessstreifen-Eingang, ausschließlich 120-Ω-Viertelbrücke,
-simultane Abtastung).
+Concrete implementation for the NI 9235 module (8-channel
+strain gauge input, exclusively 120 Ω quarter-bridge,
+simultaneous sampling).
 
-Siehe `hardware/nidaq_device.py` für den gemeinsamen Task-Lebenszyklus
-und den Hinweis zum Hardware-Testvorbehalt.
+See `hardware/nidaq_device.py` for the shared task lifecycle
+and the note on the hardware testing caveat.
 """
 
 from __future__ import annotations
@@ -22,52 +22,52 @@ if NIDAQMX_AVAILABLE:
 
 logger = logging.getLogger(__name__)
 
-# Erregerspannung des NI9235 laut Datenblatt: konstant 2,0 V ±1 %, IMMER
-# intern, nicht abschaltbar und nicht auf einen anderen Wert einstellbar
-# (anders als z. B. beim NI9234s IEPE-Konstantstrom gibt es hier keine
-# Software-Option, die Speisung abzuschalten). Der nidaqmx-Library-Default
-# für `voltage_excit_val` (2.5 V) ist für DIESES Modul falsch und wird
-# deshalb hier explizit überschrieben. Quelle: NI-9235 Specifications
-# (ni.com, 2022-07-11), Abschnitt "Excitation Characteristics".
+# NI9235 excitation voltage per datasheet: constant 2.0 V ±1 %, ALWAYS
+# internal, cannot be switched off and cannot be set to a different value
+# (unlike, say, the NI9234's IEPE constant current, there is no software
+# option here to disable the excitation). The nidaqmx library default for
+# `voltage_excit_val` (2.5 V) is wrong for THIS module and is therefore
+# explicitly overridden here. Source: NI-9235 Specifications
+# (ni.com, 2022-07-11), "Excitation Characteristics" section.
 NI9235_EXCITATION_VOLTS = 2.0
 
-# Fester Wert des eingebauten Viertelbrücken-Ergänzungswiderstands - kein
-# externer/anderer Wert wählbar. Der nidaqmx-Library-Default für
-# `nominal_gage_resistance` (350.0 Ω, für andere Module gedacht) ist hier
-# ebenfalls falsch. Quelle: NI-9235 Specifications, Abschnitt "Input
-# Characteristics" ("Quarter-bridge completion: 120 Ω").
+# Fixed value of the built-in quarter-bridge completion resistor - no
+# external/other value selectable. The nidaqmx library default for
+# `nominal_gage_resistance` (350.0 Ω, intended for other modules) is also
+# wrong here. Source: NI-9235 Specifications, "Input
+# Characteristics" section ("Quarter-bridge completion: 120 Ω").
 NI9235_NOMINAL_GAGE_RESISTANCE_OHM = 120.0
 
-# Physikalischer Eingangsbereich des NI9235 laut Datenblatt: ±29,4 mV/V,
-# was bei einem k-Faktor (Gage-Faktor) von 2,0 grob ±0,0625/-0,0555 STRAIN
-# entspricht (siehe Datenblatt: "+62.500 µε/-55.500 µε"). Analog zu
-# `hardware/ni9210.py` wird dieser Bereich NICHT aus `channel.min_range`/
-# `max_range` übernommen (deren Dataclass-Default -10.0/10.0 V ist für
-# STRAIN-Einheiten bedeutungslos und in der Kanaltabelle nicht editierbar -
-# derselbe Fallstrick, der beim NI9234 bereits real zu falsch konfigurierten
-# ±10-V- statt ±5-V-Kanälen geführt hat), sondern als feste, konservative
-# Modulkonstante verwendet. An echter Hardware verifiziert: ein offener
-# (nicht angeschlossener) Kanal liest bei diesen Werten trotzdem den
-# vollen physischen Datenblatt-Bereich (+0,0625 STRAIN) aus, min_val/
-# max_val beschränken die zurückgegebenen Messwerte also NICHT (das Modul
-# hat nur einen einzigen, festen physischen Bereich, keine wählbare
-# Verstärkungsstufe wie z. B. das NI9234) - die konservativen Werte hier
-# dienen daher rein der Plausibilitätsprüfung, nicht der Signalbegrenzung.
+# Physical input range of the NI9235 per datasheet: ±29.4 mV/V, which at
+# a gage factor (k-factor) of 2.0 corresponds roughly to ±0.0625/-0.0555
+# STRAIN (see datasheet: "+62.500 µε/-55.500 µε"). Analogous to
+# `hardware/ni9210.py`, this range is NOT taken from `channel.min_range`/
+# `max_range` (their dataclass default of -10.0/10.0 V is meaningless for
+# STRAIN units and not editable in the channel table - the same pitfall
+# that already led, in practice, to NI9234 channels being misconfigured
+# with a ±10 V instead of ±5 V range), but is used as a fixed,
+# conservative module constant. Verified against real hardware: an open
+# (unconnected) channel still reads out the full physical datasheet range
+# (+0.0625 STRAIN) at these values, so min_val/max_val do NOT limit the
+# returned measurement values (the module has only a single, fixed
+# physical range, no selectable gain stage like, say, the NI9234) - the
+# conservative values here therefore serve purely for plausibility
+# checking, not for signal limiting.
 NI9235_MIN_STRAIN = -0.03
 NI9235_MAX_STRAIN = 0.03
 
 
 class NI9235(NIDAQDevice):
-    """NI 9235: 8-Kanal Dehnungsmessstreifen-Eingang, 120-Ω-Viertelbrücke.
+    """NI 9235: 8-channel strain gauge input, 120 Ω quarter-bridge.
 
-    Unterstützt AUSSCHLIESSLICH `SignalType.STRAIN` - Halb-/Vollbrücke sind
-    auf diesem Modul physisch nicht verdrahtet (siehe
-    `data.models.NI9235_BRIDGE_TYPES`, nur QUARTER_BRIDGE_I/II). Die
-    Erregerspannung (`NI9235_EXCITATION_VOLTS`) und der
-    Ergänzungswiderstand (`NI9235_NOMINAL_GAGE_RESISTANCE_OHM`) sind fest
-    verdrahtete Hardwareeigenschaften, keine `Channel`-Felder - anders als
-    z. B. `sensitivity_mv_per_unit` beim NI9234 gibt es hier keine
-    physische Wahlmöglichkeit.
+    Supports EXCLUSIVELY `SignalType.STRAIN` - half-/full-bridge are not
+    physically wired on this module (see `data.models.NI9235_BRIDGE_TYPES`,
+    only QUARTER_BRIDGE_I/II). The excitation voltage
+    (`NI9235_EXCITATION_VOLTS`) and the completion resistor
+    (`NI9235_NOMINAL_GAGE_RESISTANCE_OHM`) are hard-wired hardware
+    properties, not `Channel` fields - unlike, say,
+    `sensitivity_mv_per_unit` on the NI9234, there is no physical choice
+    here.
     """
 
     def __init__(self, device_info: DeviceInfo, channels: list[Channel]) -> None:
@@ -106,14 +106,14 @@ class NI9235(NIDAQDevice):
             lead_wire_resistance=channel.lead_wire_resistance_ohm,
         )
 
-        # Das NI9235 hat wie das NI9234 einen Delta-Sigma-ADC und damit
-        # dieselbe feste Filterverzögerung zwischen analogem
-        # Abtastzeitpunkt und digital ausgelesenem Sample (siehe
-        # hardware/ni9234.py für die ausführliche Begründung). An echter
-        # Hardware (cDAQ-9185 + NI9235) verifiziert: DAQmx lehnt diese
-        # Property genau wie beim NI9234 ab (Status -200452) - der
-        # Best-Effort-Ansatz greift also wie vorgesehen, die Messung läuft
-        # trotzdem weiter, nur ohne die Zeitversatz-Korrektur.
+        # Like the NI9234, the NI9235 has a delta-sigma ADC and therefore
+        # the same fixed filter delay between the analog sampling instant
+        # and the digitally read-out sample (see hardware/ni9234.py for
+        # the detailed rationale). Verified against real hardware
+        # (cDAQ-9185 + NI9235): DAQmx rejects this property exactly like
+        # on the NI9234 (status -200452) - so the best-effort approach
+        # kicks in as intended, the measurement keeps running regardless,
+        # just without the time-offset correction.
         try:
             ai_channel.ai_remove_filter_delay = True
         except DaqmxError:

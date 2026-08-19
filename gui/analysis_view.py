@@ -1,21 +1,21 @@
 """
 gui/analysis_view.py
 
-Analyse-Ansicht.
+Analysis view.
 
-Funktionen (siehe Vorgabe):
-    * Drag & Drop von Messdateien (.parquet, .csv)
-    * Metadaten laden (falls vorhanden)
-    * Kanäle auswählen
-    * Plot anzeigen, Zoom/Pan (nativ durch PyQtGraph)
-    * Analysefunktionen (FFT, Tief-/Hochpass, Glättung, siehe
-      `analysis/basic_analysis.py`) - Ergebnisse werden als neuer Kanal
-      unter der Quelldatei im Dateibrowser abgelegt und können per
-      Rechtsklick als CSV/Parquet gespeichert werden.
+Features (per spec):
+    * Drag & drop of measurement files (.parquet, .csv)
+    * Load metadata (if available)
+    * Select channels
+    * Show plot, zoom/pan (native via PyQtGraph)
+    * Analysis functions (FFT, low-/high-pass, smoothing, see
+      `analysis/basic_analysis.py`) - results are stored as a new channel
+      under the source file in the file browser and can be saved as
+      CSV/Parquet via right-click.
 
-Noch NICHT implementiert (siehe Vorgabe): RMS, Statistik, automatische
-Reports. Die Architektur ist jedoch darauf vorbereitet - siehe
-`analysis/basic_analysis.py` für die vorgesehenen Erweiterungspunkte.
+NOT YET implemented (per spec): RMS, statistics, automatic
+reports. The architecture is however prepared for this - see
+`analysis/basic_analysis.py` for the planned extension points.
 """
 
 from __future__ import annotations
@@ -83,9 +83,9 @@ _ROLE_MEASUREMENT = int(Qt.ItemDataRole.UserRole) + 2
 _ROLE_IS_RESULT = int(Qt.ItemDataRole.UserRole) + 3
 _FREQUENCY_X_COLUMN = "frequency_hz"
 
-# (kind, icon_fn, label_i18n_key, tooltip_i18n_key) - gemeinsam für den
-# Button-Aufbau in AnalysisView.__init__ und das Neuzeichnen der Icons in
-# retheme_plots() nach einem Theme-Wechsel.
+# (kind, icon_fn, label_i18n_key, tooltip_i18n_key) - shared between the
+# button setup in AnalysisView.__init__ and the icon redraw in
+# retheme_plots() after a theme change.
 _FUNCTION_SPECS = [
     ("fft", draw_fft_icon, "analysis_fft_button", "analysis_fft_tooltip"),
     ("lowpass", draw_lowpass_icon, "analysis_lowpass_button", "analysis_lowpass_tooltip"),
@@ -94,8 +94,8 @@ _FUNCTION_SPECS = [
 ]
 _FUNCTION_SPECS_BY_KIND = {spec[0]: spec for spec in _FUNCTION_SPECS}
 
-# Gruppierung der Analysefunktions-Buttons im Toolkasten: Spektralanalyse
-# (FFT) getrennt von Filtern (Tief-/Hochpass UND Glättung).
+# Grouping of the analysis function buttons in the toolbox: spectral
+# analysis (FFT) separate from filters (low-/high-pass AND smoothing).
 _FUNCTION_CATEGORIES = [
     ("analysis_category_spectral", ["fft"]),
     ("analysis_category_filter", ["lowpass", "highpass", "smoothing"]),
@@ -110,12 +110,12 @@ _LAYOUT_SPECS = {
 
 
 class ChannelTreeWidget(QTreeWidget):
-    """Tree mit explizitem Drag-Payload für Kanal-Zuordnung auf Plot-Ziele.
+    """Tree with an explicit drag payload for channel assignment to plot targets.
 
-    Übernimmt zusätzlich das Datei-Drag&Drop (Laden per Ziehen aus dem
-    Datei-Explorer) und dessen Leerzustand-Hinweistext - bewusst hier und
-    NICHT auf der gesamten `AnalysisView`, damit die Drop-Zone optisch UND
-    funktional exakt auf diesen Baum begrenzt bleibt.
+    Also handles file drag&drop (loading by dragging from the file
+    explorer) and its empty-state hint text - deliberately here and
+    NOT on the whole `AnalysisView`, so the drop zone stays exactly
+    confined to this tree both visually AND functionally.
     """
 
     delete_key_pressed = pyqtSignal()
@@ -124,17 +124,17 @@ class ChannelTreeWidget(QTreeWidget):
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self.setAcceptDrops(True)
-        # Drag&Drop-Events landen bei Qt-ItemViews am Viewport, nicht am
-        # aeusseren Widget (siehe gleiches Muster bei AssignablePlotWidget
-        # weiter unten) - ohne diesen Aufruf kommen extern gezogene Dateien
-        # nie bei dragEnterEvent()/dropEvent() an.
+        # Drag&drop events land on the viewport for Qt item views, not on
+        # the outer widget (see the same pattern in AssignablePlotWidget
+        # further below) - without this call, externally dragged files
+        # never reach dragEnterEvent()/dropEvent().
         self.viewport().setAcceptDrops(True)
 
-        # Leerzustand-Hinweis als Overlay auf dem Viewport (QTreeWidget
-        # kennt anders als z. B. QLineEdit kein natives `placeholderText`)
-        # - sichtbar nur solange keine Datei geladen ist, automatisch über
-        # die Modell-Signale synchron gehalten statt an jeder einzelnen
-        # Stelle in AnalysisView manuell aktualisiert werden zu müssen.
+        # Empty-state hint as an overlay on the viewport (unlike e.g.
+        # QLineEdit, QTreeWidget has no native `placeholderText`)
+        # - visible only as long as no file is loaded, kept in sync
+        # automatically via the model signals instead of having to be
+        # updated manually at every single spot in AnalysisView.
         self._empty_hint_label = QLabel(self.viewport())
         self._empty_hint_label.setWordWrap(True)
         self._empty_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -152,9 +152,9 @@ class ChannelTreeWidget(QTreeWidget):
         self._empty_hint_label.setVisible(visible)
 
     def retheme_empty_hint(self) -> None:
-        """Erzwingt ein Repolish des Hinweistexts nach einem Theme-Wechsel
-        (eigenes Stylesheet wird von Qt sonst nicht automatisch neu
-        ausgewertet, siehe gleiches Problem bei den Nav-Kacheln in
+        """Forces a repolish of the hint text after a theme change
+        (Qt otherwise doesn't automatically re-evaluate a custom
+        stylesheet, see the same problem with the nav tiles in
         `gui/main_window.py::_retheme_nav_icons`)."""
         repolish(self._empty_hint_label)
 
@@ -172,10 +172,11 @@ class ChannelTreeWidget(QTreeWidget):
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event) -> None:  # noqa: N802 (Qt API)
-        # Ohne diesen Override greift QAbstractItemView's Standard-
-        # dragMoveEvent, das externe URL-Drops ablehnt (Modell kennt sie
-        # nicht) - sichtbar am Verbotsschild-Cursor waehrend des Ziehens,
-        # obwohl dragEnterEvent() oben bereits akzeptiert hat.
+        # Without this override, QAbstractItemView's default
+        # dragMoveEvent takes over, which rejects external URL drops
+        # (model doesn't know them) - visible as the "not allowed" cursor
+        # while dragging, even though dragEnterEvent() above already
+        # accepted it.
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
         else:
@@ -221,7 +222,7 @@ class ChannelTreeWidget(QTreeWidget):
 
 
 class AssignablePlotWidget(pg.PlotWidget):
-    """Plot-Ziel, das Kanalzuweisungen per Drag&Drop annimmt."""
+    """Plot target that accepts channel assignments via drag&drop."""
 
     channel_dropped = pyqtSignal(int, str, str)
 
@@ -293,16 +294,16 @@ class AssignablePlotWidget(pg.PlotWidget):
 
 
 class _AnalysisFunctionDialog(QDialog):
-    """Dialog zur Kanal- und Parameterauswahl für eine Analysefunktion.
+    """Dialog for channel and parameter selection for an analysis function.
 
-    Die Kanalauswahl erfolgt über eine nach Datei gruppierte Baumansicht
-    (wie der Dateibrowser rechts in der Analyse-Ansicht, siehe
-    `ChannelTreeWidget`) statt einer flachen Dropdown-Liste - bei mehreren
-    geladenen Dateien mit jeweils mehreren Kanälen ist das übersichtlicher
-    und zeigt auf einen Blick, zu welcher Datei ein Kanal gehört.
+    Channel selection happens via a tree view grouped by file (like the
+    file browser on the right of the analysis view, see
+    `ChannelTreeWidget`) instead of a flat dropdown list - with several
+    loaded files each having several channels, this is clearer and shows
+    at a glance which file a channel belongs to.
 
-    Wird beim Klick auf einen der Analysefunktions-Buttons geöffnet
-    (siehe `AnalysisView._on_analysis_function_clicked`).
+    Opened when one of the analysis function buttons is clicked
+    (see `AnalysisView._on_analysis_function_clicked`).
     """
 
     def __init__(
@@ -388,7 +389,7 @@ class _AnalysisFunctionDialog(QDialog):
 
 
 class AnalysisView(QWidget):
-    """Ansicht zum Laden und Untersuchen abgeschlossener Messungen."""
+    """View for loading and examining completed measurements."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -402,17 +403,17 @@ class AnalysisView(QWidget):
         self._function_category_labels: dict[str, QLabel] = {}
         self._busy_count = 0
         self._loading_paths: set[Path] = set()
-        # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
-        # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
-        # Python das QThread-Objekt vorzeitig einsammeln.
+        # References to running background workers (see gui/workers.py)
+        # - must be kept alive until completion, otherwise Python would
+        # garbage-collect the QThread object prematurely.
         self._background_workers: list[BackgroundWorker] = []
 
         layout = QVBoxLayout(self)
 
-        # --- Plotbereich + rechter Seitenbereich ---
+        # --- Plot area + right-hand side panel ---
         content_row = QHBoxLayout()
 
-        # Links: Kategorien/Bedienung (Layout)
+        # Left: categories/controls (layout)
         left_panel = QWidget()
         left_panel.setMinimumWidth(240)
         left_panel.setMaximumWidth(320)
@@ -462,7 +463,7 @@ class AnalysisView(QWidget):
 
         content_row.addWidget(left_panel)
 
-        # Mitte/links: Plotfläche (umschaltbare Raster-Layouts)
+        # Middle/left: plot area (switchable grid layouts)
         self._plot_area = QWidget()
         self._plot_grid = QGridLayout(self._plot_area)
         self._plot_grid.setContentsMargins(0, 0, 0, 0)
@@ -477,36 +478,36 @@ class AnalysisView(QWidget):
         for plot_widget in self._plot_widgets:
             plot_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
             plot_widget.showGrid(x=True, y=True, alpha=0.3)
-            # `units=` NICHT genutzt: PyQtGraph rendert das intern immer in
-            # runden Klammern - fest "[s]" im Text selbst statt dessen,
-            # damit die Zeiteinheit ueberall konsistent in eckigen Klammern
-            # steht (siehe gui/live_view.py). Schriftgroesse explizit wie
-            # die Achsentick-Beschriftung (siehe
-            # gui/theme.py::axis_tick_point_size) - MUSS vor
-            # `style_plot_item()` gesetzt werden, siehe
-            # gui/live_view.py::_axis_label_style fuer die Begruendung.
-            # `_refresh_plot_axis_labels()`/`retranslate_ui()` setzen den
-            # Text spaeter ohne Kwargs neu, das behaelt dieses Style bei.
+            # `units=` NOT used: PyQtGraph always renders that internally in
+            # round parentheses - hardcode "[s]" in the text itself instead,
+            # so the time unit is consistently shown in square brackets
+            # everywhere (see gui/live_view.py). Font size set explicitly to
+            # match the axis tick labels (see
+            # gui/theme.py::axis_tick_point_size) - MUST be set before
+            # `style_plot_item()`, see gui/live_view.py::_axis_label_style
+            # for the reasoning.
+            # `_refresh_plot_axis_labels()`/`retranslate_ui()` later set the
+            # text again without kwargs, which keeps this style.
             plot_widget.setLabel(
                 "bottom", f"{t('axis_time')} [s]", **{"font-size": f"{axis_tick_point_size()}pt"}
             )
             plot_widget.addLegend()
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())
-            # OHNE diesen expliziten Aufruf bleibt die ViewBox-Hintergrund-
-            # farbe auf PyQtGraph's Default (transparent) - unter reinem
-            # Software-Rendering unsichtbar (zeigt die Container-Farbe
-            # durch), aber mit `useOpenGL=True` (siehe gui/live_view.py,
-            # global für den Prozess aktiv) faellt eine transparente
-            # ViewBox auf die OpenGL-Standardfarbe statt auf die
-            # Szenenfarbe zurueck - sichtbar als Farbbruch zwischen
-            # Plotflaeche und Achsenbeschriftungs-Rand. Live View setzt das
-            # deshalb ueberall explizit (siehe `_channel_background_color`).
+            # WITHOUT this explicit call, the ViewBox background color
+            # stays at PyQtGraph's default (transparent) - invisible under
+            # pure software rendering (shows the container color through),
+            # but with `useOpenGL=True` (see gui/live_view.py, active
+            # globally for the process), a transparent ViewBox falls back
+            # to the OpenGL default color instead of the scene color -
+            # visible as a color mismatch between the plot area and the
+            # axis label border. Live View therefore sets this explicitly
+            # everywhere (see `_channel_background_color`).
             plot_widget.getPlotItem().getViewBox().setBackgroundColor(plot_background_color())
             plot_widget.channel_dropped.connect(self._on_channel_dropped_to_plot)
         content_row.addWidget(self._plot_area, stretch=1)
 
-        # Rechts: kategorisierter Seitenbereich (Dateien/Kanäle)
+        # Right: categorized side panel (files/channels)
         right_panel = QWidget()
         right_panel.setMinimumWidth(360)
         right_panel.setMaximumWidth(460)
@@ -523,24 +524,23 @@ class AnalysisView(QWidget):
         self._tree.itemChanged.connect(self._on_tree_item_changed)
         self._tree.setDragEnabled(True)
         self._tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        # Kontextmenü für Top-Level-Dateien (rechtsklick)
+        # Context menu for top-level files (right-click)
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._tree.delete_key_pressed.connect(self._on_delete_key_pressed)
-        # Datei per Ziehen aus dem Datei-Explorer laden - Drop-Zone bewusst
-        # auf den Baum begrenzt (siehe ChannelTreeWidget-Klassendoc), nicht
-        # auf die gesamte Ansicht.
+        # Load a file by dragging from the file explorer - drop zone
+        # deliberately confined to the tree (see the ChannelTreeWidget
+        # class docstring), not the whole view.
         self._tree.file_dropped.connect(self._load_file)
         self._files_label = QLabel(t("loaded_files_channels"))
         right_layout.addWidget(self._files_label)
 
-        # Such-/Filterfeld: blendet Datei-/Kanalzeilen aus, die weder
-        # selbst noch (bei einer Datei) über ein passendes Kind zum
-        # Suchtext passen - reine Sichtbarkeitsfilterung, verändert nichts
-        # an den geladenen Daten. Wird nach jeder Strukturänderung des
-        # Baums automatisch neu angewendet (siehe Model-Signal-Verbindungen
-        # unten), damit z. B. neu geladene Dateien einen aktiven Filter
-        # nicht umgehen.
+        # Search/filter field: hides file/channel rows that neither match
+        # the search text themselves nor (for a file) have a matching
+        # child - pure visibility filtering, doesn't change the loaded
+        # data. Automatically reapplied after every structural change of
+        # the tree (see the model signal connections below), so e.g.
+        # newly loaded files don't bypass an active filter.
         self._tree_search_edit = QLineEdit()
         self._tree_search_edit.setPlaceholderText(t("search_files_placeholder"))
         self._tree_search_edit.setClearButtonEnabled(True)
@@ -554,7 +554,7 @@ class AnalysisView(QWidget):
 
         layout.addLayout(content_row, stretch=1)
 
-        # Kategorieköpfe visuell wie im Setup-Tab (ohne farbliche Overrides).
+        # Category headers visually matching the setup tab (without color overrides).
         category_font = QFont(self.font())
         if category_font.pointSize() > 0:
             category_font.setPointSize(category_font.pointSize() + 1)
@@ -570,19 +570,19 @@ class AnalysisView(QWidget):
         connect_theme_changed(self.retheme_plots)
 
     def retheme_plots(self) -> None:
-        """Färbt Plot-Hintergrund/-Achsen nach einem Theme-Wechsel um.
+        """Recolors the plot background/axes after a theme change.
 
-        PyQtGraph-Widgets folgen der `QApplication`-Palette nicht
-        automatisch (siehe `gui/theme.py`).
+        PyQtGraph widgets don't follow the `QApplication` palette
+        automatically (see `gui/theme.py`).
         """
         for plot_widget in self._plot_widgets:
             style_plot_container(plot_widget)
             style_plot_item(plot_widget.getPlotItem())
             plot_widget.getPlotItem().getViewBox().setBackgroundColor(plot_background_color())
 
-        # Analysefunktions-Icons folgen der WindowText-Farbe (siehe
-        # gui/theme.py::nav_icon_color) und müssen daher nach einem
-        # Theme-Wechsel neu gezeichnet werden.
+        # Analysis function icons follow the WindowText color (see
+        # gui/theme.py::nav_icon_color) and therefore must be redrawn
+        # after a theme change.
         for kind, icon_fn, _label_key, _tooltip_key in _FUNCTION_SPECS:
             button = self._function_buttons.get(kind)
             if button is not None:
@@ -591,7 +591,7 @@ class AnalysisView(QWidget):
         self._tree.retheme_empty_hint()
 
     def retranslate_ui(self) -> None:
-        """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
+        """Updates all static texts after a language change."""
         self._layout_category_label.setText(t("analysis_category_layout"))
         for category_key, category_label in self._function_category_labels.items():
             category_label.setText(t(category_key))
@@ -611,19 +611,19 @@ class AnalysisView(QWidget):
         self._apply_tree_filter()
 
     def _refresh_plot_axis_labels(self) -> None:
-        """Setzt die x-Achsen-Beschriftung je Plot passend zu den dort
-        aktuell dargestellten Kanälen (Zeit- oder Frequenzachse, siehe
+        """Sets the x-axis label for each plot to match the channels
+        currently displayed there (time or frequency axis, see
         `_update_plot`)."""
         for plot_index, plot_widget in enumerate(self._plot_widgets):
             if self._plot_x_columns.get(plot_index) == _FREQUENCY_X_COLUMN:
                 plot_widget.setLabel("bottom", t("axis_frequency"), units="Hz")
             else:
-                # `units=` NICHT genutzt - Zeiteinheit ueberall konsistent
-                # in eckigen Klammern (siehe gui/live_view.py).
+                # `units=` NOT used - time unit consistently shown in
+                # square brackets everywhere (see gui/live_view.py).
                 plot_widget.setLabel("bottom", f"{t('axis_time')} [s]")
 
     def _update_files_label_count(self) -> None:
-        """Aktualisiert die Datei/Kanal-Überschrift inkl. Anzahl geladener Dateien."""
+        """Updates the file/channel heading including the count of loaded files."""
         if self._loaded_measurements:
             self._files_label.setText(
                 f"{t('loaded_files_channels')} - {t('files_loaded_count', count=len(self._loaded_measurements))}"
@@ -632,17 +632,16 @@ class AnalysisView(QWidget):
             self._files_label.setText(t("loaded_files_channels"))
 
     def _apply_tree_filter(self, *_args) -> None:
-        """Blendet Datei-/Kanalzeilen aus, die nicht zum Suchtext passen
-        (Groß-/Kleinschreibung ignoriert).
+        """Hides file/channel rows that don't match the search text
+        (case-insensitive).
 
-        Eine Datei bleibt sichtbar, wenn IHR Name passt (dann auch alle
-        ihre Kinder, ungefiltert) ODER mindestens ein Kanal-/
-        Ergebnis-Kind passt (dann nur die passenden Kinder). `*_args`
-        nimmt die von `QLineEdit.textChanged`
-        (str) UND den Model-Signalen `rowsInserted`/`rowsRemoved`
-        (QModelIndex, int, int) übergebenen, hier ungenutzten Argumente
-        gleichermaßen entgegen - der Suchtext wird immer frisch aus
-        `self._tree_search_edit` gelesen.
+        A file stays visible if ITS name matches (then all of its
+        children too, unfiltered) OR at least one channel/result child
+        matches (then only the matching children). `*_args` accepts the
+        unused arguments passed by both `QLineEdit.textChanged`
+        (str) AND the model signals `rowsInserted`/`rowsRemoved`
+        (QModelIndex, int, int) alike - the search text is always read
+        fresh from `self._tree_search_edit`.
         """
         query = self._tree_search_edit.text().strip().lower()
         for i in range(self._tree.topLevelItemCount()):
@@ -673,18 +672,18 @@ class AnalysisView(QWidget):
             self._tree.set_empty_hint_visible(self._tree.topLevelItemCount() == 0)
 
     # ------------------------------------------------------------------ #
-    # Öffentliche API (von gui/main_window.py aufgerufen)
+    # Public API (called from gui/main_window.py)
     # ------------------------------------------------------------------ #
 
     def prompt_and_load_file(self) -> bool:
-        """Öffnet einen Datei-Dialog zum Laden einer Messung und startet
-        bei Auswahl den (Hintergrund-)Ladevorgang, siehe `_load_file`.
+        """Opens a file dialog to load a measurement and, once selected,
+        starts the (background) loading process, see `_load_file`.
 
-        Wird vom "Messung laden..."-Menüeintrag in `gui/main_window.py`
-        aufgerufen (ehemals ein Button direkt in dieser Ansicht - jetzt
-        aus jeder Ansicht heraus erreichbar). Gibt True zurück, wenn eine
-        Datei ausgewählt wurde (main_window navigiert dann zum
-        Analyse-Tab), False bei Abbruch des Dialogs.
+        Called from the "Load measurement..." menu entry in
+        `gui/main_window.py` (formerly a button directly in this view -
+        now reachable from any view). Returns True if a file was
+        selected (main_window then navigates to the analysis tab), False
+        if the dialog was cancelled.
         """
         filename, _ = QFileDialog.getOpenFileName(
             self,
@@ -698,15 +697,15 @@ class AnalysisView(QWidget):
         return True
 
     # ------------------------------------------------------------------ #
-    # Interna
+    # Internals
     # ------------------------------------------------------------------ #
 
     def _begin_busy(self) -> None:
-        """Sperrt die Bedienelemente, deren Aktionen im Hintergrund laufen
-        (Datei laden, Analysefunktionen, siehe `gui/workers.py`), und
-        zeigt einen Wartecursor - verhindert, dass mehrere solche
-        Operationen gleichzeitig gestartet werden, während der Nutzer
-        über den Fortschritt im Bilde bleibt.
+        """Disables the controls whose actions run in the background
+        (file loading, analysis functions, see `gui/workers.py`) and
+        shows a wait cursor - prevents multiple such operations from
+        being started at the same time, while keeping the user informed
+        about the progress.
         """
         self._busy_count += 1
         if self._busy_count == 1:
@@ -722,24 +721,24 @@ class AnalysisView(QWidget):
             QApplication.restoreOverrideCursor()
 
     def _forget_background_worker(self, worker: BackgroundWorker) -> None:
-        """Entfernt eine abgeschlossene `BackgroundWorker`-Referenz, damit
-        `_background_workers` bei langer Programmlaufzeit nicht unbegrenzt
-        wächst."""
+        """Removes a completed `BackgroundWorker` reference so that
+        `_background_workers` doesn't grow unbounded over a long program
+        runtime."""
         if worker in self._background_workers:
             self._background_workers.remove(worker)
         worker.deleteLater()
 
     def _on_tree_context_menu(self, point) -> None:
-        """Zeigt ein Kontextmenü zum Entfernen der Datei bzw. eines einzelnen
-        Kanals - für Analyseergebnis-Kanäle zusätzlich zum Speichern des
-        Ergebnisses."""
+        """Shows a context menu for removing the file or a single
+        channel - for analysis result channels, also for saving the
+        result."""
         item = self._tree.itemAt(point)
         if item is None:
             return
 
         menu = QMenu(self)
         if item.parent() is None:
-            # Top-Level-Item (Datei/Messung)
+            # Top-level item (file/measurement)
             remove_action = menu.addAction(t("remove_file_action"))
             remove_action.triggered.connect(lambda: self._remove_file_item(item))
         else:
@@ -757,8 +756,9 @@ class AnalysisView(QWidget):
         menu.exec(self._tree.viewport().mapToGlobal(point))
 
     def _on_delete_key_pressed(self) -> None:
-        """Löscht den aktuell ausgewählten Kanal bzw. die ausgewählte Messung
-        aus dem Dateibrowser (Entfernen-Taste, siehe `ChannelTreeWidget`)."""
+        """Deletes the currently selected channel or the selected
+        measurement from the file browser (Delete key, see
+        `ChannelTreeWidget`)."""
         item = self._tree.currentItem()
         if item is None:
             return
@@ -768,13 +768,13 @@ class AnalysisView(QWidget):
             self._remove_channel_item(item)
 
     def _confirm_delete(self, body: str) -> bool:
-        """Fragt vor einer Lösch-Aktion (Datei/Kanal, per Kontextmenü oder
-        Entfernen-Taste) explizit nach Bestätigung."""
+        """Explicitly asks for confirmation before a delete action
+        (file/channel, via context menu or Delete key)."""
         return confirm_delete(self, body)
 
     def _remove_channel_item(self, item: QTreeWidgetItem) -> None:
-        """Entfernt einen einzelnen Kanal (regulär oder Analyseergebnis) aus
-        dem Baum, ohne die gesamte Quelldatei zu entfernen."""
+        """Removes a single channel (regular or analysis result) from
+        the tree, without removing the entire source file."""
         if not self._confirm_delete(t("confirm_remove_channel_body", name=item.text(0))):
             return
         file_item = item.parent()
@@ -787,7 +787,7 @@ class AnalysisView(QWidget):
         self._update_plot()
 
     def _save_result_channel(self, item: QTreeWidgetItem, fmt: str) -> None:
-        """Speichert einen Analyseergebnis-Kanal als eigenständige CSV-/Parquet-Datei."""
+        """Saves an analysis result channel as a standalone CSV/Parquet file."""
         measurement = item.data(0, _ROLE_MEASUREMENT)
         if measurement is None:
             return
@@ -828,15 +828,15 @@ class AnalysisView(QWidget):
         if not self._confirm_delete(t("confirm_remove_file_body", name=top.text(0))):
             return
         file_path_str = top.data(0, Qt.ItemDataRole.UserRole)
-        # Entferne Eintrag aus geladenen Messungen
+        # Remove entry from loaded measurements
         self._loaded_measurements = [pair for pair in self._loaded_measurements if str(pair[0]) != str(file_path_str) and pair[0].name != str(file_path_str)]
-        # Entferne auch ggf. bestehende Plot-Zuordnungen dieser Datei.
+        # Also remove any existing plot assignments for this file.
         self._channel_assignments = {
             key: value
             for key, value in self._channel_assignments.items()
             if key[0] != str(file_path_str)
         }
-        # Entferne Top-Level-Item aus Tree
+        # Remove top-level item from tree
         idx = self._tree.indexOfTopLevelItem(top)
         if idx != -1:
             self._tree.takeTopLevelItem(idx)
@@ -852,8 +852,8 @@ class AnalysisView(QWidget):
             )
             return
 
-        # Verhindere doppelte Einträge (billige Prüfung, bewusst noch vor
-        # dem eigentlichen - potenziell langsamen - Laden im Hintergrund).
+        # Prevent duplicate entries (cheap check, deliberately still
+        # before the actual - potentially slow - background loading).
         if any(p == path for p, _ in self._loaded_measurements):
             QMessageBox.information(
                 self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
@@ -865,9 +865,10 @@ class AnalysisView(QWidget):
             )
             return
 
-        # Laden selbst (pd.read_parquet/pd.read_csv) läuft im Hintergrund,
-        # da das bei großen Messdateien den GUI-Thread spürbar blockieren
-        # würde (siehe gui/workers.py::BackgroundWorker).
+        # The loading itself (pd.read_parquet/pd.read_csv) runs in the
+        # background, since with large measurement files that would
+        # noticeably block the GUI thread (see
+        # gui/workers.py::BackgroundWorker).
         metadata_path = infer_metadata_path(path)
         self._loading_paths.add(path)
         self._begin_busy()
@@ -887,9 +888,9 @@ class AnalysisView(QWidget):
         self._loading_paths.discard(path)
         self._end_busy()
 
-        # Zwischen Start des Hintergrund-Ladens und hier könnte dieselbe
-        # Datei bereits über einen zweiten, parallel gestarteten Ladevorgang
-        # hinzugefügt worden sein - erneut prüfen statt blind einzufügen.
+        # Between starting the background load and here, the same file
+        # could already have been added via a second, concurrently
+        # started load - check again instead of inserting blindly.
         if any(p == path for p, _ in self._loaded_measurements):
             QMessageBox.information(
                 self, t("already_loaded_title"), t("already_loaded_body", filename=path.name)
@@ -897,13 +898,13 @@ class AnalysisView(QWidget):
             return
 
         self._loaded_measurements.append((path, measurement))
-        # Erzeuge Tree-Einträge: Datei -> Module -> Kanäle
+        # Create tree entries: file -> modules -> channels
         file_item = QTreeWidgetItem(self._tree, [path.name])  # top-level
         file_item.setFlags(file_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         file_item.setCheckState(0, Qt.CheckState.Unchecked)
         file_item.setData(0, Qt.ItemDataRole.UserRole, str(path))
 
-        # Füge direkte Kanal-Einträge unter der Datei hinzu (falls Metadaten vorhanden)
+        # Add direct channel entries under the file (if metadata is available)
         if measurement.channels:
             for ch in measurement.channels:
                 ch_item = QTreeWidgetItem(file_item, [ch.display_name or ch.hardware_channel])
@@ -915,7 +916,7 @@ class AnalysisView(QWidget):
                 if column_name is not None:
                     ch_item.setData(0, _ROLE_CHANNEL_NAME, column_name)
         else:
-            # Fallback: benutze DataFrame-Spalten als Kanäle (keine Metadaten)
+            # Fallback: use DataFrame columns as channels (no metadata)
             inferred = measurement.channel_names
             for name in inferred:
                 if name == "time_s":
@@ -923,7 +924,7 @@ class AnalysisView(QWidget):
                 ch_item = QTreeWidgetItem(file_item, [name])
                 ch_item.setFlags(ch_item.flags() | Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsSelectable)
                 ch_item.setCheckState(0, Qt.CheckState.Unchecked)
-                # Leichtgewichtiger Channel-Platzhalter (keine Metadaten vorhanden)
+                # Lightweight channel placeholder (no metadata available)
                 placeholder = Channel(hardware_channel=name, display_name=name)
                 ch_item.setData(0, Qt.ItemDataRole.UserRole, placeholder)
                 ch_item.setData(0, _ROLE_CHANNEL_NAME, name)
@@ -960,8 +961,8 @@ class AnalysisView(QWidget):
             file_path_str = file_item.data(0, Qt.ItemDataRole.UserRole)
             if not file_path_str:
                 continue
-            # Find measurement in loaded list (Fallback für Kanäle ohne
-            # eigene _ROLE_MEASUREMENT-Zuweisung)
+            # Find measurement in loaded list (fallback for channels
+            # without their own _ROLE_MEASUREMENT assignment)
             matched = [m for p, m in self._loaded_measurements if str(p) == file_path_str or p.name == file_path_str]
             if not matched:
                 continue
@@ -977,10 +978,10 @@ class AnalysisView(QWidget):
                 if ch_item.checkState(0) != Qt.CheckState.Checked:
                     continue
 
-                # Jeder Kanal trägt einen Verweis auf sein eigenes
-                # LoadedMeasurement (siehe _load_file/_add_result_channel) -
-                # bei Analyseergebnissen (z. B. FFT) weicht dieses vom
-                # Messungs-DataFrame der Quelldatei ab (andere x-Achse).
+                # Every channel carries a reference to its own
+                # LoadedMeasurement (see _load_file/_add_result_channel) -
+                # for analysis results (e.g. FFT), this differs from the
+                # source file's measurement DataFrame (different x-axis).
                 meas = ch_item.data(0, _ROLE_MEASUREMENT) or default_measurement
                 data = meas.data
                 x_column = meas.x_column if meas.x_column in data.columns else None
@@ -1006,8 +1007,8 @@ class AnalysisView(QWidget):
                     continue
 
                 assignment_key = (str(file_path_str), str(chan_name))
-                # Nur bereits zugewiesene Kanaele plotten (Drag&Drop).
-                # Der Haken blendet danach nur ein/aus.
+                # Only plot channels that are already assigned (drag&drop).
+                # The checkbox only shows/hides them afterwards.
                 if assignment_key not in self._channel_assignments:
                     continue
                 plot_index = self._channel_assignments.get(assignment_key, 0)
@@ -1024,9 +1025,9 @@ class AnalysisView(QWidget):
                     pen=pg.mkPen(color=color, width=1.2),
                     name=f"{file_item.text(0)} - {display_label}",
                 )
-                # Min/Max-Dezimierung pro Pixel (siehe gui/live_view.py:44-53) -
-                # haelt Zoom/Pan bei sehr grossen Datensaetzen fluessig, ohne
-                # kurze Spitzen/Ausreisser zu verlieren (method="peak" statt
+                # Min/max decimation per pixel (see gui/live_view.py:44-53) -
+                # keeps zoom/pan smooth for very large datasets without
+                # losing short spikes/outliers (method="peak" instead of
                 # "mean").
                 curve.setDownsampling(auto=True, method="peak")
                 curve.setClipToView(True)
@@ -1035,12 +1036,12 @@ class AnalysisView(QWidget):
         self._refresh_plot_axis_labels()
 
     # ------------------------------------------------------------------ #
-    # Analysefunktionen (FFT, Tief-/Hochpass, Glättung)
+    # Analysis functions (FFT, low-/high-pass, smoothing)
     # ------------------------------------------------------------------ #
 
     def _on_analysis_function_clicked(self, kind: str) -> None:
-        """Öffnet den Kanal-/Parameter-Dialog für eine Analysefunktion und
-        legt das Ergebnis als neuen Kanal unter der Quelldatei ab."""
+        """Opens the channel/parameter dialog for an analysis function and
+        stores the result as a new channel under the source file."""
         channel_options = self._collect_channel_options()
         if not channel_options:
             QMessageBox.information(
@@ -1063,12 +1064,12 @@ class AnalysisView(QWidget):
         if measurement is None:
             return
 
-        # Die eigentliche Berechnung (compute_fft/apply_filter/
-        # apply_smoothing) läuft im Hintergrund (siehe
-        # gui/workers.py::BackgroundWorker) - bei langen Messungen (z. B.
-        # 100 kHz über mehrere Minuten) kann das sonst den GUI-Thread für
-        # spürbare Zeit blockieren. Nur die schnellen Vorbereitungsschritte
-        # (Abtastrate ermitteln, x-Achse extrahieren) bleiben synchron.
+        # The actual computation (compute_fft/apply_filter/
+        # apply_smoothing) runs in the background (see
+        # gui/workers.py::BackgroundWorker) - for long measurements (e.g.
+        # 100 kHz over several minutes), this could otherwise block the
+        # GUI thread for a noticeable time. Only the fast preparation
+        # steps (determine sample rate, extract x-axis) stay synchronous.
         if kind == "fft":
             sample_rate_hz = self._resolve_sample_rate(measurement)
             if sample_rate_hz is None:
@@ -1128,9 +1129,9 @@ class AnalysisView(QWidget):
     def _run_analysis_in_background(
         self, fn, args: tuple, kwargs: dict, on_success
     ) -> None:
-        """Führt eine Analysefunktion im Hintergrund aus und ruft bei
-        Erfolg `on_success(ergebnis)` im GUI-Thread auf (siehe
-        `_finish_result`-Aufrufe in `_on_analysis_function_clicked`)."""
+        """Runs an analysis function in the background and, on success,
+        calls `on_success(result)` on the GUI thread (see the
+        `_finish_result` calls in `_on_analysis_function_clicked`)."""
         self._begin_busy()
         worker = BackgroundWorker(fn, *args, **kwargs)
         worker.succeeded.connect(lambda result: self._on_analysis_succeeded(on_success, result))
@@ -1157,12 +1158,12 @@ class AnalysisView(QWidget):
         )
 
     def _collect_channel_options(self) -> list[tuple[str, str, list[tuple[str, str]]]]:
-        """Alle aktuell im Baum vorhandenen Dateien mit ihren Kanälen
-        (regulär und Analyseergebnisse), gruppiert nach Datei - als
-        `(Dateiname, Dateipfad, [(Kanal-Anzeigename, Kanalname), ...])`
-        für die Baumauswahl im Analysefunktions-Dialog (siehe
-        `_AnalysisFunctionDialog`). Dateien ohne auswählbare Kanäle werden
-        ausgelassen, statt als leere Gruppe angezeigt zu werden."""
+        """All files currently present in the tree with their channels
+        (regular and analysis results), grouped by file - as
+        `(file name, file path, [(channel display name, channel name), ...])`
+        for the tree selection in the analysis function dialog (see
+        `_AnalysisFunctionDialog`). Files without selectable channels are
+        left out instead of being shown as an empty group."""
         groups: list[tuple[str, str, list[tuple[str, str]]]] = []
         for file_idx in range(self._tree.topLevelItemCount()):
             file_item = self._tree.topLevelItem(file_idx)
@@ -1195,9 +1196,10 @@ class AnalysisView(QWidget):
 
     @staticmethod
     def _resolve_sample_rate(measurement: LoadedMeasurement) -> float | None:
-        """Ermittelt die Abtastrate eines Kanals: bevorzugt aus den
-        Metadaten (`sample_rate_hz`), sonst geschätzt aus dem Median-Abstand
-        der x-Achsen-Werte (z. B. bei Dateien ohne Metadaten-JSON)."""
+        """Determines the sample rate of a channel: preferably from the
+        metadata (`sample_rate_hz`), otherwise estimated from the median
+        spacing of the x-axis values (e.g. for files without a metadata
+        JSON)."""
         sample_rate = measurement.metadata.get("sample_rate_hz") if measurement.metadata else None
         if sample_rate:
             try:
@@ -1216,17 +1218,18 @@ class AnalysisView(QWidget):
 
     @staticmethod
     def _resolve_native_sample_rate(measurement: LoadedMeasurement, channel_name: str) -> float | None:
-        """Native Abtastrate eines einzelnen Kanals aus den Metadaten
-        (Schlüssel `native_sample_rate_hz`, siehe
-        `data/metadata.py::build_measurement_metadata`), falls vorhanden.
+        """Native sample rate of a single channel from the metadata
+        (key `native_sample_rate_hz`, see
+        `data/metadata.py::build_measurement_metadata`), if present.
 
-        Kann von der Datei-Tick-Rate (`_resolve_sample_rate`) abweichen,
-        wenn der Kanal per `core/rate_merge.py::RateMerger` forward-
-        gefüllt wurde (aktuell nur beim NI9210 möglich). Sucht bewusst im
-        ROHEN Metadaten-Dictionary (`measurement.metadata["channels"]`),
-        NICHT über `measurement.channels`/`Channel.from_dict` - letzteres
-        kennt `native_sample_rate_hz` nicht als eigenes Dataclass-Feld und
-        würde es beim Rekonstruieren stillschweigend verlieren.
+        Can differ from the file tick rate (`_resolve_sample_rate`) if
+        the channel was forward-filled via
+        `core/rate_merge.py::RateMerger` (currently only possible for
+        the NI9210). Deliberately looks up the RAW metadata dictionary
+        (`measurement.metadata["channels"]`), NOT via
+        `measurement.channels`/`Channel.from_dict` - the latter doesn't
+        know `native_sample_rate_hz` as its own dataclass field and
+        would silently lose it when reconstructing.
         """
         if not measurement.metadata:
             return None
@@ -1247,22 +1250,21 @@ class AnalysisView(QWidget):
     def _prepare_channel_for_rate_aware_analysis(
         self, measurement: LoadedMeasurement, channel_name: str, tick_rate_hz: float
     ) -> tuple[pd.DataFrame, float]:
-        """Liefert die für FFT/Filter zu verwendenden Daten + Abtastrate.
+        """Returns the data + sample rate to use for FFT/filter.
 
-        Bei einem forward-gefüllten Kanal (native Rate erkennbar unter
-        der Datei-Tick-Rate, siehe `_resolve_native_sample_rate`) werden
-        zuerst die Wiederholungswerte entfernt
-        (`analysis.basic_analysis.native_samples`) und mit der echten
-        nativen Rate gerechnet - sonst würde eine Zero-Order-Hold-
-        Treppenstufe (siehe `core/rate_merge.py`) ein falsches, sinc-
-        förmiges Spektrum-Artefakt vortäuschen. Bei allen anderen Kanälen
-        (der Regelfall, native Rate == Tick-Rate) exakt unverändertes
-        Verhalten - `measurement.data`/`tick_rate_hz` werden unangetastet
-        zurückgegeben.
+        For a forward-filled channel (native rate detectably below the
+        file tick rate, see `_resolve_native_sample_rate`), the repeated
+        values are first removed
+        (`analysis.basic_analysis.native_samples`) and computed with the
+        true native rate - otherwise a zero-order-hold staircase (see
+        `core/rate_merge.py`) would fake a false, sinc-shaped spectrum
+        artifact. For all other channels (the normal case, native rate
+        == tick rate), exactly unchanged behavior - `measurement.data`/
+        `tick_rate_hz` are returned untouched.
 
-        `* 0.99`-Toleranz deckt Rundung beim Speichern/Runden der Raten
-        ab, ohne eine minimal abweichende, aber eigentlich identische
-        Rate fälschlich als "forward-gefüllt" zu behandeln.
+        The `* 0.99` tolerance covers rounding when saving/rounding the
+        rates, without falsely treating a minimally different but
+        actually identical rate as "forward-filled".
         """
         native_rate_hz = self._resolve_native_sample_rate(measurement, channel_name)
         if native_rate_hz is not None and native_rate_hz < tick_rate_hz * 0.99:
@@ -1350,7 +1352,7 @@ class AnalysisView(QWidget):
         assigned_index = plot_index if plot_index in active_indices else active_indices[0]
         self._channel_assignments[(file_path, channel_name)] = assigned_index
 
-        # Nach Zuordnung sichtbar schalten: Datei + Kanal auf "checked" setzen.
+        # Make visible after assignment: set file + channel to "checked".
         for file_idx in range(self._tree.topLevelItemCount()):
             file_item = self._tree.topLevelItem(file_idx)
             if str(file_item.data(0, _ROLE_FILE_PATH)) != file_path:
@@ -1390,8 +1392,8 @@ class AnalysisView(QWidget):
             plot_widget.setVisible(True)
             self._plot_grid.addWidget(plot_widget, row, col, row_span, col_span)
 
-        # Nur tatsächlich genutzte Zeilen/Spalten stretchen, damit Single/
-        # gestapelte Layouts die volle Breite/Höhe ausfüllen.
+        # Only stretch rows/columns that are actually used, so single/
+        # stacked layouts fill the full width/height.
         used_rows: set[int] = set()
         used_cols: set[int] = set()
         for _plot_index, row, col, row_span, col_span in specs:

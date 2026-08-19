@@ -1,33 +1,35 @@
 """
 core/ringbuffer.py
 
-Thread-sicherer Ring Buffer für Mehrkanal-Messdaten.
+Thread-safe ring buffer for multi-channel measurement data.
 
-Architektur-Kontext (siehe Vorgabe):
+Architecture context (see spec):
 
     DAQ Thread -> Ring Buffer -> Live View
                               -> Storage Writer
 
-Der Ring Buffer entkoppelt den DAQ-Erfassungs-Thread von den beiden
-Konsumenten (Live View, Storage Writer), die typischerweise mit
-unterschiedlicher Geschwindigkeit lesen:
+The ring buffer decouples the DAQ acquisition thread from the two
+consumers (live view, storage writer), which typically read at
+different speeds:
 
-    * Der Storage Writer muss JEDEN Sample verlustfrei bekommen.
-    * Die Live View darf und soll Samples überspringen dürfen (z. B. wenn
-      die GUI kurz nicht rendert), ohne den Storage Writer zu beeinflussen.
+    * The storage writer must receive EVERY sample without loss.
+    * The live view is allowed - and supposed - to skip samples (e.g.
+      when the GUI briefly isn't rendering), without affecting the
+      storage writer.
 
-Deshalb verwendet dieser Ring Buffer KEINE einzelne globale Leseposition,
-sondern unabhängige "Reader" mit jeweils eigenem Lesezeiger
-(`register_reader` / `read_new`). Ein langsamer Reader kann dadurch nie
-einen anderen Reader blockieren oder dessen Daten "wegkonsumieren".
+For this reason, this ring buffer does NOT use a single global read
+position, but independent "readers" each with their own read pointer
+(`register_reader` / `read_new`). A slow reader can therefore never
+block another reader or "consume away" its data.
 
-Performance-Design für Abtastraten bis 100 kHz:
-    * Der Speicher wird einmalig als NumPy-Array vorallokiert
-      (`np.zeros((num_channels, capacity))`) - keine Allokationen pro Sample.
-    * Schreiben/Lesen erfolgt blockweise (NumPy-Slicing), nicht sample-weise.
-    * Der Lock wird nur für die (billige) Zeiger-Buchhaltung gehalten, das
-      eigentliche Kopieren der Daten passiert per NumPy-Vektorisierung
-      innerhalb des Locks, bleibt aber durch die Blockverarbeitung kurz.
+Performance design for sample rates up to 100 kHz:
+    * Memory is pre-allocated once as a NumPy array
+      (`np.zeros((num_channels, capacity))`) - no per-sample allocations.
+    * Writing/reading happens block-wise (NumPy slicing), not sample by
+      sample.
+    * The lock is held only for the (cheap) pointer bookkeeping; the
+      actual data copying happens via NumPy vectorization within the
+      lock, but stays short due to block processing.
 """
 
 from __future__ import annotations
@@ -42,30 +44,30 @@ logger = logging.getLogger(__name__)
 
 
 class RingBuffer:
-    """Thread-sicherer, blockweiser Ring Buffer für Mehrkanal-Messdaten.
+    """Thread-safe, block-wise ring buffer for multi-channel measurement data.
 
-    Ein einzelner `RingBuffer` hält Daten für eine feste Anzahl Kanäle mit
-    fester Kapazität (Samples pro Kanal). Der DAQ-Thread schreibt Blöcke
-    via `write()`. Beliebig viele unabhängige Konsumenten können sich via
-    `register_reader()` registrieren und ihre neuen Daten via `read_new()`
-    abholen, ohne sich gegenseitig zu beeinflussen.
+    A single `RingBuffer` holds data for a fixed number of channels with
+    a fixed capacity (samples per channel). The DAQ thread writes blocks
+    via `write()`. Any number of independent consumers can register via
+    `register_reader()` and fetch their new data via `read_new()`,
+    without affecting one another.
 
-    Thread-Sicherheit:
-        Alle öffentlichen Methoden sind thread-sicher (intern durch einen
-        `threading.Lock` geschützt) und können gefahrlos aus verschiedenen
-        Threads aufgerufen werden (z. B. DAQ-Thread schreibt, GUI-Thread
-        und Storage-Thread lesen gleichzeitig).
+    Thread safety:
+        All public methods are thread-safe (internally protected by a
+        `threading.Lock`) and can safely be called from different
+        threads (e.g. the DAQ thread writes while the GUI thread and the
+        storage thread read concurrently).
     """
 
     def __init__(self, num_channels: int, capacity: int) -> None:
-        """Initialisiert den Ring Buffer.
+        """Initializes the ring buffer.
 
         Args:
-            num_channels: Anzahl der Kanäle (Zeilen des internen Arrays).
-            capacity: Kapazität in Samples pro Kanal.
+            num_channels: Number of channels (rows of the internal array).
+            capacity: Capacity in samples per channel.
 
         Raises:
-            ValueError: falls `num_channels` oder `capacity` nicht positiv sind.
+            ValueError: if `num_channels` or `capacity` is not positive.
         """
         if num_channels <= 0:
             raise ValueError("num_channels muss positiv sein")
@@ -85,40 +87,39 @@ class RingBuffer:
 
     @property
     def num_channels(self) -> int:
-        """Anzahl der Kanäle des Buffers."""
+        """Number of channels in the buffer."""
         return self._num_channels
 
     @property
     def capacity(self) -> int:
-        """Kapazität des Buffers in Samples pro Kanal."""
+        """Capacity of the buffer in samples per channel."""
         return self._capacity
 
     # ------------------------------------------------------------------ #
-    # Reader-Verwaltung
+    # Reader management
     # ------------------------------------------------------------------ #
 
     def register_reader(self, back_samples: int = 0) -> int:
-        """Registriert einen neuen, unabhängigen Konsumenten (Reader).
+        """Registers a new, independent consumer (reader).
 
-        Der neue Reader beginnt standardmäßig an der aktuellen
-        Schreibposition, sieht also nur Daten, die NACH der Registrierung
-        geschrieben werden.
+        By default, the new reader starts at the current write position,
+        so it only sees data written AFTER registration.
 
         Args:
-            back_samples: Optional - lässt den Reader stattdessen
-                `back_samples` Samples VOR der aktuellen Schreibposition
-                beginnen (rückwirkendes Lesen, z. B. für einen
-                Vorlauf-/Pre-Trigger-Puffer beim Schwellwert-Trigger, siehe
-                `gui/main_window.py::_on_trigger_fired`). Wird auf die
-                älteste noch im Puffer vorhandene Position geclamped -
-                sowohl nach unten (nicht vor Sample 0), als auch nach oben
-                (nicht weiter zurück, als der Puffer noch hält, sonst
-                bereits überschriebene Daten). `0` (Standard) entspricht
-                exakt dem bisherigen Verhalten.
+            back_samples: Optional - lets the reader start
+                `back_samples` samples BEFORE the current write position
+                instead (retroactive reading, e.g. for a pre-roll/
+                pre-trigger buffer on a threshold trigger, see
+                `gui/main_window.py::_on_trigger_fired`). Clamped to the
+                oldest position still present in the buffer - both from
+                below (not before sample 0) and from above (not further
+                back than the buffer still holds, otherwise already
+                overwritten data). `0` (default) corresponds exactly to
+                the previous behavior.
 
         Returns:
-            Eine Reader-ID, die bei allen weiteren Aufrufen
-            (`read_new`, `available_samples`, `unregister_reader`) verwendet wird.
+            A reader ID to be used in all further calls (`read_new`,
+            `available_samples`, `unregister_reader`).
         """
         with self._lock:
             reader_id = self._next_reader_id
@@ -135,25 +136,25 @@ class RingBuffer:
             return reader_id
 
     def unregister_reader(self, reader_id: int) -> None:
-        """Entfernt einen Reader (z. B. wenn die Live View geschlossen wird)."""
+        """Removes a reader (e.g. when the live view is closed)."""
         with self._lock:
             self._readers.pop(reader_id, None)
             logger.debug("Reader %d entfernt", reader_id)
 
     # ------------------------------------------------------------------ #
-    # Schreiben
+    # Writing
     # ------------------------------------------------------------------ #
 
     def write(self, data: np.ndarray) -> None:
-        """Schreibt einen neuen Datenblock in den Ring Buffer.
+        """Writes a new data block into the ring buffer.
 
         Args:
-            data: Array der Form (num_channels, num_new_samples).
+            data: Array of shape (num_channels, num_new_samples).
 
         Raises:
-            ValueError: falls die Kanalanzahl nicht passt oder der Block
-                größer als die Gesamtkapazität ist (Konfigurationsfehler,
-                z. B. `samples_per_read > ring_buffer_size`).
+            ValueError: if the channel count doesn't match, or the block
+                is larger than the total capacity (configuration error,
+                e.g. `samples_per_read > ring_buffer_size`).
         """
         if data.ndim != 2 or data.shape[0] != self._num_channels:
             raise ValueError(
@@ -187,13 +188,13 @@ class RingBuffer:
             self._check_overruns_locked()
 
     def _check_overruns_locked(self) -> None:
-        """Erkennt und behandelt Reader, die zu weit hinterherhinken.
+        """Detects and handles readers that have fallen too far behind.
 
-        Muss innerhalb von `self._lock` aufgerufen werden. Ein Reader, der
-        mehr als `capacity` Samples im Rückstand ist, hat garantiert
-        Daten verloren (sie wurden bereits überschrieben). Der Reader wird
-        in diesem Fall auf die älteste noch gültige Position vorgezogen und
-        der Datenverlust wird geloggt.
+        Must be called while holding `self._lock`. A reader that is more
+        than `capacity` samples behind is guaranteed to have lost data
+        (it has already been overwritten). In this case the reader is
+        advanced to the oldest still-valid position and the data loss is
+        logged.
         """
         for reader_id, read_count in list(self._readers.items()):
             lag = self._total_written - read_count
@@ -210,29 +211,29 @@ class RingBuffer:
                 self._readers[reader_id] = self._total_written - self._capacity
 
     # ------------------------------------------------------------------ #
-    # Lesen
+    # Reading
     # ------------------------------------------------------------------ #
 
     def read_new(self, reader_id: int, max_samples: Optional[int] = None) -> np.ndarray:
-        """Liest alle seit dem letzten Aufruf neu geschriebenen Samples.
+        """Reads all samples newly written since the last call.
 
-        Nicht-blockierend: Ist nichts Neues vorhanden, wird ein leeres
-        Array zurückgegeben (Aufrufer entscheidet selbst über Polling-Intervall).
+        Non-blocking: if nothing new is available, an empty array is
+        returned (the caller decides its own polling interval).
 
         Args:
-            reader_id: ID aus `register_reader`.
-            max_samples: Optionale Obergrenze für die Anzahl zurückgegebener
-                Samples pro Aufruf. Nützlich für die Live View, damit ein
-                GUI-Update nach einer längeren Pause nicht schlagartig
-                riesige Datenmengen zeichnen muss. Übersprungene, ältere
-                Samples gelten dabei als regulär gelesen (kein Overrun-Log).
+            reader_id: ID from `register_reader`.
+            max_samples: Optional upper bound on the number of samples
+                returned per call. Useful for the live view, so that a
+                GUI update after a longer pause doesn't have to draw a
+                huge amount of data all at once. Skipped, older samples
+                count as regularly read in this case (no overrun log).
 
         Returns:
-            Array der Form (num_channels, num_available_samples).
-            `num_available_samples` kann 0 sein.
+            Array of shape (num_channels, num_available_samples).
+            `num_available_samples` can be 0.
 
         Raises:
-            KeyError: falls `reader_id` nicht (mehr) registriert ist.
+            KeyError: if `reader_id` is not (or no longer) registered.
         """
         with self._lock:
             if reader_id not in self._readers:
@@ -264,10 +265,10 @@ class RingBuffer:
             return out
 
     def available_samples(self, reader_id: int) -> int:
-        """Anzahl der aktuell ungelesenen Samples für einen Reader.
+        """Number of currently unread samples for a reader.
 
         Raises:
-            KeyError: falls `reader_id` nicht (mehr) registriert ist.
+            KeyError: if `reader_id` is not (or no longer) registered.
         """
         with self._lock:
             if reader_id not in self._readers:
@@ -275,7 +276,7 @@ class RingBuffer:
             return max(0, self._total_written - self._readers[reader_id])
 
     def reset(self) -> None:
-        """Setzt den Buffer und alle Lesezeiger zurück (z. B. bei Messstart)."""
+        """Resets the buffer and all read pointers (e.g. on measurement start)."""
         with self._lock:
             self._buffer.fill(0.0)
             self._write_pos = 0

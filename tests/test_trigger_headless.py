@@ -52,14 +52,14 @@ class _SignalSpy:
 
 
 class _FakeAcquisitionDevice:
-    """Minimaler Fake für `hardware.base_device.BaseDevice` in
-    `RateMerger`-Tests - simuliert eine Hardware, deren Samples erst mit
-    Verzögerung tatsächlich verfügbar werden (siehe
-    `core/rate_merge.py`-Moduldocstring: laut `due()` fällig != vom
-    Treiber tatsächlich schon geliefert). `read()` wirft bewusst einen
-    `AssertionError`, falls jemals mehr angefordert wird, als
-    `available_samples()` zuvor gemeldet hat - genau die Garantie, die
-    der Fix in `RateMerger.read_merged_block` sicherstellen soll."""
+    """Minimal fake for `hardware.base_device.BaseDevice` in
+    `RateMerger` tests - simulates hardware whose samples only actually
+    become available with a delay (see the `core/rate_merge.py` module
+    docstring: due per `due()` != actually already delivered by the
+    driver). `read()` deliberately raises an `AssertionError` if ever
+    asked for more samples than `available_samples()` previously
+    reported - exactly the guarantee that the fix in
+    `RateMerger.read_merged_block` is meant to ensure."""
 
     def __init__(self, num_channels: int = 1) -> None:
         self.active_channels = [object() for _ in range(num_channels)]
@@ -84,9 +84,9 @@ class _FakeAcquisitionDevice:
 
 class RateMergerTests(unittest.TestCase):
     def test_slow_group_never_blocks_and_catches_up_once_hardware_delivers(self) -> None:
-        # Fast-Geraet hat "immer genug" (steht fuer den blockierenden,
-        # aber in der Praxis schnell erfuellten Read der schnellen
-        # Gruppe) - Rate 100 vs. 10 (Verhaeltnis 10), 10 Samples/Zyklus.
+        # Fast device has "always enough" (stands in for the blocking,
+        # but in practice quickly satisfied read of the fast group) -
+        # rate 100 vs. 10 (ratio 10), 10 samples/cycle.
         fast_device = _FakeAcquisitionDevice()
         fast_device.produce(10_000)
         slow_device = _FakeAcquisitionDevice()
@@ -95,22 +95,22 @@ class RateMergerTests(unittest.TestCase):
         slow_group = DeviceGroup(devices=[slow_device], resolved_sample_rate_hz=10.0)
         merger = RateMerger([fast_group, slow_group], read_timeout_seconds=1.0)
 
-        # Zyklus 1: ein langsames Sample waere laut due() faellig, die
-        # "Hardware" hat es aber noch NICHT produziert - kein Blockieren/
-        # Fehler, der zuletzt bekannte Wert (0.0) wird gehalten.
+        # Cycle 1: one slow sample would be due per due(), but the
+        # "hardware" has NOT produced it yet - no blocking/error, the
+        # last known value (0.0) is held.
         block = merger.read_merged_block(10)
         self.assertEqual(block.shape, (2, 10))
         np.testing.assert_array_equal(block[1], np.zeros(10))
         self.assertEqual(slow_device._consumed, 0)
 
-        # Zyklus 2: weiterhin nichts produziert - Rueckstand waechst auf
-        # 2 faellige Samples, weiterhin kein Blockieren.
+        # Cycle 2: still nothing produced - backlog grows to 2 due
+        # samples, still no blocking.
         block = merger.read_merged_block(10)
         np.testing.assert_array_equal(block[1], np.zeros(10))
 
-        # Jetzt liefert die "Hardware" die beiden inzwischen faelligen
-        # Samples nach - RateMerger muss den Rueckstand automatisch
-        # nachholen, sobald verfuegbar.
+        # Now the "hardware" delivers the two meanwhile-due samples -
+        # RateMerger must automatically catch up on the backlog as soon
+        # as it becomes available.
         slow_device.produce(2)
         block = merger.read_merged_block(10)
         self.assertEqual(slow_device._consumed, 2)
@@ -237,9 +237,9 @@ class TriggerModelTests(unittest.TestCase):
         MeasurementConfig("Unlimited", 1000.0, recording_stop_value=0.0)
 
     def test_ni9210_alone_ignores_target_rate_and_resolves_to_14hz(self) -> None:
-        # Ein alleinstehender NI9210 hat keine "andere" Gruppe, die die
-        # Zielrate erfuellen muesste - resolve_rate_groups() loest ihn
-        # immer auf seine feste 14 S/s auf, unabhaengig vom Zielwert.
+        # A standalone NI9210 has no "other" group that would need to
+        # satisfy the target rate - resolve_rate_groups() always resolves
+        # it to its fixed 14 S/s, regardless of the target value.
         channels = [
             Channel(
                 "cDAQ1Mod1/ai0",
@@ -256,11 +256,11 @@ class TriggerModelTests(unittest.TestCase):
         MeasurementConfig("Valid NI9210", 14.0, channels=channels)
 
     def test_ni9210_joins_shared_group_when_target_rate_matches_its_fixed_rate(self) -> None:
-        # Entspricht die Zielrate zufaellig genau der festen NI9210-Rate
-        # (14 S/s), gibt es keinen Ratenkonflikt - der NI9210 bleibt dann
-        # im selben Task wie andere, damit kompatible Module (hier
-        # NI9215, das keine Ratenbeschraenkung hat), statt unnoetig eine
-        # eigene Merge-Gruppe zu bekommen.
+        # If the target rate happens to exactly match the fixed NI9210
+        # rate (14 S/s), there is no rate conflict - the NI9210 then
+        # stays in the same task as other, compatible modules (here
+        # NI9215, which has no rate restriction), instead of unnecessarily
+        # getting its own merge group.
         channels = [
             Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
             Channel("cDAQ1Mod2/ai0", "Voltage", module_type=ModuleType.NI9215),
@@ -274,14 +274,14 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(len(groups[0].channels), 2)
 
     def test_ni9210_combined_with_faster_module_yields_two_rate_groups(self) -> None:
-        # Kernverhalten von Phase A: NI9210 + ein schnelleres Modul ist
-        # kein Fehler mehr, sondern zwei getrennte Ratengruppen (siehe
+        # Core behavior of phase A: NI9210 + a faster module is no
+        # longer an error, but two separate rate groups (see
         # data/models.py::resolve_rate_groups).
         channels = [
             Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
             Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
         ]
-        target_rate = 51_200.0 / 31  # gueltige NI9234-Rate
+        target_rate = 51_200.0 / 31  # valid NI9234 rate
 
         config = MeasurementConfig("Mixed rates", target_rate, channels=channels)
         groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
@@ -291,10 +291,10 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(groups[1].resolved_sample_rate_hz, 14.0)
 
     def test_metadata_reflects_actual_tick_rate_and_native_rate_per_channel(self) -> None:
-        # Phase B: Metadaten muessen die TATSAECHLICHE Tick-Rate (nicht
-        # die rohe Zielrate) unter "sample_rate_hz" fuehren, da
-        # StorageWriter die time_s-Spalte damit berechnet - sowie die
-        # aufgeloesten Ratengruppen und die native Rate je Kanal.
+        # Phase B: metadata must carry the ACTUAL tick rate (not the raw
+        # target rate) under "sample_rate_hz", since StorageWriter uses
+        # it to compute the time_s column - as well as the resolved rate
+        # groups and the native rate per channel.
         channels = [
             Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
             Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
@@ -314,9 +314,9 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(native_rates["cDAQ1Mod2/ai0"], target_rate)
 
     def test_native_samples_removes_consecutive_duplicates(self) -> None:
-        # Zero-Order-Hold-Treppenstufe (siehe core/rate_merge.py::RateMerger):
-        # nur der jeweils ERSTE einer Folge identischer Werte ist ein
-        # echtes neues Sample.
+        # Zero-order-hold staircase step (see core/rate_merge.py::RateMerger):
+        # only the FIRST of a run of identical values is an actual new
+        # sample.
         data = pd.DataFrame({
             "time_s": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5],
             "Temp": [10.0, 10.0, 10.0, 11.0, 11.0, 12.0],
@@ -328,9 +328,9 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(list(reduced["time_s"]), [0.0, 0.3, 0.5])
 
     def test_prepare_channel_for_rate_aware_analysis_decimates_forward_filled_channel(self) -> None:
-        # Mischt einen forward-gefuellten NI9210-Kanal (native 14 S/s)
-        # mit einem echten schnellen NI9234-Kanal (native == Tick-Rate)
-        # in derselben Datei - nur der NI9210-Kanal darf entdoppelt werden.
+        # Mixes a forward-filled NI9210 channel (native 14 S/s) with a
+        # genuinely fast NI9234 channel (native == tick rate) in the
+        # same file - only the NI9210 channel may be de-duplicated.
         tick_rate = 100.0
         data = pd.DataFrame({
             "time_s": np.arange(6) / tick_rate,
@@ -362,9 +362,9 @@ class TriggerModelTests(unittest.TestCase):
         self.assertIs(vib_data, data)
 
     def test_ni9210_combined_with_invalid_ni9234_rate_still_raises(self) -> None:
-        # Intrinsische Ratenverstoesse (hier: NI9234-Raster) bleiben
-        # weiterhin Fehler - unabhaengig davon, ob zusaetzlich ein NI9210
-        # in der Messung ist.
+        # Intrinsic rate violations (here: the NI9234 grid) remain errors
+        # regardless of whether an NI9210 is additionally present in the
+        # measurement.
         channels = [
             Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
             Channel("cDAQ1Mod2/ai0", "Vibration", module_type=ModuleType.NI9234),
@@ -374,17 +374,16 @@ class TriggerModelTests(unittest.TestCase):
             MeasurementConfig("Invalid NI9234 rate", 1000.0, channels=channels)
 
     def test_resolve_rate_groups_snaps_ni9234_rate_to_exact_valid_value(self) -> None:
-        # DAQmx rundet eine Rate, die auch nur minimal UEBER einem
-        # gueltigen NI9234-Wert liegt, auf den NAECHSTHOEHEREN gueltigen
-        # Wert auf (nicht auf den naechstgelegenen) - an echter Hardware
-        # verifiziert: 17066.7 (0.03 Hz ueber 51200/3) sprang intern auf
-        # 25600 Hz (51200/2). resolve_rate_groups() muss deshalb auf den
-        # EXAKTEN gueltigen Wert einrasten, bevor er an die Hardware-
-        # Schicht weitergereicht wird - nicht die rohe (z. B. auf eine
-        # Nachkommastelle gerundete) Zielrate durchreichen.
+        # DAQmx rounds a rate that lies even minimally ABOVE a valid
+        # NI9234 value up to the NEXT-HIGHER valid value (not to the
+        # closest one) - verified on real hardware: 17066.7 (0.03 Hz above
+        # 51200/3) internally jumped to 25600 Hz (51200/2).
+        # resolve_rate_groups() must therefore snap to the EXACT valid
+        # value before passing it on to the hardware layer - not pass
+        # through the raw (e.g. rounded to one decimal place) target rate.
         channels = [Channel("cDAQ1Mod1/ai0", "Vibration", module_type=ModuleType.NI9234)]
         exact_valid_rate = 51_200.0 / 3
-        raw_rounded_target = 17066.7  # wie von der 1-Nachkommastellen-Spinbox geliefert
+        raw_rounded_target = 17066.7  # as delivered by the 1-decimal-place spinbox
 
         self.assertNotEqual(raw_rounded_target, exact_valid_rate)
         groups = resolve_rate_groups(channels, raw_rounded_target)
@@ -560,10 +559,11 @@ class LiveViewStopTriggerTests(unittest.TestCase):
         self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz (+ NI9210 @ 14.0 Hz)")
 
     def test_write_to_display_buffer_fast_channel_writes_every_row_unchanged(self) -> None:
-        # Regressionsschutz: ein Kanal an der Tick-Rate selbst darf NIE der
-        # Reduktion auf native-Rate-Samples unterliegen, auch wenn er
-        # zufaellig wiederholte Werte liefert (echtes, gueltiges
-        # Messsignal) - Verhalten muss exakt wie vor dem Fix bleiben.
+        # Regression protection: a channel at the tick rate itself must
+        # NEVER be subject to reduction to native-rate samples, even if
+        # it happens to deliver repeated values (a genuine, valid
+        # measurement signal) - behavior must remain exactly as it was
+        # before the fix.
         live_view = LiveView.__new__(LiveView)
         live_view._channels = [Channel("cDAQ1Mod2/ai0", "Vib", module_type=ModuleType.NI9234)]
         live_view._sample_rate_hz = 1000.0
@@ -600,14 +600,14 @@ class LiveViewStopTriggerTests(unittest.TestCase):
         )
 
     def test_write_to_display_buffer_slow_channel_advances_on_due_ticks_even_with_constant_values(self) -> None:
-        # Regressionstest fuer einen gemeldeten Realzeit-Versatz: ein
-        # STABILER (unveraenderter) Messwert eines langsamen Kanals (z. B.
-        # ein Thermoelement, das sich kaum aendert) muss trotzdem im
-        # korrekten Takt als neue Samples gezaehlt werden - rein anhand
-        # der verstrichenen Tick-Anzahl, NICHT anhand von Wertaenderungen
-        # (ein frueherer, wertbasierter Ansatz haette das faelschlich als
-        # eine einzige ZOH-Wiederholung verworfen und die Sweep-Anzeige
-        # gegenueber der echten Messzeit nachlaufen lassen).
+        # Regression test for a reported real-time drift: a STABLE
+        # (unchanged) reading from a slow channel (e.g. a thermocouple
+        # that barely changes) must still be counted as new samples at
+        # the correct cadence - based purely on the number of elapsed
+        # ticks, NOT on value changes (an earlier, value-based approach
+        # would have incorrectly discarded this as a single ZOH repeat
+        # and let the sweep display lag behind the actual measurement
+        # time).
         live_view = LiveView.__new__(LiveView)
         temp = Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)
         live_view._channels = [temp]
@@ -619,15 +619,15 @@ class LiveViewStopTriggerTests(unittest.TestCase):
         live_view._channel_cycle_starts = {0: 0.0}
         live_view._channel_total_ticks_seen = {0: 0}
 
-        # 25 rohe Tick-Zeilen (Verhaeltnis 10:1) -> 2 faellige native
-        # Samples, Wert komplett KONSTANT.
+        # 25 raw tick rows (10:1 ratio) -> 2 due native samples, value
+        # completely CONSTANT.
         block1 = np.full((1, 25), 10.0)
         live_view._write_to_display_buffer(block1)
         self.assertEqual(live_view._channel_buffer_positions[0], 2)
         np.testing.assert_array_equal(live_view._display_buffer[0, :2], [10.0, 10.0])
 
-        # Weitere 4 rohe Tick-Zeilen (insgesamt 29) reichen noch nicht
-        # fuer ein drittes faelliges Sample (erst bei 30 Ticks).
+        # 4 more raw tick rows (29 total) are still not enough for a
+        # third due sample (only at 30 ticks).
         live_view._write_to_display_buffer(np.full((1, 4), 10.0))
         self.assertEqual(live_view._channel_buffer_positions[0], 2)
 
@@ -644,16 +644,16 @@ class LiveViewStopTriggerTests(unittest.TestCase):
         live_view._channel_cycle_starts = {0: 0.0}
         live_view._channel_total_ticks_seen = {0: 0}
 
-        # `cap * 10` rohe Tick-Zeilen (Verhaeltnis 10:1) fuellen den
-        # Durchlauf exakt mit `cap` faelligen nativen Samples.
+        # `cap * 10` raw tick rows (10:1 ratio) fill the cycle with
+        # exactly `cap` due native samples.
         raw_ticks = cap * 10
         block = np.arange(raw_ticks, dtype=float).reshape(1, -1)
         live_view._write_to_display_buffer(block)
         self.assertEqual(live_view._channel_buffer_positions[0], cap)
         self.assertEqual(live_view._channel_cycle_starts[0], 0.0)
 
-        # Zehn weitere rohe Tick-Zeilen (= genau 1 faelliges natives
-        # Sample) loesen den Umbruch aus.
+        # Ten more raw tick rows (= exactly 1 due native sample) trigger
+        # the wraparound.
         live_view._write_to_display_buffer(np.full((1, 10), 999.0))
         self.assertAlmostEqual(live_view._channel_cycle_starts[0], cap / 14.0)
         self.assertAlmostEqual(live_view._channel_cycle_starts[0], temp.plot_time_window_seconds)
@@ -661,9 +661,9 @@ class LiveViewStopTriggerTests(unittest.TestCase):
 
 
 class CalculateSamplesPerReadTests(unittest.TestCase):
-    """`SetupView._calculate_samples_per_read` ueber `__new__` isoliert
-    getestet (gleiches Muster wie die `LiveView`-Tests oben) - die Methode
-    braucht nur zwei einfache Zahlenattribute, keine Qt-Widgets."""
+    """`SetupView._calculate_samples_per_read` tested in isolation via
+    `__new__` (same pattern as the `LiveView` tests above) - the method
+    only needs two simple numeric attributes, no Qt widgets."""
 
     def _make_setup_view(self) -> SetupView:
         setup_view = SetupView.__new__(SetupView)
@@ -672,19 +672,19 @@ class CalculateSamplesPerReadTests(unittest.TestCase):
         return setup_view
 
     def test_low_rate_scales_down_instead_of_using_fixed_minimum(self) -> None:
-        # Regressionstest: ein alleinstehendes NI9210 (14 S/s) bekam frueher
-        # wegen einer festen Sample-Untergrenze (50) einen Block, der erst
-        # nach 0,5s (bzw. urspruenglich sogar 3,6s) fertig war - sichtbar
-        # hakelige Live View (Daten kamen in seltenen Schueben statt
-        # kontinuierlich). Die Blockgroesse muss stattdessen mit der Rate
-        # mitskalieren, hier auf 1 Sample (Blockdauer ~71ms).
+        # Regression test: a standalone NI9210 (14 S/s) used to get a
+        # block that only completed after 0.5s (or originally even 3.6s)
+        # because of a fixed sample lower bound (50) - visibly choppy live
+        # view (data arrived in rare bursts instead of continuously). The
+        # block size must instead scale with the rate, here down to 1
+        # sample (block duration ~71ms).
         setup_view = self._make_setup_view()
         self.assertEqual(setup_view._calculate_samples_per_read(14.0), 1)
 
     def test_rate_at_former_fixed_minimum_boundary_is_unchanged(self) -> None:
-        # Bei 2000 Hz traf schon die alte, feste Untergrenze (50 Samples)
-        # zufaellig genau den Zielwert - hier darf sich durch die
-        # Umstellung nichts aendern.
+        # At 2000 Hz, the old fixed lower bound (50 samples) already
+        # happened to exactly match the target value - nothing may change
+        # here due to the switch-over.
         setup_view = self._make_setup_view()
         self.assertEqual(setup_view._calculate_samples_per_read(2000.0), 50)
 

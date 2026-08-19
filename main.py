@@ -1,10 +1,10 @@
 """
 main.py
 
-Einstiegspunkt der ezDAQ-Anwendung.
+Entry point of the ezDAQ application.
 
-Initialisiert Logging, den ConfigurationManager und den
-MeasurementController und startet die Qt-GUI (Hauptfenster).
+Initializes logging, the ConfigurationManager, and the
+MeasurementController, and starts the Qt GUI (main window).
 
 Start:
     python main.py
@@ -17,19 +17,19 @@ import os
 import sys
 import time
 
-# Splash bleibt mindestens so lange sichtbar, auch wenn Konfiguration/
-# Sensor-Datenbank/Hauptfenster schneller fertig sind - sonst blitzt er auf
-# schnellen Rechnern nur einen Wimpernschlag lang auf und wirkt eher wie
-# ein Grafikfehler als wie absichtliches Startup-Feedback.
+# Splash stays visible for at least this long, even if configuration/
+# sensor database/main window finish faster - otherwise on fast machines
+# it would flash by for only the blink of an eye and look more like a
+# graphics glitch than deliberate startup feedback.
 _SPLASH_MIN_SECONDS = 1.5
 
 
 def configure_logging() -> None:
-    """Konfiguriert das anwendungsweite Logging.
+    """Configures application-wide logging.
 
-    Es wird bewusst `logging` statt `print` verwendet, damit Log-Level,
-    Zeitstempel und spätere Datei-Logs zentral steuerbar sind (siehe
-    Coding-Style-Vorgabe).
+    `logging` is deliberately used instead of `print`, so that log
+    level, timestamps, and later file logs are centrally controllable
+    (see coding style guideline).
     """
     logging.basicConfig(
         level=logging.INFO,
@@ -39,23 +39,23 @@ def configure_logging() -> None:
 
 
 def _set_windows_app_user_model_id() -> None:
-    """Setzt unter Windows eine explizite AppUserModelID.
+    """Sets an explicit AppUserModelID on Windows.
 
-    Ohne explizite ID gruppiert Windows Python-Programme in der Taskbar
-    häufig als "python.exe" und zeigt das Standard-Python-Icon.
+    Without an explicit ID, Windows often groups Python programs in the
+    taskbar as "python.exe" and shows the default Python icon.
 
-    Der Bezeichner-Suffix ("v1") ist bewusst da: Windows cached das
-    Taskleisten-Icon persistent pro AppUserModelID (auf Disk, übersteht
-    auch einen Explorer-Neustart). Wurde während der Entwicklung schon
-    einmal ohne (oder mit falschem) Icon unter derselben ID gestartet,
-    bleibt das generische Icon sonst dauerhaft hängen, selbst wenn der
-    Code jetzt korrekt ein eigenes Icon setzt. Ein neuer ID-String
-    erzwingt einen frischen Cache-Eintrag.
+    The identifier suffix ("v1") is there deliberately: Windows caches
+    the taskbar icon persistently per AppUserModelID (on disk, survives
+    even an Explorer restart). If the app was ever started under the
+    same ID without (or with the wrong) icon during development, the
+    generic icon otherwise stays stuck permanently, even once the code
+    correctly sets its own icon. A new ID string forces a fresh cache
+    entry.
 
-    Historie: Unter dem früheren Namen "DAQSoftware" war die Zählung
-    bereits bei "v3" angekommen (die Vorgänger-IDs waren jeweils mit
-    inkonsistentem Icon-Zustand gestartet worden). Mit der Umbenennung
-    auf "ezDAQ" beginnt ein eigener ID-Namensraum, daher wieder "v1".
+    History: under the earlier name "DAQSoftware", the count had
+    already reached "v3" (the previous IDs had each been started with
+    an inconsistent icon state). With the rename to "ezDAQ", a
+    dedicated ID namespace begins, hence "v1" again.
     """
     if os.name != "nt":
         return
@@ -77,8 +77,8 @@ def main() -> int:
     logger.info("ezDAQ wird gestartet ...")
     _set_windows_app_user_model_id()
 
-    # Importe bewusst innerhalb von main(), damit ein reiner Import von
-    # main.py (z. B. durch Tooling) nicht sofort PyQt6 lädt.
+    # Imports deliberately inside main(), so a plain import of main.py
+    # (e.g. by tooling) does not immediately load PyQt6.
     from PyQt6.QtCore import Qt
     from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
     from PyQt6.QtWidgets import QApplication, QSplashScreen
@@ -95,19 +95,20 @@ def main() -> int:
     from gui.theme import init_theme
     init_theme(app)
 
-    # .ico statt .png: enthaelt mehrere Aufloesungen (16-256px), die
-    # Windows fuer Titelleiste/Taskleiste/Alt-Tab jeweils passend waehlt.
-    # Eine einzelne 256px-PNG fuehrt auf manchen Windows-Systemen dazu,
-    # dass das Taskleisten-Icon gar nicht angezeigt wird.
+    # .ico instead of .png: contains multiple resolutions (16-256px),
+    # from which Windows picks the appropriate one for title bar/taskbar/
+    # Alt-Tab. A single 256px PNG causes the taskbar icon to not be
+    # displayed at all on some Windows systems.
     icon_path = get_resource_path("icon.ico")
     if icon_path.exists():
         app.setWindowIcon(QIcon(str(icon_path)))
     else:
         logger.warning("Anwendungs-Icon nicht gefunden unter %s", icon_path)
 
-    # Splash-Screen: PyQt6/pyqtgraph-Import sowie Config-/Sensor-Datenbank-
-    # Laden brauchen spuerbar Zeit, bevor das Hauptfenster erscheint - ohne
-    # sichtbares Feedback wirkt die App in dieser Zeit wie eingefroren.
+    # Splash screen: PyQt6/pyqtgraph import as well as config/sensor
+    # database loading take noticeable time before the main window
+    # appears - without visible feedback, the app would look frozen
+    # during this time.
     splash = None
     splash_path = get_resource_path("ezDAQ_logo_full.png")
     if splash_path.exists():
@@ -116,10 +117,10 @@ def main() -> int:
             pixmap = pixmap.scaledToWidth(
                 420, Qt.TransformationMode.SmoothTransformation
             )
-            # Eigene Textzeile UNTER dem Logo statt darueber gelegt: das
-            # Logo hat unten bereits den "ezDAQ / EASY DATA ACQUISITION"-
-            # Schriftzug eingebrannt, ein `showMessage()` direkt am unteren
-            # Rand des Bildes wuerde sich damit ueberlappen.
+            # Own text line placed BELOW the logo instead of overlaid: the
+            # logo already has the "ezDAQ / EASY DATA ACQUISITION" text
+            # burned in at the bottom, so a `showMessage()` right at the
+            # bottom edge of the image would overlap with it.
             padded = QPixmap(pixmap.width(), pixmap.height() + 28)
             padded.fill(QColor("white"))
             painter = QPainter(padded)
@@ -132,11 +133,11 @@ def main() -> int:
         logger.warning("Splash-Grafik nicht gefunden unter %s", splash_path)
 
     def _set_splash_status(message: str) -> None:
-        """Zeigt `message` unten im Splash an und verarbeitet sofort
-        anstehende Paint-Events - ohne das wuerde Qt das Neuzeichnen erst
-        beim naechsten Event-Loop-Durchlauf nachholen, der Text bliebe also
-        unsichtbar, solange der naechste (ggf. langsame) Initialisierungs-
-        schritt synchron laeuft."""
+        """Displays `message` at the bottom of the splash and immediately
+        processes pending paint events - without this, Qt would defer
+        the repaint until the next event loop iteration, so the text
+        would stay invisible for as long as the next (potentially slow)
+        initialization step runs synchronously."""
         if splash is None:
             return
         splash.showMessage(
@@ -170,10 +171,10 @@ def main() -> int:
         remaining = _SPLASH_MIN_SECONDS - (time.monotonic() - splash_start)
         if remaining > 0:
             time.sleep(remaining)
-        # Reihenfolge wichtig: `window.show()` VOR `splash.finish()`, sonst
-        # blitzt kurz der leere Desktop auf, bevor das Hauptfenster
-        # erscheint (Qt-Beispielcode fuer `QSplashScreen` folgt derselben
-        # Reihenfolge).
+        # Order matters: `window.show()` BEFORE `splash.finish()`,
+        # otherwise the empty desktop briefly flashes before the main
+        # window appears (Qt's example code for `QSplashScreen` follows
+        # the same order).
         window.show()
         splash.finish(window)
     else:

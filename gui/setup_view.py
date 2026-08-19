@@ -1,19 +1,19 @@
 """
 gui/setup_view.py
 
-Setup-Ansicht: Geräteerkennung, Kanalkonfiguration und Messparameter.
+Setup view: device discovery, channel configuration, and measurement parameters.
 
-Funktionen (siehe Vorgabe):
-    * angeschlossene NI-Geräte erkennen
-    * Module anzeigen
-    * Kanäle auswählen/aktivieren/deaktivieren, benennen, Einheit/
-      Skalierung/Offset einstellen
-    * Samplingrate einstellen
-    * Speicherformat auswählen
+Functions (see spec):
+    * detect connected NI devices
+    * display modules
+    * select/enable/disable channels, name them, set unit/
+      scaling/offset
+    * set sample rate
+    * select storage format
 
-Diese Ansicht kommuniziert ausschließlich über Signale mit
-`gui/main_window.py` - sie kennt weder `MeasurementController` noch
-Hardware-Details direkt.
+This view communicates exclusively via signals with
+`gui/main_window.py` - it knows neither `MeasurementController` nor
+hardware details directly.
 """
 
 from __future__ import annotations
@@ -84,17 +84,17 @@ from gui.widgets.spinbox import (
 
 logger = logging.getLogger(__name__)
 
-# Übersetzte Anzeige-Labels für die Speicherformat-Combobox. Der
-# eigentliche Wert (StorageFormat.value, z. B. "parquet") bleibt
-# unabhängig von der UI-Sprache stabil (Persistenz) und wird als
-# `userData` je Eintrag hinterlegt, siehe `_populate_storage_format_combo`.
+# Translated display labels for the storage format combo box. The
+# actual value (StorageFormat.value, e.g. "parquet") stays stable
+# independent of the UI language (persistence) and is stored as
+# `userData` per entry, see `_populate_storage_format_combo`.
 _STORAGE_FORMAT_LABEL_KEYS: dict[StorageFormat, str] = {
     StorageFormat.PARQUET: "storage_format_parquet",
     StorageFormat.CSV: "storage_format_csv",
 }
 
-# Übersetzte Anzeige-Labels für die Einheiten-Combobox des Aufnahme-Limits
-# (siehe `_populate_recording_stop_unit_combo`) - analog zu
+# Translated display labels for the recording-limit unit combo box
+# (see `_populate_recording_stop_unit_combo`) - analogous to
 # `_STORAGE_FORMAT_LABEL_KEYS`.
 _RECORDING_STOP_UNIT_LABEL_KEYS: dict[RecordingStopUnit, str] = {
     RecordingStopUnit.SAMPLES: "recording_stop_unit_samples",
@@ -103,10 +103,10 @@ _RECORDING_STOP_UNIT_LABEL_KEYS: dict[RecordingStopUnit, str] = {
     RecordingStopUnit.HOURS: "recording_stop_unit_hours",
 }
 
-# Übersetzte Anzeige-Labels je ADC-Timing-Modus für die Fehlermeldung bei
-# zu hoher Abtastrate (siehe `build_current_config`) - eigene, bewusst
-# kleine Kopie von `gui/widgets/channel_table.py::_ADC_TIMING_MODE_LABEL_KEYS`
-# statt eines Imports des dortigen privaten (`_`-präfigierten) Dicts.
+# Translated display labels per ADC timing mode for the error message on
+# an excessive sample rate (see `build_current_config`) - a deliberately
+# small, separate copy of `gui/widgets/channel_table.py::_ADC_TIMING_MODE_LABEL_KEYS`
+# rather than importing that module's private (`_`-prefixed) dict.
 _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
     "HIGH_RESOLUTION": "adc_timing_mode_high_resolution",
     "HIGH_SPEED": "adc_timing_mode_high_speed",
@@ -115,15 +115,15 @@ _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
 
 @dataclass
 class NamingScheme:
-    """Steuert, wie `gui/main_window.py` aus dem eingegebenen Messnamen
-    den tatsächlich verwendeten Datei-/Messnamen aufbaut.
+    """Controls how `gui/main_window.py` builds the actual file/measurement
+    name from the entered measurement name.
 
     Attributes:
-        use_number_suffix: Ob ein Nummernsuffix (z. B. "_001") angehängt
-            wird, um Namenskonflikte automatisch aufzulösen.
-        number_suffix_digits: Stellenzahl des Nummernsuffix.
-        include_date: Ob das aktuelle Datum (YYYYMMDD) angehängt wird.
-        include_time: Ob die aktuelle Uhrzeit (HHMMSS) angehängt wird.
+        use_number_suffix: Whether a number suffix (e.g. "_001") is
+            appended to automatically resolve name conflicts.
+        number_suffix_digits: Digit count of the number suffix.
+        include_date: Whether the current date (YYYYMMDD) is appended.
+        include_time: Whether the current time (HHMMSS) is appended.
     """
 
     use_number_suffix: bool
@@ -133,23 +133,23 @@ class NamingScheme:
 
 
 class SetupView(QWidget):
-    """Ansicht zur Konfiguration von Hardware, Kanälen und Messparametern.
+    """View for configuring hardware, channels, and measurement parameters.
 
     Signals:
-        discover_hardware_requested: Nutzer möchte angeschlossene Geräte
-            erkennen lassen. `gui/main_window.py` ruft daraufhin
-            `controller.discover_hardware()` auf und liefert das Ergebnis
-            über `set_discovered_devices()` zurück.
-        open_ni_max_requested: Nutzer möchte NI-MAX (Measurement &
-            Automation Explorer) als separates Programm öffnen - z. B. um
-            ein Gerät umzubenennen, ohne diese Anwendung zu verlassen.
-        start_measurement_requested: Nutzer möchte die Messung mit der
-            übergebenen `MeasurementConfig` starten (Play- ODER
-            Aufnahme-Button - `MeasurementConfig.save_to_disk` ist dabei
-            schon passend gesetzt, siehe `_on_play_clicked`/
+        discover_hardware_requested: User wants connected devices to be
+            detected. `gui/main_window.py` then calls
+            `controller.discover_hardware()` and delivers the result
+            back via `set_discovered_devices()`.
+        open_ni_max_requested: User wants to open NI-MAX (Measurement &
+            Automation Explorer) as a separate program - e.g. to rename
+            a device without leaving this application.
+        start_measurement_requested: User wants to start the measurement
+            with the given `MeasurementConfig` (either the play OR
+            record button - `MeasurementConfig.save_to_disk` is already
+            set accordingly, see `_on_play_clicked`/
             `_on_record_clicked`).
-        stop_requested: Nutzer möchte die laufende Messung stoppen (nur
-            klickbar, waehrend tatsaechlich eine läuft, siehe
+        stop_requested: User wants to stop the running measurement (only
+            clickable while one is actually running, see
             `set_start_enabled`).
     """
 
@@ -158,8 +158,8 @@ class SetupView(QWidget):
     start_measurement_requested = pyqtSignal(object)  # MeasurementConfig
     stop_requested = pyqtSignal()
     storage_path_requested = pyqtSignal()
-    # Nutzer hat den Scharf-Button geklickt (siehe `_trigger_arm_button`) -
-    # bool = neuer Zustand (True = scharf schalten, False = entschärfen).
+    # User clicked the arm button (see `_trigger_arm_button`) -
+    # bool = new state (True = arm, False = disarm).
     trigger_arm_toggled = pyqtSignal(bool)
 
     def __init__(
@@ -170,22 +170,22 @@ class SetupView(QWidget):
     ) -> None:
         super().__init__(parent)
         self._configuration_manager = configuration_manager
-        # None bedeutet: seit dem letzten Reset gab es noch keine
-        # erfolgreiche Geräteerkennung. Eine leere Liste dagegen ist ein
-        # gültiges Ergebnis einer erfolgreichen Suche ohne nutzbare Module.
+        # None means: there has been no successful device discovery since
+        # the last reset. An empty list, on the other hand, is a valid
+        # result of a successful search that found no usable modules.
         self._discovered_devices: list[DeviceInfo] | None = None
         self._storage_path_is_set = False
         self._status_reason_key = ""
         self._discovery_in_progress = False
 
-        # Die gesamte Ansicht steckt in einem QScrollArea: bei vielen
-        # Abschnitten (Geräte, Kanäle, Messeinstellungen, Speicher) reicht
-        # die Fensterhöhe oft nicht für alle Abschnitte gleichzeitig - ohne
-        # Scroll-Bereich würde Qt stattdessen ALLE Abschnitte gleichmäßig
-        # zusammenquetschen (insbesondere die Kanaltabelle bis auf eine
-        # einzelne, kaum nutzbare Zeile). Mit Scroll-Bereich behalten alle
-        # Abschnitte ihre bevorzugte/Mindestgröße, überschüssiger Inhalt
-        # wird gescrollt statt gequetscht.
+        # The entire view sits inside a QScrollArea: with many sections
+        # (devices, channels, measurement settings, storage) the window
+        # height often isn't enough for all sections at once - without a
+        # scroll area, Qt would instead squeeze ALL sections evenly
+        # (in particular the channel table down to a single, barely
+        # usable row). With a scroll area, all sections keep their
+        # preferred/minimum size, and excess content is scrolled instead
+        # of squeezed.
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         scroll_area = QScrollArea()
@@ -197,7 +197,7 @@ class SetupView(QWidget):
         scroll_area.setWidget(content)
         layout = QVBoxLayout(content)
 
-        # --- Geräteerkennung ---
+        # --- Device discovery ---
         self._device_header = QLabel(t("connected_devices"))
         layout.addWidget(self._device_header)
         self._device_group = QGroupBox()
@@ -205,26 +205,26 @@ class SetupView(QWidget):
         discover_row = QHBoxLayout()
         self._discover_button = QPushButton(t("search_devices"))
         self._discover_button.clicked.connect(self.discover_hardware_requested.emit)
-        # Schnellzugriff auf NI-MAX (Measurement & Automation Explorer) -
-        # z. B. um ein Gerät umzubenennen/zu konfigurieren, ohne diese
-        # Anwendung zu verlassen (siehe `open_ni_max_requested`).
+        # Quick access to NI-MAX (Measurement & Automation Explorer) -
+        # e.g. to rename/configure a device without leaving this
+        # application (see `open_ni_max_requested`).
         self._open_ni_max_button = QPushButton(t("open_ni_max_button"))
         self._open_ni_max_button.clicked.connect(self.open_ni_max_requested.emit)
         discover_row.addWidget(self._discover_button)
         discover_row.addWidget(self._open_ni_max_button)
-        # Baumansicht Gerät -> Kanäle (dieselbe Gruppierung wie im
-        # Kanal-Zuweisungsdialog, siehe
+        # Tree view device -> channels (same grouping as in the channel
+        # assignment dialog, see
         # `gui/widgets/channel_table.py::HardwareChannelPickerDialog`).
         self._device_list = QTreeWidget()
         self._device_list.setHeaderHidden(True)
-        # Mindesthöhe für ein paar sichtbare Zeilen, ohne dass eine leere
-        # Liste (vor der ersten Geräteerkennung) unnötig viel Platz belegt.
+        # Minimum height for a few visible rows, without an empty list
+        # (before the first device discovery) taking up unnecessary space.
         self._device_list.setMinimumHeight(120)
         device_layout.addLayout(discover_row)
         device_layout.addWidget(self._device_list)
         layout.addWidget(self._device_group)
 
-        # --- Kanalkonfiguration ---
+        # --- Channel configuration ---
         self._channel_header = QLabel(t("channel_configuration"))
         layout.addWidget(self._channel_header)
         self._channel_group = QGroupBox()
@@ -233,7 +233,7 @@ class SetupView(QWidget):
         channel_layout.addWidget(self._channel_table)
         layout.addWidget(self._channel_group, stretch=1)
 
-        # --- Messeinstellungen ---
+        # --- Measurement settings ---
         self._measurement_header = QLabel(t("measurement_settings"))
         layout.addWidget(self._measurement_header)
         self._measurement_group = QGroupBox()
@@ -243,8 +243,8 @@ class SetupView(QWidget):
         self._sample_rate_spin.setRange(1.0, 100_000.0)
         self._sample_rate_spin.setDecimals(1)
         self._sample_rate_spin.setSingleStep(100.0)
-        # Tausenderpunkt in der Anzeige (z. B. "100.000,0"), unabhängig vom
-        # Locale des Betriebssystems.
+        # Thousands separator in the display (e.g. "100.000,0"), independent
+        # of the operating system's locale.
         self._sample_rate_spin.setLocale(QLocale(QLocale.Language.German, QLocale.Country.Germany))
         self._sample_rate_spin.setGroupSeparatorShown(True)
         self._sample_rate_spin.setValue(
@@ -252,12 +252,12 @@ class SetupView(QWidget):
         )
         self._measurement_layout.addRow(f"{t('sample_rate_hz')}:", self._sample_rate_spin)
 
-        # Nicht-blockierende Vorschau der tatsaechlich pro Ratengruppe
-        # verwendeten Abtastrate (siehe `_update_resolved_rate_preview`) -
-        # bleibt leer/unsichtbar im Regelfall (genau eine Gruppe), zeigt
-        # sich erst, wenn z. B. ein NI9210 eine eigene Gruppe erzwingt.
-        # Anders als bei DIAdem/NI-MAX wird die abweichende Ist-Rate hier
-        # also sichtbar zurueckgemeldet statt still zu kappen.
+        # Non-blocking preview of the sample rate actually used per rate
+        # group (see `_update_resolved_rate_preview`) - stays empty/
+        # invisible in the normal case (exactly one group), only appears
+        # once e.g. an NI9210 forces its own group. Unlike DIAdem/NI-MAX,
+        # the deviating actual rate is thus reported back visibly here
+        # instead of being silently clamped.
         self._resolved_rate_preview_label = QLabel()
         self._resolved_rate_preview_label.setWordWrap(True)
         self._measurement_layout.addRow("", self._resolved_rate_preview_label)
@@ -268,27 +268,26 @@ class SetupView(QWidget):
         measurement_row.addStretch(1)
         layout.addLayout(measurement_row)
 
-        # Interne Performance-Parameter werden automatisch festgelegt,
-        # damit der Nutzer hier nicht mit technischen Details belastet wird.
-        # Ziel: Read-Bloecke, die rein von der BLOCKDAUER (nicht von einer
-        # festen Sample-Anzahl) abgeleitet werden, damit sich die Groesse
-        # dynamisch mit der Abtastrate skaliert - siehe
-        # `_calculate_samples_per_read`. NICHT weiter als 25ms verkleinern:
-        # ein Test mit 10ms fuehrte bei hoher Abtastrate zu "The application
-        # is not able to keep up with the hardware acquisition"
-        # (Pufferueberlauf/Datenverlust) - der reine Python/ctypes-
-        # Aufrufoverhead pro `device.read()` dominiert dann gegenueber dem
-        # eigentlichen Datentransfer und der DAQ-Thread selbst kommt nicht
-        # mehr hinterher. Eine feste Sample-Untergrenze (frueherer Ansatz)
-        # wuerde bei niedriger Abtastrate dieselbe Zielblockdauer verfehlen
-        # und lange, stossweise Bloecke erzeugen (z. B. 50 Samples bei
-        # 14 S/s = 3,6s statt der gewollten 25ms) - deshalb bewusst NUR
-        # eine Ober-, keine Untergrenze fuer die Sample-Anzahl.
+        # Internal performance parameters are set automatically so the
+        # user isn't burdened with technical details here. Goal: read
+        # blocks derived purely from the BLOCK DURATION (not from a fixed
+        # sample count), so the size scales dynamically with the sample
+        # rate - see `_calculate_samples_per_read`. Do NOT shrink this
+        # below 25ms: a test with 10ms led to "The application is not able
+        # to keep up with the hardware acquisition" at high sample rates
+        # (buffer overrun/data loss) - the pure Python/ctypes call overhead
+        # per `device.read()` then dominates over the actual data transfer,
+        # and the DAQ thread itself can no longer keep up. A fixed minimum
+        # sample count (earlier approach) would miss the same target block
+        # duration at low sample rates and produce long, bursty blocks
+        # (e.g. 50 samples at 14 S/s = 3.6s instead of the intended 25ms) -
+        # hence deliberately only an UPPER bound, no lower bound, on the
+        # sample count.
         self._target_read_block_ms = 25.0
         self._max_samples_per_read = 2000
         self._default_ring_buffer_seconds = 30
 
-        # --- Speichereinstellungen ---
+        # --- Storage settings ---
         self._storage_header = QLabel(t("storage_settings"))
         layout.addWidget(self._storage_header)
         self._storage_group = QGroupBox()
@@ -331,11 +330,11 @@ class SetupView(QWidget):
         self._populate_storage_format_combo(configuration_manager.settings.default_storage_format)
         self._storage_layout.addRow(f"{t('storage_format')}:", self._storage_format_combo)
 
-        # Aufnahme-Limit ("Messzyklus"): standardmäßig unbegrenzt (heutiges
-        # Verhalten - laufen, bis manuell gestoppt oder die Festplatte voll
-        # ist). Deaktiviert man den Haken, kann ein Grenzwert (Messwerte
-        # oder Zeit) eingegeben werden, bei dessen Erreichen die Messung
-        # automatisch stoppt (siehe `gui/live_view.py::_on_timer_tick`).
+        # Recording limit ("measurement cycle"): unlimited by default
+        # (current behavior - run until manually stopped or the disk is
+        # full). Unchecking the box allows entering a limit (measurement
+        # values or time) at which the measurement stops automatically
+        # (see `gui/live_view.py::_on_timer_tick`).
         self._recording_unlimited_checkbox = QCheckBox(t("recording_unlimited"))
         self._recording_unlimited_checkbox.setChecked(
             configuration_manager.settings.last_recording_unlimited
@@ -372,19 +371,19 @@ class SetupView(QWidget):
         layout.addLayout(storage_row)
 
         # --- Start ---
-        # Drei Buttons mit Icon UND Text statt frueher einem einzelnen
-        # "Start"-Button + "Nur Live-Ansicht"-Haken (siehe `_storage_layout`
-        # oben): Play (gruenes Icon) startet NUR die Live-Anzeige ohne
-        # Speicherung, Aufnahme (rotes Kreis-Icon) startet MIT Speicherung -
-        # welcher Button geklickt wird, legt `MeasurementConfig.save_to_disk`
-        # direkt fest (siehe `_on_play_clicked`/`_on_record_clicked`/
-        # `build_current_config`). Stop bleibt deaktiviert, solange keine
-        # der beiden Varianten laeuft (siehe `set_start_enabled`).
-        # `ACTION_BUTTON_STYLE` setzt bewusst KEINEN `background-color` im
-        # Normalzustand - die Buttons folgen normal der QPalette/dem
-        # aktuellen Theme, nur die Play-/Aufnahme-Icon-Farbe ist fest
-        # (siehe `_retheme_start_button_icons`); Hover/Press bekommen einen
-        # dezenten Palette-basierten Effekt.
+        # Three buttons with icon AND text instead of the previous single
+        # "Start" button + "live view only" checkbox (see `_storage_layout`
+        # above): Play (green icon) starts ONLY the live view without
+        # storage, Record (red circle icon) starts WITH storage - which
+        # button is clicked directly determines `MeasurementConfig.
+        # save_to_disk` (see `_on_play_clicked`/`_on_record_clicked`/
+        # `build_current_config`). Stop stays disabled unless one of the
+        # two variants is actually running (see `set_start_enabled`).
+        # `ACTION_BUTTON_STYLE` deliberately sets NO `background-color` in
+        # the normal state - the buttons normally follow the QPalette/
+        # current theme, only the play/record icon color is fixed
+        # (see `_retheme_start_button_icons`); hover/press get a subtle
+        # palette-based effect.
         start_row = QHBoxLayout()
         self._status_label = QLabel("")
 
@@ -410,49 +409,49 @@ class SetupView(QWidget):
         self._retheme_start_button_icons()
         self._update_start_button_labels()
 
-        # Scharf-Button: aktiviert den unbeaufsichtigten Trigger-Zyklus
-        # (scharf schalten -> warten -> aufzeichnen -> Stopp -> automatisch
-        # wieder scharf schalten, siehe `TriggerConfig.auto_rearm` und
-        # `gui/main_window.py::_on_trigger_arm_toggled`) - bleibt gedrückt,
-        # bis er erneut geklickt wird ("entschärfen"), unabhängig davon wie
-        # oft der Zyklus zwischenzeitlich automatisch durchläuft. Nur
-        # sichtbar, wenn tatsächlich ein Trigger konfiguriert ist (siehe
+        # Arm button: enables the unattended trigger cycle (arm -> wait ->
+        # record -> stop -> automatically arm again, see
+        # `TriggerConfig.auto_rearm` and
+        # `gui/main_window.py::_on_trigger_arm_toggled`) - stays pressed
+        # until clicked again ("disarm"), regardless of how often the
+        # cycle runs automatically in between. Only visible when a
+        # trigger is actually configured (see
         # `set_trigger_arm_available`).
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
         self._trigger_arm_button.setIconSize(QSize(24, 24))
         self._retheme_trigger_arm_button_icon()
         self._trigger_arm_button.setStyleSheet(trigger_arm_button_style())
-        # ERST NACH Icon/Stylesheet setzen: `_set_trigger_arm_button_text()`
-        # fixiert ueber `fix_toggle_button_width()` die Buttonbreite anhand
-        # von `sizeHint()`, der Icon UND Stylesheet-Padding braucht, um
-        # korrekt zu messen.
+        # ONLY AFTER setting the icon/stylesheet: `_set_trigger_arm_button_text()`
+        # fixes the button width via `fix_toggle_button_width()` based on
+        # `sizeHint()`, which needs both the icon AND stylesheet padding to
+        # measure correctly.
         self._set_trigger_arm_button_text()
         self._trigger_arm_button.setVisible(False)
         self._trigger_arm_button.toggled.connect(self._on_trigger_arm_button_toggled)
         start_row.addWidget(self._trigger_arm_button)
 
         start_row.addWidget(self._status_label, stretch=1)
-        # BEWUSST nicht Teil von `layout` (das scrollt mit dem restlichen
-        # Inhalt) - direkt in `outer_layout`, damit die Buttons IMMER
-        # sichtbar UND an einer festen Position bleiben, unabhaengig vom
-        # Scroll-Zustand/der Menge an Kanaelen/Einstellungen darueber. Als
-        # Nebeneffekt fluchtet die Unterkante dadurch zuverlaessig mit der
-        # Unterkante des Navigationsbereichs links (siehe
-        # `gui/main_window.py::_build_navigation_and_workspace` - beide
-        # sind Geschwister im selben `root_layout` mit gemeinsamem
-        # Rand) - deckungsgleich mit `LiveView`, deren Button-Zeile aus
-        # demselben Grund ganz oben (statt in einem scrollenden Bereich)
-        # sitzt und so mit der Oberkante des Navigationsbereichs fluchtet.
-        # Seitliche/obere Polsterung passend zu `content`s eigenem
-        # Standardrand, aber KEIN unterer Rand - der wuerde die
-        # Flucht-Garantie sonst wieder zunichtemachen.
+        # DELIBERATELY not part of `layout` (which scrolls with the rest
+        # of the content) - directly in `outer_layout`, so the buttons
+        # ALWAYS stay visible AND at a fixed position, independent of the
+        # scroll state/the number of channels/settings above them. As a
+        # side effect, this reliably aligns the bottom edge with the
+        # bottom edge of the navigation area on the left (see
+        # `gui/main_window.py::_build_navigation_and_workspace` - both
+        # are siblings in the same `root_layout` with a shared margin) -
+        # matching `LiveView`, whose button row sits at the very top
+        # (instead of in a scrolling area) for the same reason, aligning
+        # it with the top edge of the navigation area.
+        # Side/top padding matches `content`'s own default margin, but
+        # NO bottom margin - that would otherwise defeat the alignment
+        # guarantee again.
         start_row.setContentsMargins(9, 8, 9, 0)
         outer_layout.addLayout(start_row)
 
         self._apply_section_header_emphasis()
 
-        # Zuletzt verwendete Kanalkonfiguration automatisch vorschlagen.
+        # Automatically suggest the most recently used channel configuration.
         last_channels = configuration_manager.load_channel_configuration()
         if last_channels:
             self._channel_table.set_channels(last_channels)
@@ -463,11 +462,11 @@ class SetupView(QWidget):
         connect_theme_changed(self._retheme_trigger_arm_button_icon)
 
     # ------------------------------------------------------------------ #
-    # Öffentliche API (von main_window.py aufgerufen)
+    # Public API (called from main_window.py)
     # ------------------------------------------------------------------ #
 
     def retranslate_ui(self) -> None:
-        """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
+        """Updates all static texts after a language change."""
         self._device_header.setText(t("connected_devices"))
         self._discover_button.setText(
             t("searching_devices") if self._discovery_in_progress else t("search_devices")
@@ -509,10 +508,10 @@ class SetupView(QWidget):
         self._update_resolved_rate_preview()
 
     def get_naming_scheme(self) -> NamingScheme:
-        """Gibt das aktuell in der UI eingestellte Namensschema zurück.
+        """Returns the naming scheme currently set in the UI.
 
-        Wird von `gui/main_window.py` beim Messstart verwendet, um aus dem
-        Messnamen den tatsächlichen Datei-/Messnamen aufzubauen.
+        Used by `gui/main_window.py` at measurement start to build the
+        actual file/measurement name from the measurement name.
         """
         return NamingScheme(
             use_number_suffix=self._naming_number_checkbox.isChecked(),
@@ -522,11 +521,11 @@ class SetupView(QWidget):
         )
 
     def _populate_storage_format_combo(self, selected_value: str) -> None:
-        """Befüllt die Speicherformat-Combobox mit übersetzten Labels.
+        """Populates the storage format combo box with translated labels.
 
-        Der technische Wert (z. B. "parquet") wird als `userData` je
-        Eintrag hinterlegt und bleibt damit unabhängig von der
-        UI-Sprache abrufbar (siehe `build_current_config`/
+        The technical value (e.g. "parquet") is stored as `userData` per
+        entry and thus remains retrievable independent of the UI
+        language (see `build_current_config`/
         `get_current_measurement_parameters`).
         """
         self._storage_format_combo.blockSignals(True)
@@ -540,8 +539,8 @@ class SetupView(QWidget):
         self._storage_format_combo.blockSignals(False)
 
     def _populate_recording_stop_unit_combo(self, selected_value: str) -> None:
-        """Befüllt die Einheiten-Combobox des Aufnahme-Limits mit übersetzten
-        Labels - analog zu `_populate_storage_format_combo`."""
+        """Populates the recording-limit unit combo box with translated
+        labels - analogous to `_populate_storage_format_combo`."""
         self._recording_stop_unit_combo.blockSignals(True)
         self._recording_stop_unit_combo.clear()
         for unit in RecordingStopUnit:
@@ -553,15 +552,15 @@ class SetupView(QWidget):
         self._recording_stop_unit_combo.blockSignals(False)
 
     def set_discovery_in_progress(self, in_progress: bool) -> None:
-        """Sperrt/entsperrt den "Geräte suchen"-Button während eine
-        Geräteerkennung im Hintergrund läuft (siehe
+        """Locks/unlocks the "search devices" button while a device
+        discovery is running in the background (see
         `gui/main_window.py::_on_discover_hardware`).
 
-        Läuft in einem `BackgroundWorker` (siehe `gui/workers.py`), damit
-        `nidaqmx.system.System.local()` - bei mehreren Chassis/Modulen
-        oder Treiber-Timeouts spürbar langsam - nicht mehr den GUI-Thread
-        blockiert. Diese Methode gibt dem Nutzer währenddessen sichtbares
-        Feedback und verhindert eine doppelt gestartete Anfrage.
+        Runs in a `BackgroundWorker` (see `gui/workers.py`) so that
+        `nidaqmx.system.System.local()` - noticeably slow with multiple
+        chassis/modules or driver timeouts - no longer blocks the GUI
+        thread. This method gives the user visible feedback in the
+        meantime and prevents a duplicate request from being started.
         """
         self._discovery_in_progress = in_progress
         self._discover_button.setEnabled(not in_progress)
@@ -570,49 +569,49 @@ class SetupView(QWidget):
         )
 
     def get_discovered_devices(self) -> list[DeviceInfo] | None:
-        """Gibt die zuletzt erkannten Geräte zurück (siehe
+        """Returns the most recently detected devices (see
         `set_discovered_devices`).
 
-        Wird von `gui/main_window.py` beim Messstart an
-        `MeasurementController.start_measurement()` durchgereicht, damit
-        dort NICHT erneut `discover_hardware()` aufgerufen werden muss -
-        bei mehreren Chassis/Modulen laut `_on_discover_hardware`
-        spürbar langsam und würde sonst bei JEDEM Messstart erneut den
-        GUI-Thread blockieren, obwohl das Ergebnis (Kanalzuordnung kommt
-        ohnehin aus der Kanalkonfiguration selbst, siehe
-        `core/measurement.py::create_devices`) hier nur für kosmetische
-        Metadaten (`DeviceInfo.product_type`) gebraucht wird.
+        Passed through by `gui/main_window.py` at measurement start to
+        `MeasurementController.start_measurement()`, so that
+        `discover_hardware()` does NOT need to be called again there -
+        per `_on_discover_hardware`, noticeably slow with multiple
+        chassis/modules, and would otherwise block the GUI thread again
+        on EVERY measurement start, even though the result (channel
+        assignment comes from the channel configuration itself anyway,
+        see `core/measurement.py::create_devices`) is only needed here
+        for cosmetic metadata (`DeviceInfo.product_type`).
         """
         return self._discovered_devices
 
     def set_discovered_devices(self, devices: list[DeviceInfo]) -> None:
-        """Zeigt das Ergebnis einer Geräteerkennung an.
+        """Displays the result of a device discovery.
 
-        Reicht ALLE erkannten Geräte (nicht nur ein in der Liste
-        ausgewähltes) an die Kanaltabelle weiter - welche Hardwarekanäle
-        wählbar sind und welches Modul zu welchem Kanal gehört, ist durch
-        die tatsächlich angeschlossene Hardware vorgegeben (siehe
+        Passes ALL detected devices (not just one selected in the list)
+        on to the channel table - which hardware channels are
+        selectable and which module belongs to which channel is
+        dictated by the actually connected hardware (see
         `gui/widgets/channel_table.py::set_available_devices`).
 
-        Meldet zusätzlich per Dialog, falls unter den erkannten Geräten
-        welche mit einem NICHT unterstützten Modultyp sind (`DeviceInfo.
-        module_type is None`, siehe `hardware/nidaq_device.py::
-        _map_product_type`) - bei JEDER Geräteaktualisierung neu geprüft,
-        damit ein neu angeschlossenes, (noch) nicht unterstütztes Modul
-        nicht unbemerkt bleibt. Deren Kanäle sind in der Kanaltabelle
-        bereits nicht auswählbar (siehe
-        `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) - die
-        Meldung hier macht zusätzlich sichtbar, WARUM/WELCHE.
+        Additionally reports via dialog if any of the detected devices
+        have an UNSUPPORTED module type (`DeviceInfo.module_type is
+        None`, see `hardware/nidaq_device.py::_map_product_type`) -
+        re-checked on EVERY device refresh, so a newly connected module
+        that is (still) unsupported doesn't go unnoticed. Their channels
+        are already not selectable in the channel table (see
+        `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) -
+        the message here additionally makes visible WHY/WHICH ones.
 
-        Der Filter unten verwendet bewusst `d.has_any_channels` ZUSÄTZLICH
-        zu `d.num_channels > 0`, NICHT nur Letzteres: `num_channels` zählt
-        ausschließlich Analogeingangs-Kanäle (die einzige von dieser App
-        unterstützte Kanalart) - ein reines Analogausgangsmodul wie das
-        NI9263 hätte damit `num_channels == 0`, genau wie ein leerer
-        Chassis-Controller-Eintrag ohne jegliche Kanäle. Ohne
-        `has_any_channels` (siehe `DeviceInfo`) würde ein solches, real
-        angeschlossenes, aber nicht unterstütztes Modul hier fälschlich
-        wie "keine Hardware" behandelt und weder angezeigt noch gemeldet.
+        The filter below deliberately uses `d.has_any_channels` IN
+        ADDITION to `d.num_channels > 0`, NOT just the latter:
+        `num_channels` counts only analog input channels (the only
+        channel type supported by this app) - a pure analog output
+        module like the NI9263 would thus have `num_channels == 0`,
+        just like an empty chassis controller entry with no channels at
+        all. Without `has_any_channels` (see `DeviceInfo`), such a
+        genuinely connected but unsupported module would be wrongly
+        treated here as "no hardware" and neither displayed nor
+        reported.
         """
         self._device_list.clear()
         devices_with_channels = [
@@ -642,20 +641,21 @@ class SetupView(QWidget):
             for channel in channels:
                 device_item.addChild(QTreeWidgetItem([channel]))
             if device.module_type is None:
-                # Optisch als nicht verfügbar erkennbar machen - reines
-                # Deaktivieren über Item-Flags reicht dafür nicht aus (Qt
-                # wendet die Disabled-Palette-Farbe für einzelne
-                # QTreeWidgetItems nicht zuverlässig automatisch an), siehe
-                # `gui/theme.py::disabled_text_color`. Rekursiv, damit auch
-                # die (rein informativen) Kanal-Kindeinträge grau erscheinen.
+                # Make it visually recognizable as unavailable - merely
+                # disabling via item flags isn't enough for this (Qt
+                # doesn't reliably apply the disabled palette color to
+                # individual QTreeWidgetItems automatically), see
+                # `gui/theme.py::disabled_text_color`. Recursive so the
+                # (purely informational) channel child entries also
+                # appear gray.
                 brush = QBrush(disabled_text_color())
                 device_item.setForeground(0, brush)
                 for i in range(device_item.childCount()):
                     device_item.child(i).setForeground(0, brush)
             self._device_list.addTopLevelItem(device_item)
-        # Standardmäßig eingeklappt (nur Gerätenamen sichtbar) - spart bei
-        # mehreren Modulen mit jeweils vielen Kanälen deutlich Platz. Der
-        # Nutzer klappt ein Gerät bei Bedarf einzeln auf.
+        # Collapsed by default (only device names visible) - saves
+        # significant space with multiple modules that each have many
+        # channels. The user expands a device individually as needed.
         self._device_list.collapseAll()
 
         if unsupported_devices:
@@ -669,12 +669,12 @@ class SetupView(QWidget):
             )
 
     def show_discovery_error(self, message: str) -> None:
-        """Zeigt einen fehlgeschlagenen Geräteerkennungsversuch (z. B.
-        NI-DAQmx-Treiber nicht installiert) direkt im Gerätebrowser an,
-        statt nur im Log - der Nutzer sieht die Ursache damit genau dort,
-        wo er als nächstes hinschaut (siehe
-        `gui/main_window.py::_on_discover_hardware_failed`, ruft dies
-        anstelle von `set_discovered_devices` auf).
+        """Displays a failed device discovery attempt (e.g. NI-DAQmx
+        driver not installed) directly in the device browser instead of
+        only in the log - the user thus sees the cause exactly where they
+        look next (see
+        `gui/main_window.py::_on_discover_hardware_failed`, calls this
+        instead of `set_discovered_devices`).
         """
         self._device_list.clear()
         self._discovered_devices = None
@@ -684,43 +684,43 @@ class SetupView(QWidget):
         )
 
     def set_start_enabled(self, enabled: bool, reason: str = "") -> None:
-        """Aktiviert/deaktiviert Play/Aufnahme (z. B. während eine Messung
-        läuft) - der Stop-Button folgt dabei IMMER dem genau umgekehrten
-        Zustand: klickbar nur, waehrend tatsaechlich etwas laeuft (Live-
-        Anzeige oder Aufzeichnung), sonst ausgegraut.
+        """Enables/disables play/record (e.g. while a measurement is
+        running) - the stop button ALWAYS follows the exact opposite
+        state: clickable only while something is actually running (live
+        view or recording), grayed out otherwise.
 
-        `reason` ist ein i18n-Key (kein fertiger Text), damit der Grund
-        einen Sprachwechsel übersteht (siehe `retranslate_ui`).
+        `reason` is an i18n key (not finished text), so the reason
+        survives a language change (see `retranslate_ui`).
         """
         self._play_button.setEnabled(enabled)
         self._record_button.setEnabled(enabled)
         self._stop_button.setEnabled(not enabled)
-        # Der Scharf-Button folgt demselben Enabled-Zustand wie Play/
-        # Aufnahme - AUSSER er ist selbst gerade aktiv (durchlaeuft einen
-        # automatischen Zyklus, siehe `trigger_arm_toggled`): dann muss er
-        # immer klickbar bleiben, damit "entschärfen" jederzeit
-        # funktioniert, auch während die Messung läuft.
+        # The arm button follows the same enabled state as play/record -
+        # EXCEPT when it is itself currently active (running an automatic
+        # cycle, see `trigger_arm_toggled`): then it must always stay
+        # clickable, so "disarm" works at any time, even while the
+        # measurement is running.
         if not self._trigger_arm_button.isChecked():
             self._trigger_arm_button.setEnabled(enabled)
         self._status_reason_key = reason
         self._status_label.setText(t(reason))
 
     def set_trigger_arm_available(self, available: bool) -> None:
-        """Blendet den Scharf-Button ein/aus (siehe `main_window.py`, nach
-        jeder Änderung der Trigger-Einstellungen aufgerufen) - ohne
-        konfigurierten Start- oder Stopp-Trigger gäbe es nichts zum
-        Scharfschalten. Wird der Button dabei ausgeblendet, während er
-        noch gedrückt war, wird er zusätzlich sauber zurückgesetzt (ohne
-        das `trigger_arm_toggled`-Signal erneut auszulösen)."""
+        """Shows/hides the arm button (see `main_window.py`, called after
+        every change to the trigger settings) - without a configured
+        start or stop trigger there would be nothing to arm. If the
+        button is hidden while it was still pressed, it is additionally
+        reset cleanly (without re-triggering the `trigger_arm_toggled`
+        signal)."""
         self._trigger_arm_button.setVisible(available)
         if not available and self._trigger_arm_button.isChecked():
             self.set_trigger_armed(False)
 
     def set_trigger_armed(self, armed: bool) -> None:
-        """Setzt den Scharf-Button-Zustand PROGRAMMATISCH (z. B. wenn
-        `main_window.py` wegen eines Fehlers entschärft) - blockt dabei
-        `toggled`, damit das nicht fälschlich als erneuter Nutzerklick
-        (`trigger_arm_toggled`) interpretiert wird."""
+        """Sets the arm button state PROGRAMMATICALLY (e.g. when
+        `main_window.py` disarms due to an error) - blocks `toggled`
+        while doing so, so this isn't wrongly interpreted as another
+        user click (`trigger_arm_toggled`)."""
         self._trigger_arm_button.blockSignals(True)
         self._trigger_arm_button.setChecked(armed)
         self._trigger_arm_button.blockSignals(False)
@@ -734,13 +734,13 @@ class SetupView(QWidget):
         self._storage_path_label.setText(path or t("no_storage_location"))
 
     def show_error(self, message: str) -> None:
-        """Zeigt eine Fehlermeldung an (z. B. ungültige Konfiguration)."""
+        """Displays an error message (e.g. invalid configuration)."""
         QMessageBox.warning(self, t("error"), message)
 
     def get_current_measurement_parameters(
         self,
     ) -> tuple[str, float, str, bool, float, str]:
-        """Gibt die aktuell im UI eingestellten Messparameter zurück.
+        """Returns the measurement parameters currently set in the UI.
 
         Returns:
             (measurement_name, sample_rate_hz, storage_format,
@@ -756,53 +756,54 @@ class SetupView(QWidget):
         )
 
     def get_configured_channels(self) -> list[Channel]:
-        """Gibt die aktuell in der Kanaltabelle konfigurierten Kanäle zurück.
+        """Returns the channels currently configured in the channel table.
 
-        Anders als `build_current_config()`: keine Validierung, keine
-        Fehlermeldung, funktioniert auch OHNE laufende Messung. Wird z. B.
-        von `gui/main_window.py` für den Kanal-Darstellung-Dialog genutzt,
-        der schon vor dem Messstart nutzbar sein soll (die Live View kennt
-        ihre Kanäle sonst erst, sobald eine Messung tatsächlich läuft).
+        Unlike `build_current_config()`: no validation, no error
+        message, also works WITHOUT a running measurement. Used e.g. by
+        `gui/main_window.py` for the channel display dialog, which
+        should already be usable before the measurement starts (the live
+        view otherwise only knows its channels once a measurement is
+        actually running).
         """
         return self._channel_table.get_channels()
 
     def apply_channel_display_settings(self, settings: dict[str, dict]) -> None:
-        """Übernimmt vom "Kanal-Darstellung"-Dialog (siehe
-        `gui/live_view.py::ChannelDisplayDialog`) gesetzte Werte in die
-        Kanaltabelle, damit sie beim Speichern der Konfiguration erhalten
-        bleiben (siehe `ChannelTableWidget.apply_display_settings`)."""
+        """Applies values set from the "channel display" dialog (see
+        `gui/live_view.py::ChannelDisplayDialog`) into the channel
+        table, so they are preserved when the configuration is saved
+        (see `ChannelTableWidget.apply_display_settings`)."""
         self._channel_table.apply_display_settings(settings)
 
     def update_channel_display_setting(self, key: tuple[str, str], values: dict) -> None:
-        """Aktualisiert NUR die uebergebenen Felder fuer einen Kanal (siehe
-        `ChannelTableWidget.update_display_settings`) - fuer
-        `gui/main_window.py`, um die aktuelle Popout-Fensterposition beim
-        Schliessen/expliziten Speichern der App zu uebernehmen, ohne die
-        vom Kanal-Darstellung-Dialog gesetzten Werte zu ueberschreiben."""
+        """Updates ONLY the given fields for a channel (see
+        `ChannelTableWidget.update_display_settings`) - for
+        `gui/main_window.py`, to apply the current popout window
+        position when the app is closed/explicitly saved, without
+        overwriting the values set by the channel display dialog."""
         self._channel_table.update_display_settings(key, values)
 
     def build_current_config(self, live_only: bool = False) -> MeasurementConfig | None:
-        """Baut eine MeasurementConfig aus den aktuellen UI-Eingaben.
+        """Builds a MeasurementConfig from the current UI inputs.
 
-        Wird von `_on_play_clicked`/`_on_record_clicked` (jeweils mit
-        explizitem `live_only`), von `gui/main_window.py` für
-        "Konfiguration speichern" sowie für den Scharf-/Auto-Rearm-Zyklus
-        verwendet (dort ohne Angabe - Default `live_only=False`, also MIT
-        Speicherung, entspricht dem frueheren Verhalten bei nicht
-        gesetztem "Nur Live-Ansicht"-Haken). Zeigt bei unvollständigen
-        Eingaben eine Fehlermeldung und gibt None zurück (kein aktiver
-        Kanal, kein Name, aktiver Kanal ohne zugewiesenen Hardwarekanal).
+        Used by `_on_play_clicked`/`_on_record_clicked` (each with an
+        explicit `live_only`), by `gui/main_window.py` for "save
+        configuration" as well as for the arm/auto-rearm cycle (there
+        without an argument - default `live_only=False`, i.e. WITH
+        storage, matching the earlier behavior when the "live view only"
+        checkbox was unchecked). Shows an error message and returns None
+        on incomplete input (no active channel, no name, active channel
+        without an assigned hardware channel).
         """
         channels = self._channel_table.get_channels()
         if not any(ch.enabled for ch in channels):
             self.show_error(t("error_no_active_channels"))
             return None
 
-        # Ohne diese Prüfung würde ein aktivierter, aber noch nicht
-        # zugewiesener Kanal (hardware_channel == "") erst tief in der
-        # Hardware-Schicht als kryptischer "ungültiger Kanalname"-Fehler
-        # auftauchen (nidaqmx lehnt eine leere Kanalzeichenkette ab) -
-        # hier lässt sich die eigentliche Ursache klar benennen.
+        # Without this check, an enabled but not-yet-assigned channel
+        # (hardware_channel == "") would only surface deep in the
+        # hardware layer as a cryptic "invalid channel name" error
+        # (nidaqmx rejects an empty channel string) - here the actual
+        # cause can be clearly named.
         unassigned = [ch for ch in channels if ch.enabled and not ch.hardware_channel.strip()]
         if unassigned:
             names = ", ".join(ch.display_name for ch in unassigned)
@@ -815,13 +816,13 @@ class SetupView(QWidget):
             return None
 
         sample_rate = self._sample_rate_spin.value()
-        # Kein NI9210-Hard-Block mehr: Ein NI9210 zusammen mit einem
-        # schnelleren Modul ist seit `resolve_rate_groups()`
-        # (data/models.py) kein Fehlerfall mehr, sondern führt zu zwei
-        # getrennten, per RateMerger zusammengeführten Abtast-Gruppen
-        # (siehe core/controller.py::start_measurement). Die verbleibenden
-        # NI9234-/NI9213-Prüfungen unten bleiben unverändert - das sind
-        # intrinsische Ratenverstöße, unabhängig vom NI9210.
+        # No more hard NI9210 block: an NI9210 combined with a faster
+        # module is no longer an error case since `resolve_rate_groups()`
+        # (data/models.py) - instead it results in two separate sampling
+        # groups merged via RateMerger (see
+        # core/controller.py::start_measurement). The remaining NI9234/
+        # NI9213 checks below remain unchanged - those are intrinsic rate
+        # violations, independent of the NI9210.
         if any(
             ch.enabled and ch.module_type == ModuleType.NI9234 for ch in channels
         ) and not is_valid_ni9234_sample_rate(sample_rate):
@@ -862,12 +863,12 @@ class SetupView(QWidget):
                 return None
 
         active_channels = [ch for ch in channels if ch.enabled]
-        # Ring-Buffer-Groesse/Blockgroesse muessen sich an der
-        # TATSAECHLICHEN Tick-Rate orientieren (= schnellste Ratengruppe),
-        # nicht an der rohen Zielrate: bei einem alleinstehenden NI9210
-        # z. B. ist die Zielrate irrelevant (immer 14 S/s) - mit der
-        # rohen Zielrate berechnete Blockgroessen waeren dort viel zu
-        # gross und liessen den ersten Lesezyklus in ein Timeout laufen.
+        # Ring buffer size/block size must be based on the ACTUAL tick
+        # rate (= fastest rate group), not the raw target rate: with a
+        # standalone NI9210, for example, the target rate is irrelevant
+        # (always 14 S/s) - block sizes computed from the raw target rate
+        # would be far too large there and would cause the first read
+        # cycle to time out.
         try:
             rate_groups = resolve_rate_groups(active_channels, sample_rate)
             effective_tick_rate = max(
@@ -892,25 +893,25 @@ class SetupView(QWidget):
             recording_unlimited=self._recording_unlimited_checkbox.isChecked(),
             recording_stop_value=float(self._recording_stop_spin.value()),
             recording_stop_unit=RecordingStopUnit(self._recording_stop_unit_combo.currentData()),
-            # trigger bewusst NICHT gesetzt (Default-`TriggerConfig()`,
-            # also kein Trigger) - die tatsächlich aktive Trigger-
-            # Konfiguration lebt seit der Verallgemeinerung auf Start UND
-            # Stopp in `gui/main_window.py` (siehe
+            # trigger deliberately NOT set (default `TriggerConfig()`,
+            # i.e. no trigger) - since the generalization to start AND
+            # stop, the actually active trigger configuration lives in
+            # `gui/main_window.py` (see
             # `gui/trigger_settings_dialog.py::TriggerSettingsDialog`),
-            # nicht mehr in der Setup-Ansicht - `MainWindow` speist sie
-            # direkt in `config.trigger` ein (siehe `_on_start_measurement`,
+            # no longer in the setup view - `MainWindow` feeds it
+            # directly into `config.trigger` (see `_on_start_measurement`,
             # `_on_save_config`).
         )
 
     def apply_config(self, config: MeasurementConfig) -> None:
-        """Überträgt eine geladene Konfiguration in die UI-Felder.
+        """Transfers a loaded configuration into the UI fields.
 
-        Wird von `gui/main_window.py` nach "Konfiguration laden" aufgerufen.
-        `samples_per_read`/`ring_buffer_size` werden bewusst NICHT
-        übernommen: Sie sind keine editierbaren UI-Felder und werden beim
-        Start immer frisch aus Abtastrate/Kanalanzahl/verfügbarem RAM neu
-        berechnet (siehe `build_current_config`/`_calculate_dynamic_buffer_size`) -
-        identisch zum Verhalten bei manuell eingegebener Konfiguration.
+        Called by `gui/main_window.py` after "load configuration".
+        `samples_per_read`/`ring_buffer_size` are deliberately NOT
+        applied: they are not editable UI fields and are always freshly
+        recomputed at start from sample rate/channel count/available RAM
+        (see `build_current_config`/`_calculate_dynamic_buffer_size`) -
+        identical to the behavior with a manually entered configuration.
         """
         self._name_edit.setText(config.name)
         self._sample_rate_spin.setValue(config.sample_rate_hz)
@@ -921,16 +922,16 @@ class SetupView(QWidget):
         self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
         self._channel_table.set_channels(config.channels)
         self._update_resolved_rate_preview()
-        # config.trigger wird NICHT hier übernommen - `gui/main_window.py`
-        # liest es direkt aus dem geladenen `MeasurementConfig` und setzt
-        # es als seine eigene `_trigger_config` (siehe `_on_load_config`).
+        # config.trigger is NOT applied here - `gui/main_window.py` reads
+        # it directly from the loaded `MeasurementConfig` and sets it as
+        # its own `_trigger_config` (see `_on_load_config`).
 
     # ------------------------------------------------------------------ #
-    # Interna
+    # Internals
     # ------------------------------------------------------------------ #
 
     def _on_naming_scheme_changed(self) -> None:
-        """Persistiert das Namensschema sofort bei jeder Änderung."""
+        """Persists the naming scheme immediately on every change."""
         self._naming_digits_spin.setEnabled(self._naming_number_checkbox.isChecked())
         scheme = self.get_naming_scheme()
         self._configuration_manager.update_naming_scheme(
@@ -941,11 +942,11 @@ class SetupView(QWidget):
         )
 
     def _on_recording_unlimited_toggled(self, checked: bool) -> None:
-        """Graut Wert/Einheit des Aufnahme-Limits aus, solange "Unbegrenzt"
-        aktiv ist - reines UI-Feedback, keine sofortige Persistierung (wie
-        beim "Nur Live anzeigen"-Haken wird der Wert erst beim Start/
-        Schließen über `update_last_measurement_parameters` gespeichert,
-        siehe `get_current_measurement_parameters`)."""
+        """Grays out the recording-limit value/unit while "unlimited" is
+        active - purely UI feedback, no immediate persistence (as with
+        the "live view only" checkbox, the value is only saved at start/
+        close via `update_last_measurement_parameters`, see
+        `get_current_measurement_parameters`)."""
         enabled = not checked
         self._recording_stop_spin.setEnabled(enabled)
         self._recording_stop_unit_combo.setEnabled(enabled)
@@ -976,39 +977,39 @@ class SetupView(QWidget):
         )
 
     def _retheme_start_button_icons(self) -> None:
-        # Play/Aufnahme haben feste, theme-unabhaengige Symbolfarben (siehe
-        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop hat
-        # KEINEN fest codierten Hintergrund (siehe `ACTION_BUTTON_STYLE`)
-        # und bleibt daher bei der normalen theme-abhaengigen
-        # `nav_icon_color()` (kein `color=` uebergeben).
+        # Play/record have fixed, theme-independent icon colors (see
+        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop has
+        # NO hardcoded background (see `ACTION_BUTTON_STYLE`) and
+        # therefore stays with the normal theme-dependent
+        # `nav_icon_color()` (no `color=` passed).
         self._play_button.setIcon(QIcon(draw_play_icon(24, y_offset=0.6, color=PLAY_ICON_COLOR)))
         self._record_button.setIcon(
             QIcon(draw_record_icon(24, y_offset=0.6, color=RECORD_ICON_COLOR))
         )
         self._stop_button.setIcon(QIcon(draw_stop_icon(24, y_offset=0.6)))
-        # `ACTION_BUTTON_STYLE` referenziert `palette(...)` - ohne manuelles
-        # unpolish()/polish() bleiben Rahmen/Hintergrund nach einem
-        # Live-Theme-Wechsel optisch im alten Theme haengen (gleicher
-        # Befund wie bei den Navigationskacheln, siehe
+        # `ACTION_BUTTON_STYLE` references `palette(...)` - without a
+        # manual unpolish()/polish(), the border/background visually
+        # stays stuck in the old theme after a live theme switch (same
+        # finding as with the navigation tiles, see
         # `gui/main_window.py::_retheme_nav_icons`).
         for button in (self._play_button, self._record_button, self._stop_button):
             repolish(button)
 
     def _retheme_trigger_arm_button_icon(self) -> None:
-        # Kein fest codierter Hintergrund mehr (siehe
-        # `TRIGGER_ARM_BUTTON_STYLE`) - Icon bleibt daher bei der normalen
-        # theme-abhaengigen `nav_icon_color()` (kein `color=` uebergeben).
-        # Das Icon selbst wird NICHT extra fuer den gecheckten (scharfen)
-        # Zustand umgefaerbt (nur der Text via `palette(highlighted-text)`
-        # im Stylesheet) - Schwarz/Weiss bleibt auf dem Akzentton
-        # (`palette(highlight)`) in beiden Themes ausreichend lesbar.
+        # No more hardcoded background (see `TRIGGER_ARM_BUTTON_STYLE`) -
+        # the icon therefore stays with the normal theme-dependent
+        # `nav_icon_color()` (no `color=` passed).
+        # The icon itself is NOT separately recolored for the checked
+        # (armed) state (only the text via `palette(highlighted-text)`
+        # in the stylesheet) - black/white remains sufficiently readable
+        # on the accent color (`palette(highlight)`) in both themes.
         self._trigger_arm_button.setIcon(QIcon(draw_trigger_icon(24, y_offset=0.6)))
         repolish(self._trigger_arm_button)
 
     def _update_start_button_labels(self) -> None:
-        # Kurzer Button-Text (siehe `play_button_label`/`record_button_label`/
-        # `stop_button_label`) UND ausfuehrlicherer Tooltip (bestehende
-        # `live_only`/`start_measurement`/`stop_measurement`-Keys).
+        # Short button text (see `play_button_label`/`record_button_label`/
+        # `stop_button_label`) AND a more detailed tooltip (existing
+        # `live_only`/`start_measurement`/`stop_measurement` keys).
         self._play_button.setText(f"  {t('play_button_label')}")
         self._play_button.setToolTip(t("live_only"))
         self._record_button.setText(f"  {t('record_button_label')}")
@@ -1017,7 +1018,7 @@ class SetupView(QWidget):
         self._stop_button.setToolTip(t("stop_measurement"))
 
     def _apply_section_header_emphasis(self) -> None:
-        """Hebt nur Abschnitts-Labels hervor und bleibt vollständig theme-sicher."""
+        """Emphasizes only section labels and stays fully theme-safe."""
         header_font = QFont(self.font())
         if header_font.pointSize() > 0:
             header_font.setPointSize(header_font.pointSize() + 2)
@@ -1039,13 +1040,13 @@ class SetupView(QWidget):
             )
 
     def _update_resolved_rate_preview(self) -> None:
-        """Aktualisiert die nicht-blockierende Ratengruppen-Vorschau.
+        """Updates the non-blocking rate-group preview.
 
-        Bewusst tolerant: ein `ValueError` (z. B. gerade eine ungueltige
-        NI9234-Rate waehrend der Eingabe) wird hier verschluckt und die
-        Vorschau einfach geleert - `build_current_config()` bleibt die
-        einzige verbindliche Validierung (beim Start/Aufnehmen), diese
-        Vorschau ist reine Zusatzinformation.
+        Deliberately tolerant: a `ValueError` (e.g. an invalid NI9234
+        rate momentarily while typing) is swallowed here and the preview
+        simply cleared - `build_current_config()` remains the sole
+        binding validation (at start/record), this preview is purely
+        supplementary information.
         """
         active_channels = [ch for ch in self._channel_table.get_channels() if ch.enabled]
         sample_rate = self._sample_rate_spin.value()
@@ -1056,8 +1057,8 @@ class SetupView(QWidget):
             return
 
         if len(rate_groups) <= 1:
-            # Regelfall: genau eine Gruppe, Zielrate == tatsaechliche
-            # Rate - keine Zusatzinfo noetig, Label bleibt leer/unsichtbar.
+            # Normal case: exactly one group, target rate == actual
+            # rate - no extra info needed, label stays empty/invisible.
             self._resolved_rate_preview_label.setText("")
             return
 
@@ -1077,33 +1078,34 @@ class SetupView(QWidget):
         self._resolved_rate_preview_label.setText(" · ".join(parts))
 
     def _calculate_samples_per_read(self, sample_rate_hz: float) -> int:
-        """Berechnet eine adaptive Blockgroesse pro DAQ-Read.
+        """Computes an adaptive block size per DAQ read.
 
-        Rein aus der Ziel-BLOCKDAUER (`_target_read_block_ms`) abgeleitet,
-        nicht aus einer festen Sample-Anzahl - skaliert dadurch dynamisch
-        mit der Abtastrate: bei hoher Rate viele Samples pro Block (haelt
-        die Aufrufhaeufigkeit von `device.read()` konstant niedrig, siehe
-        `__init__`), bei niedriger Rate (z. B. NI9210 mit 14 S/s) entsprechend
-        wenige - so bleibt die Live View auch dort fluessig, statt in
-        seltenen, dafuer grossen Schueben zu aktualisieren. Nach oben durch
-        `_max_samples_per_read` begrenzt, nach unten auf mindestens 1 Sample.
+        Derived purely from the target BLOCK DURATION
+        (`_target_read_block_ms`), not from a fixed sample count -
+        thereby scaling dynamically with the sample rate: at a high rate,
+        many samples per block (keeps the call frequency of
+        `device.read()` consistently low, see `__init__`), at a low rate
+        (e.g. NI9210 at 14 S/s) correspondingly few - this keeps the live
+        view fluid even there, instead of updating in rare but large
+        bursts. Capped from above by `_max_samples_per_read`, floored at
+        a minimum of 1 sample.
         """
         target = int(sample_rate_hz * (self._target_read_block_ms / 1000.0))
         return max(1, min(self._max_samples_per_read, target))
 
     def _calculate_dynamic_buffer_size(self, sample_rate_hz: float, num_active_channels: int) -> int:
-        """Berechnet die Puffergröße dynamisch basierend auf verfügbarem RAM.
+        """Computes the buffer size dynamically based on available RAM.
 
-        Nutzt ~10% des verfügbaren RAM für den Ring Buffer, gedeckelt auf
-        120s. Bei sehr wenig freiem RAM wird die sonst übliche
-        10s-Mindestgröße bewusst unterschritten (mit Warnung), statt die
-        RAM-Grenze zu überschreiten - ein fester Mindest-Puffer würde sonst
-        bei knappem Speicher zu einem MemoryError beim Messstart führen.
+        Uses ~10% of the available RAM for the ring buffer, capped at
+        120s. With very little free RAM, the otherwise usual 10s minimum
+        size is deliberately undercut (with a warning) rather than
+        exceeding the RAM limit - a fixed minimum buffer would otherwise
+        cause a MemoryError at measurement start when memory is tight.
         """
         try:
             import psutil
             available_ram_bytes = psutil.virtual_memory().available
-            bytes_per_sample = 8.0 * num_active_channels  # float64 pro Kanal
+            bytes_per_sample = 8.0 * num_active_channels  # float64 per channel
             max_duration_from_ram = (available_ram_bytes * 0.1) / bytes_per_sample / sample_rate_hz
 
             duration_seconds = min(120.0, max_duration_from_ram)
@@ -1116,7 +1118,7 @@ class SetupView(QWidget):
                 )
             return max(1, int(sample_rate_hz * duration_seconds))
         except Exception:
-            # Fallback auf statische Größe bei Fehler
+            # Fall back to a static size on error
             logger.debug("Fehler bei dynamischer RAM-Berechnung, nutze Fallback")
             return int(sample_rate_hz * self._default_ring_buffer_seconds)
 

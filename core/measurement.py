@@ -1,19 +1,19 @@
 """
 core/measurement.py
 
-Verbindet die Messkonfiguration (Datenmodelle aus `data/models.py`) mit
-der Hardware-Schicht:
+Connects the measurement configuration (data models from
+`data/models.py`) with the hardware layer:
 
-    * Gruppiert aktive Kanäle nach ihrem physischen Gerät/Modul
-      (z. B. alle Kanäle von "cDAQ1Mod1" gehören zu einem NI9215).
-    * Erzeugt daraus die passenden konkreten Hardware-Objekte
+    * Groups active channels by their physical device/module (e.g. all
+      channels of "cDAQ1Mod1" belong to one NI9215).
+    * Creates the matching concrete hardware objects from them
       (`NI9215`, `NI9234`, `NI9210`, `NI9213`, `NI9235`).
-    * Wendet die lineare Kanal-Skalierung (`scale`, `offset`) auf
-      Rohdaten-Blöcke an.
+    * Applies linear channel scaling (`scale`, `offset`) to raw data
+      blocks.
 
-Dieses Modul enthält bewusst KEINE Thread- oder Task-Logik - das ist
-Aufgabe von `core/acquisition.py` (Erfassung) und `hardware/*`
-(Hardware-Kommunikation).
+This module deliberately contains NO thread or task logic - that is the
+responsibility of `core/acquisition.py` (acquisition) and `hardware/*`
+(hardware communication).
 """
 
 from __future__ import annotations
@@ -35,15 +35,15 @@ logger = logging.getLogger(__name__)
 
 
 class MeasurementConfigError(Exception):
-    """Wird bei ungültiger oder inkonsistenter Messkonfiguration geworfen.
+    """Raised on an invalid or inconsistent measurement configuration.
 
-    Beispiele: gemischte Modultypen auf einem physischen Gerät,
-    nicht unterstützter Modultyp, ungültiges Kanalformat.
+    Examples: mixed module types on one physical device, unsupported
+    module type, invalid channel format.
     """
 
 
-# Zuordnung Modultyp -> konkrete Hardware-Klasse. Neue Module werden hier
-# eingetragen, ohne dass `create_devices()` selbst angepasst werden muss.
+# Mapping module type -> concrete hardware class. New modules are added
+# here without having to modify `create_devices()` itself.
 _DEVICE_CLASSES: dict[ModuleType, type[BaseDevice]] = {
     ModuleType.NI9215: NI9215,
     ModuleType.NI9234: NI9234,
@@ -54,23 +54,22 @@ _DEVICE_CLASSES: dict[ModuleType, type[BaseDevice]] = {
 
 
 def device_name_from_hw_channel(hw_channel: str) -> str:
-    """Extrahiert den Gerätenamen aus einem Hardwarekanal.
+    """Extracts the device name from a hardware channel.
 
-    Gibt bei einem leeren oder unvollständigen Kanalnamen einen leeren
-    String zurück; die strengere Konfigurationsprüfung bleibt in
-    `_device_name_from_channel()` erhalten.
+    Returns an empty string for an empty or incomplete channel name; the
+    stricter configuration check remains in `_device_name_from_channel()`.
     """
     return hw_channel.split("/", 1)[0] if hw_channel else ""
 
 
 def _device_name_from_channel(channel: Channel) -> str:
-    """Extrahiert den Gerätenamen aus einem Hardwarekanal.
+    """Extracts the device name from a hardware channel.
 
-    Beispiel: "cDAQ1Mod1/ai0" -> "cDAQ1Mod1".
+    Example: "cDAQ1Mod1/ai0" -> "cDAQ1Mod1".
 
     Raises:
-        MeasurementConfigError: falls `hardware_channel` nicht dem
-            erwarteten Format "Gerät/Kanal" entspricht.
+        MeasurementConfigError: if `hardware_channel` doesn't match the
+            expected "device/channel" format.
     """
     device_name = device_name_from_hw_channel(channel.hardware_channel)
     if not device_name or "/" not in channel.hardware_channel:
@@ -82,12 +81,12 @@ def _device_name_from_channel(channel: Channel) -> str:
 
 
 def group_channels_by_device(channels: list[Channel]) -> dict[str, list[Channel]]:
-    """Gruppiert Kanäle nach ihrem physischen Gerät/Modul.
+    """Groups channels by their physical device/module.
 
-    Die Reihenfolge der Kanäle innerhalb jeder Gruppe sowie die
-    Reihenfolge, in der Geräte zum ersten Mal auftreten, bleibt erhalten.
-    Diese Reihenfolge bestimmt später die Kanal-Reihenfolge im Ring
-    Buffer (siehe `core/acquisition.py`) - sie MUSS deterministisch sein.
+    The order of channels within each group, as well as the order in
+    which devices first appear, is preserved. This order later
+    determines the channel order in the ring buffer (see
+    `core/acquisition.py`) - it MUST be deterministic.
     """
     groups: dict[str, list[Channel]] = {}
     for channel in channels:
@@ -100,28 +99,26 @@ def create_devices(
     channels: list[Channel],
     discovered_devices: Optional[list[DeviceInfo]] = None,
 ) -> list[BaseDevice]:
-    """Erzeugt für jede Kanalgruppe (physisches Modul) das passende Hardware-Objekt.
+    """Creates the matching hardware object for each channel group (physical module).
 
     Args:
-        channels: Aktive Kanäle der Messkonfiguration, typischerweise das
-            Ergebnis von `MeasurementConfig.active_channels()`.
-        discovered_devices: Optionales Ergebnis von
-            `hardware.nidaq_device.discover_devices()`, um reale
-            Produktbezeichnungen in `DeviceInfo.product_type` zu
-            übernehmen. Ohne Angabe wird ein Platzhalter aus dem
-            Modultyp der Kanäle erzeugt.
+        channels: Active channels of the measurement configuration,
+            typically the result of `MeasurementConfig.active_channels()`.
+        discovered_devices: Optional result of
+            `hardware.nidaq_device.discover_devices()`, to adopt real
+            product designations into `DeviceInfo.product_type`. Without
+            it, a placeholder is generated from the channels' module type.
 
     Returns:
-        Liste von `BaseDevice`-Instanzen. Die Reihenfolge der Kanäle über
-        alle Geräte hinweg (Gerät für Gerät, siehe
-        `group_channels_by_device`) bestimmt die Kanal-Reihenfolge des
-        späteren Ring Buffers - das ist wichtig für die korrekte
-        Kanalzuordnung in Live View/Storage.
+        List of `BaseDevice` instances. The channel order across all
+        devices (device by device, see `group_channels_by_device`)
+        determines the channel order of the resulting ring buffer -
+        this matters for correct channel assignment in the live
+        view/storage.
 
     Raises:
-        MeasurementConfigError: falls Kanäle desselben Geräts
-            unterschiedliche Modultypen angeben, oder ein Modultyp nicht
-            unterstützt wird.
+        MeasurementConfigError: if channels of the same device specify
+            different module types, or a module type is not supported.
     """
     discovered_by_name = {d.device_name: d for d in (discovered_devices or [])}
     groups = group_channels_by_device(channels)
@@ -162,22 +159,23 @@ def create_devices(
 
 
 def apply_scaling(raw_block: np.ndarray, channels: list[Channel]) -> np.ndarray:
-    """Wendet die lineare Kanal-Skalierung auf einen Rohdaten-Block an.
+    """Applies linear channel scaling to a raw data block.
 
-    Berechnet für jede Zeile (Kanal) i:
-        physikalischer_wert[i] = raw_block[i] * channels[i].scale + channels[i].offset
+    Computes for each row (channel) i:
+        physical_value[i] = raw_block[i] * channels[i].scale + channels[i].offset
 
     Args:
-        raw_block: Array der Form (num_channels, num_samples). Die
-            Zeilen-Reihenfolge MUSS der Reihenfolge von `channels`
-            entsprechen (siehe `create_devices`/`AcquisitionThread`).
-        channels: Kanäle in derselben Reihenfolge wie die Zeilen von `raw_block`.
+        raw_block: Array of shape (num_channels, num_samples). The row
+            order MUST match the order of `channels` (see
+            `create_devices`/`AcquisitionThread`).
+        channels: Channels in the same order as the rows of `raw_block`.
 
     Returns:
-        Neues Array derselben Form mit physikalisch skalierten Werten.
+        New array of the same shape with physically scaled values.
 
     Raises:
-        ValueError: falls die Anzahl Kanäle nicht zur Anzahl Zeilen passt.
+        ValueError: if the number of channels doesn't match the number
+            of rows.
     """
     if raw_block.shape[0] != len(channels):
         raise ValueError(

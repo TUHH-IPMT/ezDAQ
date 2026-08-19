@@ -1,28 +1,26 @@
 """
 gui/main_window.py
 
-Hauptfenster der Anwendung.
+Main window of the application.
 
-Aufbau (siehe Vorgabe):
-    * Menüleiste
-    * Seitenleiste (Navigation: Setup / Live View / Analyse / Datenverwaltung)
-    * Arbeitsbereich (QStackedWidget mit den einzelnen Ansichten)
-    * Statusleiste
+Structure (per spec):
+    * Menu bar
+    * Sidebar (navigation: Setup / Live View / Analysis / Data management)
+    * Workspace (QStackedWidget holding the individual views)
+    * Status bar
 
-Das Hauptfenster ist die einzige GUI-Komponente, die den
-`MeasurementController` direkt kennt. Es übersetzt Signale der Ansichten
-(z. B. "Messung starten") in Controller-Aufrufe und verteilt Ergebnisse
-zurück an die Ansichten. Dadurch bleiben die einzelnen Views von der
-Steuerlogik entkoppelt.
+The main window is the only GUI component that knows the
+`MeasurementController` directly. It translates view signals (e.g. "start
+measurement") into controller calls and distributes results back to the
+views. This keeps the individual views decoupled from the control logic.
 
-Thread-Sicherheit:
-    Fehler aus dem DAQ-Thread erreichen das Hauptfenster über den
-    Controller-Error-Listener, der IM DAQ-THREAD läuft. Um Qt-Widgets nur
-    aus dem GUI-Thread zu berühren, wird der Fehler über ein Qt-Signal
-    (`_acquisition_error_signal`) in den GUI-Thread marshallt - Qt stellt
-    eine über Thread-Grenzen emittierte Signal-Slot-Verbindung
-    automatisch als `QueuedConnection` zu, sodass der Slot im GUI-Thread
-    ausgeführt wird.
+Thread safety:
+    Errors from the DAQ thread reach the main window via the controller's
+    error listener, which runs IN THE DAQ THREAD. To only touch Qt widgets
+    from the GUI thread, the error is marshalled into the GUI thread via a
+    Qt signal (`_acquisition_error_signal`) - Qt automatically delivers a
+    signal-slot connection emitted across thread boundaries as a
+    `QueuedConnection`, so the slot executes on the GUI thread.
 """
 
 from __future__ import annotations
@@ -83,10 +81,11 @@ _VIEW_SETUP = 0
 _VIEW_LIVE = 1
 _VIEW_ANALYSIS = 2
 
-# (Zeilenindex, i18n-Key, Icon-Zeichenfunktion) je Navigationskachel - eine
-# Stelle für `_build_navigation_and_workspace()` und `retranslate_ui()`.
-# Eigene, theme-faehige Icons statt QStyle.standardIcon() (siehe
-# gui/theme.py - Qt-Standardicons sind hier NICHT palettenabhängig).
+# (Row index, i18n key, icon-draw function) per navigation tile - a single
+# source of truth for `_build_navigation_and_workspace()` and
+# `retranslate_ui()`. Custom, theme-aware icons instead of
+# QStyle.standardIcon() (see gui/theme.py - Qt's standard icons are NOT
+# palette-aware here).
 _NAV_ITEMS = [
     (_VIEW_SETUP, "nav_setup", draw_gear_icon),
     (_VIEW_LIVE, "nav_live_view", draw_play_icon),
@@ -95,9 +94,9 @@ _NAV_ITEMS = [
 
 
 class MainWindow(QMainWindow):
-    """Zentrales Anwendungsfenster mit Navigation und Ansichten."""
+    """Central application window with navigation and views."""
 
-    # Signal zum Marshallen von DAQ-Thread-Fehlern in den GUI-Thread.
+    # Signal for marshalling DAQ-thread errors into the GUI thread.
     _acquisition_error_signal = pyqtSignal(object)
 
     def __init__(
@@ -111,38 +110,38 @@ class MainWindow(QMainWindow):
         self._configuration_manager = configuration_manager
         self._sensor_database = sensor_database or SensorDatabaseManager()
 
-        # Referenzen auf laufende Hintergrund-Worker (siehe gui/workers.py)
-        # - müssen bis zum Abschluss am Leben gehalten werden, sonst würde
-        # Python das QThread-Objekt vorzeitig einsammeln.
+        # References to running background workers (see gui/workers.py)
+        # - must be kept alive until they finish, otherwise Python would
+        # garbage-collect the QThread object prematurely.
         self._background_workers: list[BackgroundWorker] = []
         self._discovery_worker: BackgroundWorker | None = None
 
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
         self._storage_path: Path | None = Path(last_storage) if last_storage else None
-        # Verhindert, dass eine automatische Neubewaffnung
-        # (`TriggerConfig.auto_rearm`) beim Schließen der App eine neue
-        # Messung startet (siehe `closeEvent`/`_on_stop_measurement`).
+        # Prevents an automatic re-arm (`TriggerConfig.auto_rearm`) from
+        # starting a new measurement while the app is closing (see
+        # `closeEvent`/`_on_stop_measurement`).
         self._closing = False
 
-        # Zustand fuer automatische Mess-Trigger (siehe
-        # `data/models.py::TriggerConfig`, `_on_start_measurement`). Besitzt
-        # die aktuelle Konfiguration selbst (nicht mehr die Setup-Ansicht,
-        # siehe `gui/trigger_settings_dialog.py`) - vorbelegt mit der
-        # zuletzt verwendeten Konfiguration.
+        # State for automatic measurement triggers (see
+        # `data/models.py::TriggerConfig`, `_on_start_measurement`). Owns
+        # the current configuration itself (no longer the setup view, see
+        # `gui/trigger_settings_dialog.py`) - preset with the last used
+        # configuration.
         self._trigger_config: TriggerConfig = TriggerConfig.from_dict(
             configuration_manager.settings.last_trigger_config
         )
         self._start_serial_listener: SerialTriggerListener | None = None
         self._stop_serial_listener: SerialTriggerListener | None = None
-        # False waehrend der Scharf-Phase (Start-Trigger noch nicht
-        # ausgeloest) - steuert, ob `_on_stop_measurement` Metadaten
-        # schreibt (siehe dort).
+        # False during the armed phase (start trigger not yet fired) -
+        # controls whether `_on_stop_measurement` writes metadata (see
+        # there).
         self._recording_started: bool = False
 
         self.setWindowTitle(t("window_title"))
-        # .ico statt .png (siehe main.py) - mehrere Aufloesungen fuer
-        # Titelleiste/Taskleiste statt einer einzelnen 256px-Groesse.
+        # .ico instead of .png (see main.py) - multiple resolutions for the
+        # title bar/taskbar instead of a single 256px size.
         icon_path = get_resource_path("icon.ico")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
@@ -160,7 +159,7 @@ class MainWindow(QMainWindow):
         if self._storage_path is not None:
             self._setup_view.set_storage_path(str(self._storage_path))
 
-        # Signalverbindungen der Ansichten
+        # Signal connections of the views
         self._setup_view.discover_hardware_requested.connect(self._on_discover_hardware)
         self._setup_view.open_ni_max_requested.connect(self._on_open_ni_max)
         self._setup_view.start_measurement_requested.connect(self._on_start_measurement)
@@ -172,24 +171,24 @@ class MainWindow(QMainWindow):
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
         self._live_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
 
-        # Scharf-Button (Setup UND Live-Ansicht) nur sichtbar, wenn beim
-        # Start bereits ein Trigger konfiguriert/geladen ist (siehe
-        # `_on_open_trigger_settings_dialog` für Aktualisierung nach einer
-        # Änderung).
+        # Arm button (Setup AND live view) only visible if a trigger is
+        # already configured/loaded at startup (see
+        # `_on_open_trigger_settings_dialog` for refreshing after a
+        # change).
         self._update_trigger_arm_available()
 
-        # DAQ-Thread-Fehler thread-sicher in den GUI-Thread bringen
+        # Bring DAQ-thread errors into the GUI thread thread-safely
         self._acquisition_error_signal.connect(self._on_acquisition_error_gui)
         self._controller.add_error_listener(self._acquisition_error_signal.emit)
 
-        # Geräte automatisch einmalig beim Start durchsuchen
+        # Automatically scan for devices once on startup
         self._setup_view.discover_hardware_requested.emit()
 
         connect_language_changed(self.retranslate_ui)
         connect_theme_changed(self._retheme_nav_icons)
 
     # ------------------------------------------------------------------ #
-    # Aufbau
+    # Construction
     # ------------------------------------------------------------------ #
 
     def _build_navigation_and_workspace(self) -> None:
@@ -204,17 +203,17 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(nav_container)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(8)
-        # 3D-Bevel-Optik: "outset"/helles Gefaelle im Normalzustand wirkt
-        # erhaben, "inset"/dunkles Gefaelle im gecheckten Zustand simuliert
-        # das Reindruecken. Padding bewusst in BEIDEN Zuständen identisch,
-        # damit Icon+Text immer exakt mittig bleiben (kein Verschieben).
+        # 3D bevel look: "outset"/light gradient in the normal state looks
+        # raised, "inset"/dark gradient in the checked state simulates
+        # being pressed in. Padding deliberately identical in BOTH states
+        # so icon+text always stay exactly centered (no shifting).
         nav_container.setStyleSheet(
             "QToolButton {"
-            # palette(dark) statt palette(mid): "mid" liegt in beiden
-            # Themes zu nah am Hintergrund (Kontrastdifferenz ~13-40) und
-            # der Rahmen war dadurch kaum sichtbar - "dark" verdoppelt den
-            # Kontrast (~33-80) und bleibt in beiden Themes gut erkennbar,
-            # ohne die 3D-Bevel-Optik selbst zu verändern.
+            # palette(dark) instead of palette(mid): "mid" sits too close
+            # to the background in both themes (contrast difference
+            # ~13-40) so the border was barely visible - "dark" doubles
+            # the contrast (~33-80) and stays clearly visible in both
+            # themes without changing the 3D bevel look itself.
             "   border: 2px outset palette(dark);"
             "   border-radius: 8px;"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
@@ -230,22 +229,24 @@ class MainWindow(QMainWindow):
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             "                                stop:0 palette(dark), stop:1 palette(midlight));"
             "}"
-            # Sobald IRGENDEIN Vorfahre ein Stylesheet trägt, rendert Qt
-            # Kind-QLabels über die CSS-Engine statt rein palettenbasiert -
-            # ohne diese Regel bleibt der Text unabhängig vom Theme schwarz.
-            # WICHTIG: Der QSS-Rollenname für QPalette.WindowText heißt
-            # "foreground", NICHT "window-text" (das wird sonst still
-            # ignoriert und die Regel greift gar nicht).
+            # As soon as ANY ancestor carries a stylesheet, Qt renders
+            # child QLabels through the CSS engine instead of purely from
+            # the palette - without this rule the text stays black
+            # regardless of theme. IMPORTANT: the QSS role name for
+            # QPalette.WindowText is "foreground", NOT "window-text"
+            # (otherwise it is silently ignored and the rule has no
+            # effect).
             "QToolButton QLabel { color: palette(foreground); background: transparent; }"
         )
 
-        # Icon+Text werden bewusst NICHT über QToolButton.setIcon()/setText()
-        # gesetzt: Qt's eingebautes Label-Layout (CE_ToolButtonLabel) hält
-        # bei sehr hohen Buttons (volle Spaltenhöhe/3) keinen festen Abstand
-        # zwischen Icon und Text ein - das Icon bleibt oben "kleben", der
-        # Text landet separat vertikal mittig. Stattdessen ein eigenes,
-        # eng zusammenhängendes Icon+Text-Päckchen bauen und dieses als
-        # Ganzes im Button zentrieren.
+        # Icon+text are deliberately NOT set via
+        # QToolButton.setIcon()/setText(): Qt's built-in label layout
+        # (CE_ToolButtonLabel) doesn't keep a fixed gap between icon and
+        # text for very tall buttons (full column height/3) - the icon
+        # stays stuck at the top while the text ends up separately
+        # vertically centered. Instead, build a self-contained,
+        # tightly-grouped icon+text package and center that as a whole
+        # within the button.
         self._nav_container = nav_container
         self._nav_button_group = QButtonGroup(self)
         self._nav_button_group.setExclusive(True)
@@ -255,10 +256,10 @@ class MainWindow(QMainWindow):
         for index, key, icon in _NAV_ITEMS:
             button = QToolButton()
             button.setCheckable(True)
-            # QToolButton hat standardmäßig eine "Fixed"/"Preferred"
-            # Größenrichtlinie in der Vertikalen - ohne "Expanding" würde
-            # das stretch=1 unten wirkungslos bleiben und die Buttons
-            # blieben auf ihrer Mindesthöhe, statt die Spalte auszufüllen.
+            # QToolButton has a "Fixed"/"Preferred" size policy vertically
+            # by default - without "Expanding" the stretch=1 below would
+            # have no effect and the buttons would stay at their minimum
+            # height instead of filling the column.
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
             icon_label = QLabel()
@@ -288,8 +289,8 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append(button)
             self._nav_icon_labels.append(icon_label)
             self._nav_text_labels.append(text_label)
-            # stretch=1 auf allen drei Buttons -> teilen sich die volle
-            # Hoehe der Navigationsspalte gleichmaessig auf.
+            # stretch=1 on all three buttons -> they evenly share the full
+            # height of the navigation column.
             nav_layout.addWidget(button, stretch=1)
 
         self._retheme_nav_icons()
@@ -300,39 +301,40 @@ class MainWindow(QMainWindow):
         self._workspace.addWidget(self._setup_view)      # index 0
         self._workspace.addWidget(self._live_view)       # index 1
         self._workspace.addWidget(self._analysis_view)   # index 2
-        # "Datenverwaltung" teilt sich vorerst die Analyse-Ansicht (Laden
-        # gespeicherter Messungen); eine dedizierte Verwaltung folgt später.
+        # "Data management" currently shares the analysis view (loading
+        # saved measurements); a dedicated management view will follow
+        # later.
         root_layout.addWidget(self._workspace, stretch=1)
 
         self.setCentralWidget(central)
         self._set_nav_index(_VIEW_SETUP)
 
     def _set_nav_index(self, index: int) -> None:
-        """Wählt eine Navigationskachel programmatisch aus.
+        """Programmatically selects a navigation tile.
 
-        `QButtonGroup.setChecked()` löst - anders als
-        `QListWidget.setCurrentRow()` zuvor - kein Klick-Signal aus, daher
-        wird die Arbeitsbereich-Seite hier explizit mitgesetzt.
+        `QButtonGroup.setChecked()` - unlike `QListWidget.setCurrentRow()`
+        previously - does not fire a click signal, so the workspace page
+        is set explicitly here as well.
         """
         self._nav_buttons[index].setChecked(True)
         self._workspace.setCurrentIndex(min(index, _VIEW_ANALYSIS))
 
     def _retheme_nav_icons(self) -> None:
-        """Zeichnet die Navigations-Icons neu und erzwingt ein Re-Polish
-        der Kachel-Stylesheets nach einem Theme-Wechsel.
+        """Redraws the navigation icons and forces a re-polish of the
+        tile stylesheets after a theme change.
 
-        Die Icons werden mit der aktuellen `WindowText`-Farbe neu gezeichnet
-        (siehe `gui/theme.py::draw_gear_icon` usw.), da sie sonst in der
-        Farbe des Themes hängen blieben, mit dem der Button ursprünglich
-        erzeugt wurde. Das manuelle unpolish()/polish() stellt zusätzlich
-        sicher, dass die `palette(...)`-Referenzen im Kachel-Stylesheet
-        (Rahmen/Verlauf) ebenfalls sofort neu gezeichnet werden.
+        The icons are redrawn with the current `WindowText` color (see
+        `gui/theme.py::draw_gear_icon` etc.), since otherwise they would
+        stay stuck in the color of the theme the button was originally
+        created with. The manual unpolish()/polish() additionally ensures
+        that the `palette(...)` references in the tile stylesheet
+        (border/gradient) are also redrawn immediately.
         """
         for (_, _, draw_icon), label in zip(_NAV_ITEMS, self._nav_icon_labels):
             label.setPixmap(draw_icon(36))
-        # Nicht nur den Container, sondern JEDEN einzelnen Button UND jedes
-        # Kind-Label repolishen - ein QSS-Cache auf Kind-Widget-Ebene wird
-        # durch das Repolish nur des Elternteils nicht zuverlässig invalidiert.
+        # Repolish not just the container but EVERY individual button AND
+        # every child label - a QSS cache at the child-widget level is not
+        # reliably invalidated by repolishing only the parent.
         all_widgets = [
             self._nav_container,
             *self._nav_buttons,
@@ -413,23 +415,23 @@ class MainWindow(QMainWindow):
         self._about_action.triggered.connect(self._on_about)
 
     def _build_shortcuts(self) -> None:
-        """Globale Tastenkürzel für Messung Start/Stopp - funktionieren
-        unabhängig davon, welcher Tab (Konfiguration/Live-Ansicht/Analyse)
-        gerade aktiv ist, da über `self.addAction()` am Hauptfenster selbst
-        registriert statt an einem einzelnen Button/View.
+        """Global keyboard shortcuts for measurement start/stop - work
+        regardless of which tab (configuration/live view/analysis) is
+        currently active, since they are registered via
+        `self.addAction()` on the main window itself instead of on a
+        single button/view.
 
-        Rufen dieselben Handler wie die Start-/Stopp-Buttons auf (siehe
-        `_on_start_measurement_from_live`/`_on_stop_measurement`) - beide
-        sind bereits dagegen abgesichert, wenn keine Messung läuft
-        (Stopp) bzw. bereits eine läuft (Start meldet dann den bestehenden
-        `MeasurementController`-Fehler wie ein doppelter Klick auf den
-        Start-Button auch).
+        Call the same handlers as the start/stop buttons (see
+        `_on_start_measurement_from_live`/`_on_stop_measurement`) - both
+        are already safeguarded against the case that no measurement is
+        running (stop) or one is already running (start then reports the
+        existing `MeasurementController` error, just like a double click
+        on the start button would too).
         """
         self._start_shortcut_action = QAction(self)
         self._start_shortcut_action.setShortcut(QKeySequence("F5"))
-        # F5 startet MIT Speicherung (live_only=False), wie der
-        # Aufnahme-Button - fuer die reine Live-Anzeige gibt es keinen
-        # eigenen Shortcut.
+        # F5 starts WITH storage (live_only=False), like the record
+        # button - there is no dedicated shortcut for live-only display.
         self._start_shortcut_action.triggered.connect(
             lambda: self._on_start_measurement_from_live(False)
         )
@@ -441,58 +443,61 @@ class MainWindow(QMainWindow):
         self.addAction(self._stop_shortcut_action)
 
     def _on_language_action_triggered(self, action) -> None:
-        """Wird ausgelöst, wenn der Nutzer im Menü Einstellungen -> Sprache
-        eine Sprache anklickt - wirkt sofort in der laufenden App und wird
-        persistiert (siehe `gui/i18n.py::set_language`)."""
+        """Triggered when the user clicks a language in the Settings ->
+        Language menu - takes effect immediately in the running app and
+        is persisted (see `gui/i18n.py::set_language`)."""
         new_language = action.data()
         set_language(new_language)
         self._configuration_manager.update_language(new_language)
 
     def _on_theme_action_triggered(self, action) -> None:
-        """Wird ausgelöst, wenn der Nutzer im Menü Einstellungen -> Design
-        Hell/Dunkel anklickt - wirkt sofort in der laufenden App und wird
-        persistiert (siehe `gui/theme.py::set_theme`)."""
+        """Triggered when the user clicks Light/Dark in the Settings ->
+        Theme menu - takes effect immediately in the running app and is
+        persisted (see `gui/theme.py::set_theme`)."""
         new_theme = action.data()
         set_theme(new_theme)
         self._configuration_manager.update_theme(new_theme)
 
     def _on_open_channel_display_dialog(self) -> None:
-        """Öffnet den Kanal-Darstellung-Dialog mit den im Setup konfigurierten
-        Kanälen (siehe `SetupView.get_configured_channels()`).
+        """Opens the channel display dialog with the channels configured
+        in Setup (see `SetupView.get_configured_channels()`).
 
-        Bewusst NICHT `self._live_view.open_channel_display_dialog()` ohne
-        Argument: die Live View kennt ihre Kanäle erst, sobald eine
-        Messung tatsächlich läuft (`start_display()`) - die Darstellung
-        soll aber schon vorher, direkt nach dem Konfigurieren im Setup,
-        einstellbar sein - AUCH für Kanäle, die noch keinen zugewiesenen
-        Hardwarekanal haben (siehe `gui/live_view.py::_channel_display_key`
-        für die dafür nötige Schlüssel-Behandlung).
+        Deliberately NOT `self._live_view.open_channel_display_dialog()`
+        without an argument: the live view only knows its channels once a
+        measurement is actually running (`start_display()`) - but the
+        display should already be configurable beforehand, right after
+        configuring in Setup - EVEN for channels that don't have an
+        assigned hardware channel yet (see
+        `gui/live_view.py::_channel_display_key` for the key handling
+        this requires).
         """
         channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
         settings = self._live_view.open_channel_display_dialog(channels)
         if settings is not None:
-            # Zurück ins Setup schreiben, damit die Werte beim Speichern
-            # der Konfiguration erhalten bleiben (siehe
-            # `SetupView.apply_channel_display_settings`) - die Live View
-            # kennt hier nur die übergebene Kopie, nicht die Kanaltabelle.
+            # Write back into Setup so the values are preserved when the
+            # configuration is saved (see
+            # `SetupView.apply_channel_display_settings`) - the live view
+            # only knows the copy passed to it here, not the channel table.
             self._setup_view.apply_channel_display_settings(settings)
 
     def _on_open_sensor_database(self) -> None:
-        """Öffnet die Sensor-Datenbank-Verwaltung (siehe
-        gui/sensor_database_dialog.py). Änderungen werden dort sofort
-        persistiert - dieser Dialog reicht daher nur die (bereits von
-        `main.py` erzeugte) `SensorDatabaseManager`-Instanz durch."""
+        """Opens the sensor database management (see
+        gui/sensor_database_dialog.py). Changes are persisted immediately
+        there - this dialog therefore only passes through the
+        `SensorDatabaseManager` instance (already created by
+        `main.py`)."""
         from gui.sensor_database_dialog import SensorDatabaseDialog
 
         dialog = SensorDatabaseDialog(self._sensor_database, self)
         dialog.exec()
 
     def _on_open_trigger_settings_dialog(self) -> None:
-        """Öffnet den Trigger-Einstellungen-Dialog (siehe
-        `gui/trigger_settings_dialog.py::TriggerSettingsDialog`) mit den im
-        Setup konfigurierten AKTIVEN Kanälen als Auswahl für einen
-        Schwellwert-Trigger - wie beim Kanal-Darstellung-Dialog schon vor
-        dem Messstart nutzbar (siehe `_on_open_channel_display_dialog`)."""
+        """Opens the trigger settings dialog (see
+        `gui/trigger_settings_dialog.py::TriggerSettingsDialog`) with the
+        ACTIVE channels configured in Setup as the selection for a
+        threshold trigger - usable before measurement start already, like
+        the channel display dialog (see
+        `_on_open_channel_display_dialog`)."""
         channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
         dialog = TriggerSettingsDialog(self._trigger_config, channels, self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -501,8 +506,8 @@ class MainWindow(QMainWindow):
             self._update_trigger_arm_available()
 
     def _update_trigger_arm_available(self) -> None:
-        """Blendet den Scharf-Button in BEIDEN Ansichten (Setup und Live)
-        synchron ein/aus - siehe `SetupView.set_trigger_arm_available`/
+        """Shows/hides the arm button in BOTH views (Setup and Live) in
+        sync - see `SetupView.set_trigger_arm_available`/
         `LiveView.set_trigger_arm_available`."""
         available = (
             self._trigger_config.start.kind != TriggerKind.NONE
@@ -516,8 +521,8 @@ class MainWindow(QMainWindow):
         self.statusBar().addWidget(self._status_label)
 
     def retranslate_ui(self) -> None:
-        """Aktualisiert alle statischen Texte des Hauptfensters nach einem
-        Sprachwechsel (siehe `gui/i18n.py::connect_language_changed`)."""
+        """Updates all static texts of the main window after a language
+        change (see `gui/i18n.py::connect_language_changed`)."""
         self.setWindowTitle(t("window_title"))
 
         for index, key, _icon in _NAV_ITEMS:
@@ -543,35 +548,34 @@ class MainWindow(QMainWindow):
         self._help_menu.setTitle(f"&{t('menu_help')}")
         self._about_action.setText(t("menu_about"))
 
-        # Der Statustext ist meist ein einmaliges Ereignis (Start/Stop/
-        # Fehler) und korrigiert sich beim nächsten Ereignis von selbst.
-        # Nur der Leerlauf-Zustand würde sonst dauerhaft in der alten
-        # Sprache hängen bleiben.
+        # The status text is usually a one-off event (start/stop/error)
+        # and corrects itself on the next event. Only the idle state
+        # would otherwise remain stuck in the old language permanently.
         if not self._controller.is_running:
             self._status_label.setText(t("ready"))
 
     # ------------------------------------------------------------------ #
-    # Gespeicherte Messkonfigurationen (Datei-Menü)
+    # Saved measurement configurations (File menu)
     # ------------------------------------------------------------------ #
 
     def _on_save_config(self) -> None:
-        """Speichert die aktuell in der Setup-Ansicht eingestellte Konfiguration.
+        """Saves the configuration currently set in the setup view.
 
-        Der Speicherort wird per Dateidialog vom Nutzer gewählt (kein
-        interner Namens-Katalog) - Konfigurationsdateien sind damit normale
-        Dateien, die frei abgelegt/umbenannt/geteilt werden können.
+        The save location is chosen by the user via a file dialog (no
+        internal name catalog) - configuration files are therefore
+        regular files that can be freely stored/renamed/shared.
         """
-        # Aktuelle Popout-Fensterposition uebernehmen, BEVOR die Kanäle
-        # ausgelesen werden - siehe `_sync_popout_geometry_to_setup`.
+        # Apply the current popout window position BEFORE reading out the
+        # channels - see `_sync_popout_geometry_to_setup`.
         self._sync_popout_geometry_to_setup()
         config = self._setup_view.build_current_config()
         if config is None:
             return
-        # Wie bei `_on_start_measurement`: `SetupView.build_current_config()`
-        # kennt die Trigger-Konfiguration nicht mehr (siehe
-        # `gui/trigger_settings_dialog.py`) - ohne diese Zeile wuerde
-        # "Konfiguration speichern" den aktiven Trigger stillschweigend
-        # verlieren (Default-`TriggerConfig()` statt der echten Werte).
+        # As with `_on_start_measurement`: `SetupView.build_current_config()`
+        # no longer knows the trigger configuration (see
+        # `gui/trigger_settings_dialog.py`) - without this line, "Save
+        # configuration" would silently lose the active trigger (default
+        # `TriggerConfig()` instead of the real values).
         config.trigger = self._trigger_config
         filename, _ = QFileDialog.getSaveFileName(
             self,
@@ -594,7 +598,7 @@ class MainWindow(QMainWindow):
         self._status_label.setText(t("status_config_saved", filename=file_path.name))
 
     def _on_load_config(self) -> None:
-        """Lässt den Nutzer eine Konfigurationsdatei auswählen und lädt sie."""
+        """Lets the user select a configuration file and loads it."""
         filename, _ = QFileDialog.getOpenFileName(
             self,
             t("menu_load_config"),
@@ -611,17 +615,17 @@ class MainWindow(QMainWindow):
             )
             return
         self._setup_view.apply_config(config)
-        # Die geladene Konfiguration bringt ihre eigene Trigger-Konfiguration
-        # mit (siehe `_on_save_config`) - MainWindow uebernimmt sie hier als
-        # neue aktive Konfiguration (siehe `_trigger_config`).
+        # The loaded configuration brings its own trigger configuration
+        # along (see `_on_save_config`) - MainWindow adopts it here as the
+        # new active configuration (see `_trigger_config`).
         self._trigger_config = config.trigger
         self._status_label.setText(t("status_config_loaded", filename=file_path.name))
 
     def _on_load_measurement(self) -> None:
-        """Lässt den Nutzer eine abgeschlossene Messung auswählen und
-        springt bei Auswahl direkt in den Analyse-Tab (siehe
-        `AnalysisView.prompt_and_load_file` - ehemals ein Button direkt in
-        der Analyse-Ansicht, jetzt aus jeder Ansicht heraus erreichbar).
+        """Lets the user select a completed measurement and, on selection,
+        jumps directly into the analysis tab (see
+        `AnalysisView.prompt_and_load_file` - formerly a button directly
+        in the analysis view, now reachable from any view).
         """
         if self._analysis_view.prompt_and_load_file():
             self._set_nav_index(_VIEW_ANALYSIS)
@@ -632,18 +636,19 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, row: int) -> None:
         self._workspace.setCurrentIndex(min(row, _VIEW_ANALYSIS))
-        # Live View schon beim Wechsel dorthin mit den aktuell im Setup
-        # konfigurierten Kanälen "vorbelegen" (Plot-Fenster stehen dann
-        # schon bereit, statt erst nach dem Messstart) - nur ohne laufende
-        # Messung, siehe `LiveView.preview_channels`. Funktioniert
-        # ausdrücklich AUCH für Kanäle ohne zugewiesenen Hardwarekanal
-        # (noch keine Hardware angeschlossen).
+        # Pre-populate the live view with the channels currently
+        # configured in Setup as soon as we switch there (the plot
+        # windows are then already in place instead of only appearing
+        # after measurement start) - only without a running measurement,
+        # see `LiveView.preview_channels`. This explicitly also works for
+        # channels without an assigned hardware channel (no hardware
+        # connected yet).
         if row == _VIEW_LIVE and not self._controller.is_running:
             channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
             self._live_view.preview_channels(channels)
 
     # ------------------------------------------------------------------ #
-    # Speicherort
+    # Storage location
     # ------------------------------------------------------------------ #
 
     def _on_choose_storage_path(self) -> None:
@@ -656,24 +661,25 @@ class MainWindow(QMainWindow):
         self._setup_view.set_storage_path(str(self._storage_path))
 
     def _update_storage_status(self) -> None:
-        # Speicherort-Anzeige in Statusleiste entfernt; wird nur noch in Setup-Ansicht angezeigt
+        # Storage location display in the status bar removed; now only shown in the setup view
         pass
 
     # ------------------------------------------------------------------ #
-    # Hardware / Messung
+    # Hardware / measurement
     # ------------------------------------------------------------------ #
 
     def _on_discover_hardware(self) -> None:
-        """Startet die Geräteerkennung im Hintergrund (siehe
+        """Starts device discovery in the background (see
         `gui/workers.py::BackgroundWorker`).
 
-        `nidaqmx.system.System.local()` plus Kanal-Iteration je Gerät
-        (`hardware/nidaq_device.py::discover_devices`) kann bei mehreren
-        Chassis/Modulen oder Treiber-Timeouts spürbar dauern - lief
-        vorher synchron im GUI-Thread und blockierte dabei auch den
-        automatischen Erkennungslauf beim Programmstart (siehe `__init__`).
+        `nidaqmx.system.System.local()` plus channel iteration per device
+        (`hardware/nidaq_device.py::discover_devices`) can take a
+        noticeable amount of time with multiple chassis/modules or driver
+        timeouts - it previously ran synchronously on the GUI thread and
+        in doing so also blocked the automatic discovery run at program
+        startup (see `__init__`).
         """
-        if self._discovery_worker is not None:  # bereits eine Anfrage aktiv
+        if self._discovery_worker is not None:  # a request is already in progress
             return
         self._setup_view.set_discovery_in_progress(True)
         worker = BackgroundWorker(self._controller.discover_hardware)
@@ -688,16 +694,16 @@ class MainWindow(QMainWindow):
         self._discovery_worker = None
         self._setup_view.set_discovery_in_progress(False)
         self._setup_view.set_discovered_devices(devices)
-        # Nur Geräte MIT Analogeingangs-Kanälen zählen - `System.local().devices`
-        # liefert sonst auch reine Chassis-Einträge ohne eigene Kanäle
-        # (z. B. "cDAQ9185-0217ED5E" zusätzlich zu dessen Modulen
-        # "...Mod1"/"...Mod2") mit, was die Anzahl gegenüber der tatsächlich
-        # nutzbaren Hardware künstlich aufbläht. Bewusst ENGER als der
-        # Filter in `SetupView.set_discovered_devices` (der zusätzlich
-        # `has_any_channels` zulässt, um auch nicht unterstützte
-        # Nicht-AI-Module wie das NI9263 anzuzeigen/zu melden) - hier
-        # zählt explizit nur, was diese App tatsächlich als Kanal
-        # konfigurieren kann.
+        # Only count devices WITH analog input channels -
+        # `System.local().devices` otherwise also includes pure chassis
+        # entries without their own channels (e.g. "cDAQ9185-0217ED5E" in
+        # addition to its modules "...Mod1"/"...Mod2"), which artificially
+        # inflates the count relative to the hardware actually usable.
+        # Deliberately NARROWER than the filter in
+        # `SetupView.set_discovered_devices` (which additionally allows
+        # `has_any_channels`, to also show/report unsupported non-AI
+        # modules like the NI9263) - here, only what this app can
+        # actually configure as a channel is counted.
         usable_devices = [d for d in devices if d.num_channels > 0]
         self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
 
@@ -706,34 +712,34 @@ class MainWindow(QMainWindow):
         self._setup_view.set_discovery_in_progress(False)
         logger.error("Geräteerkennung fehlgeschlagen: %s", message)
         self._status_label.setText(t("device_discovery_failed"))
-        # Ursache (z. B. "NI-DAQmx-Treiber nicht installiert") sichtbar im
-        # Gerätebrowser selbst, nicht nur in Statusleiste/Log - dort schaut
-        # der Nutzer als nächstes hin.
+        # Cause (e.g. "NI-DAQmx driver not installed") visible in the
+        # device browser itself, not just in the status bar/log - that's
+        # where the user looks next.
         self._setup_view.show_discovery_error(message)
 
     def _on_open_ni_max(self) -> None:
-        """Öffnet NI-MAX (Measurement & Automation Explorer) als separates
-        Programm (siehe `hardware/nidaq_device.py::open_ni_max`)."""
+        """Opens NI-MAX (Measurement & Automation Explorer) as a separate
+        program (see `hardware/nidaq_device.py::open_ni_max`)."""
         try:
             self._controller.open_ni_max()
         except Exception as exc:
             QMessageBox.warning(self, t("error"), f"{t('ni_max_open_failed')}:\n{exc}")
 
     def _forget_background_worker(self, worker: BackgroundWorker) -> None:
-        """Entfernt eine abgeschlossene `BackgroundWorker`-Referenz, damit
-        `_background_workers` bei langer Programmlaufzeit nicht unbegrenzt
-        wächst."""
+        """Removes a finished `BackgroundWorker` reference so that
+        `_background_workers` does not grow unbounded over a long program
+        runtime."""
         if worker in self._background_workers:
             self._background_workers.remove(worker)
         worker.deleteLater()
 
     def _on_start_measurement(self, config: MeasurementConfig) -> None:
         requested_measurement_name = config.name
-        # Trigger-Konfiguration gehoert seit der Verallgemeinerung auf
-        # Start UND Stopp `MainWindow` selbst (siehe `TriggerSettingsDialog`)
-        # - `SetupView.build_current_config()` liefert nur noch eine leere
-        # Default-`TriggerConfig()`, hier wird die tatsaechlich aktive
-        # Konfiguration eingespeist.
+        # Since being generalized to start AND stop, the trigger
+        # configuration belongs to `MainWindow` itself (see
+        # `TriggerSettingsDialog`) - `SetupView.build_current_config()`
+        # now only returns an empty default `TriggerConfig()`, here the
+        # actually active configuration is fed in.
         config.trigger = self._trigger_config
 
         if config.save_to_disk:
@@ -761,10 +767,10 @@ class MainWindow(QMainWindow):
                 config.name = resolved_name
 
         try:
-            # Die zuletzt erkannte Geräteliste wiederverwenden statt bei
-            # jedem Messstart erneut zu erkennen (siehe
-            # `SetupView.get_discovered_devices`) - spart die bei mehreren
-            # Chassis/Modulen spürbar langsame Rediscovery.
+            # Reuse the most recently discovered device list instead of
+            # rediscovering on every measurement start (see
+            # `SetupView.get_discovered_devices`) - saves the noticeably
+            # slow rediscovery with multiple chassis/modules.
             session = self._controller.start_measurement(
                 config, discovered_devices=self._setup_view.get_discovered_devices()
             )
@@ -779,12 +785,11 @@ class MainWindow(QMainWindow):
             [c.hardware_channel for c in self._controller.active_channels],
         )
 
-        # Tatsaechliche Tick-Rate des Ring Buffers (= schnellste
-        # Ratengruppe, siehe data/models.py::resolve_rate_groups) statt
-        # der rohen Zielrate - weicht nur ab, wenn z. B. ein NI9210 eine
-        # eigene Gruppe erzwingt hat. StorageWriter/LiveView muessen die
-        # ECHTE Tick-Rate kennen, sonst waere die gespeicherte
-        # time_s-Spalte falsch skaliert.
+        # Actual tick rate of the ring buffer (= fastest rate group, see
+        # data/models.py::resolve_rate_groups) instead of the raw target
+        # rate - only differs if e.g. an NI9210 forced its own group.
+        # StorageWriter/LiveView must know the REAL tick rate, otherwise
+        # the stored time_s column would be scaled incorrectly.
         rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
         effective_tick_rate_hz = max(
             (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
@@ -804,8 +809,8 @@ class MainWindow(QMainWindow):
         self._live_view.set_start_enabled(False)
 
         if config.trigger.start.kind == TriggerKind.NONE:
-            # Manueller Start: StorageWriter (falls gewuenscht) wird SOFORT
-            # angelegt und gestartet (bisheriges Verhalten unveraendert).
+            # Manual start: StorageWriter (if desired) is created and
+            # started IMMEDIATELY (previous behavior unchanged).
             if config.save_to_disk:
                 ring_buffer = self._controller.get_ring_buffer()
                 extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
@@ -828,20 +833,20 @@ class MainWindow(QMainWindow):
                 trigger_config=config.trigger,
                 rate_groups=rate_groups,
             )
-            # Nullpunkt fuer ein evtl. konfiguriertes Aufnahme-Limit UND
-            # Reset des Stopp-Trigger-Flankendetektors (siehe
-            # `gui/live_view.py::mark_recording_started`) - MUSS auch hier
-            # aufgerufen werden, nicht nur bei einem Start-Trigger.
+            # Zero point for a possibly configured recording limit AND
+            # reset of the stop-trigger edge detector (see
+            # `gui/live_view.py::mark_recording_started`) - MUST be called
+            # here too, not only for a start trigger.
             self._live_view.mark_recording_started(0)
             self._maybe_start_stop_listener(config)
             self._set_nav_index(_VIEW_LIVE)
             self._status_label.setText(t("measurement_running_named", name=config.name))
             return
 
-        # Schwellwert/Seriell START-Trigger: Hardware-Erfassung + Anzeige
-        # starten sofort (Vorlauf-Pufferung, siehe
-        # `data/models.py::TriggerConfig`), der StorageWriter wird ERST bei
-        # `_on_trigger_fired` angelegt.
+        # Threshold/serial START trigger: hardware acquisition + display
+        # start immediately (pre-roll buffering, see
+        # `data/models.py::TriggerConfig`), the StorageWriter is only
+        # created in `_on_trigger_fired`.
         self._recording_started = False
         self._storage_writer = None
         self._live_view.start_display(
@@ -868,14 +873,13 @@ class MainWindow(QMainWindow):
         self._status_label.setText(t("measurement_armed_status", name=config.name))
 
     def _maybe_start_stop_listener(self, config: MeasurementConfig) -> None:
-        """Startet den seriellen STOPP-Trigger-Lauscher, falls konfiguriert
-        (siehe `TriggerConfig.stop`) - aufgerufen direkt NACHDEM die
-        Aufzeichnung tatsaechlich begonnen hat (`mark_recording_started`),
-        unabhaengig davon ob der Start manuell oder getriggert erfolgte
-        (siehe manueller Zweig oben bzw. `_on_trigger_fired`). Ein
-        Schwellwert-Stopp-Trigger braucht keinen eigenen Lauscher - der
-        wird bereits unabhaengig ueber
-        `gui/live_view.py::_check_stop_threshold_trigger` ueberwacht."""
+        """Starts the serial STOP-trigger listener, if configured (see
+        `TriggerConfig.stop`) - called right AFTER recording has actually
+        started (`mark_recording_started`), regardless of whether the
+        start was manual or triggered (see the manual branch above and
+        `_on_trigger_fired`). A threshold stop trigger doesn't need its
+        own listener - it is already monitored independently via
+        `gui/live_view.py::_check_stop_threshold_trigger`."""
         if config.trigger.stop.kind != TriggerKind.SERIAL:
             return
         listener = SerialTriggerListener(
@@ -889,20 +893,20 @@ class MainWindow(QMainWindow):
         listener.start()
 
     def _on_trigger_fired(self) -> None:
-        """Ein scharf geschalteter START-Trigger hat ausgeloest (siehe
-        `gui/live_view.py::LiveView.trigger_fired` bzw.
+        """An armed START trigger has fired (see
+        `gui/live_view.py::LiveView.trigger_fired` and
         `gui/serial_trigger.py::SerialTriggerListener.message_matched`) -
-        legt jetzt (erst jetzt!) den StorageWriter an, ggf. mit
-        rueckwirkendem Vorlauf (Schwellwert-Trigger, siehe
+        only now (not before!) creates the StorageWriter, possibly with a
+        retroactive pre-roll (threshold trigger, see
         `core/ringbuffer.py::RingBuffer.register_reader`)."""
         session = self._controller.current_session
         if session is None or self._recording_started:
             return
         config = session.config
-        # Tatsaechliche Tick-Rate des Ring Buffers (siehe Kommentar in
-        # `_on_start_measurement`) - der Vorlauf-Sample-Versatz UND die
-        # gespeicherte time_s-Spalte muessen sich daran orientieren, nicht
-        # an der rohen Zielrate.
+        # Actual tick rate of the ring buffer (see comment in
+        # `_on_start_measurement`) - the pre-roll sample offset AND the
+        # stored time_s column must be based on this, not on the raw
+        # target rate.
         rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
         effective_tick_rate_hz = max(
             (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
@@ -915,10 +919,10 @@ class MainWindow(QMainWindow):
         total_now = self._controller.total_samples_acquired
         ring_buffer = self._controller.get_ring_buffer()
         capacity = ring_buffer.capacity if ring_buffer is not None else 0
-        # Gleiche Clamp-Formel wie `RingBuffer.register_reader` - der
-        # tatsaechliche Nullpunkt fuer das Aufnahme-Limit (siehe
-        # `gui/live_view.py::mark_recording_started`) muss exakt dem
-        # spaeter vom StorageWriter registrierten Reader entsprechen.
+        # Same clamp formula as `RingBuffer.register_reader` - the actual
+        # zero point for the recording limit (see
+        # `gui/live_view.py::mark_recording_started`) must exactly match
+        # the reader later registered by the StorageWriter.
         oldest_valid = max(0, total_now - capacity)
         baseline_samples = max(oldest_valid, total_now - back_samples)
 
@@ -943,11 +947,11 @@ class MainWindow(QMainWindow):
         self._live_view.mark_recording_started(baseline_samples)
         self._recording_started = True
 
-        # WICHTIG: `.stop()` VOR `.deleteLater()` - garantiert, dass der
-        # COM-Port tatsaechlich geschlossen ist, BEVOR ein evtl.
-        # konfigurierter Stopp-Trigger (siehe `_maybe_start_stop_listener`)
-        # denselben Port erneut oeffnet (sonst moeglicher Ressourcen-
-        # Konflikt, falls Start- und Stopp-Trigger denselben Port nutzen).
+        # IMPORTANT: `.stop()` BEFORE `.deleteLater()` - guarantees that
+        # the COM port is actually closed BEFORE a possibly configured
+        # stop trigger (see `_maybe_start_stop_listener`) reopens the same
+        # port (otherwise a possible resource conflict if the start and
+        # stop trigger use the same port).
         if self._start_serial_listener is not None:
             self._start_serial_listener.stop()
             self._start_serial_listener.deleteLater()
@@ -958,12 +962,12 @@ class MainWindow(QMainWindow):
         self._status_label.setText(t("measurement_running_named", name=config.name))
 
     def _on_trigger_connection_failed(self, message: str) -> None:
-        """Der serielle START-Trigger konnte den konfigurierten COM-Port
-        nicht oeffnen (siehe `gui/serial_trigger.py::SerialTriggerListener`)
-        - sauberes Disarmieren statt eine hilflos wartende Messung. Anders
-        als beim Stopp-Trigger (siehe `_on_stop_trigger_connection_failed`)
-        existiert hier noch KEINE laufende Aufzeichnung - ein voller
-        Abbruch ist daher unproblematisch."""
+        """The serial START trigger could not open the configured COM
+        port (see `gui/serial_trigger.py::SerialTriggerListener`) - clean
+        disarming instead of a helplessly waiting measurement. Unlike the
+        stop trigger (see `_on_stop_trigger_connection_failed`), there is
+        NO recording running yet at this point - a full abort is
+        therefore unproblematic."""
         logger.error("Serieller Start-Trigger fehlgeschlagen: %s", message)
         self._live_view.exit_armed_state()
         self._live_view.stop_display()
@@ -975,8 +979,9 @@ class MainWindow(QMainWindow):
         self._recording_started = False
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
-        # Scharf-Button darf nicht gedrueckt bleiben - es wird nichts mehr
-        # automatisch neu versucht (ein kaputter Port bliebe sonst kaputt).
+        # The arm button must not stay pressed - nothing is retried
+        # automatically anymore (a broken port would otherwise stay
+        # broken).
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
@@ -985,13 +990,12 @@ class MainWindow(QMainWindow):
         self._set_nav_index(_VIEW_SETUP)
 
     def _on_stop_trigger_connection_failed(self, message: str) -> None:
-        """Der serielle STOPP-Trigger konnte den konfigurierten COM-Port
-        nicht oeffnen - anders als beim Start-Trigger
-        (`_on_trigger_connection_failed`) darf das die laufende
-        Aufzeichnung NICHT abbrechen: zu diesem Zeitpunkt werden ggf.
-        schon echte Messdaten geschrieben. Nur der Stopp-Lauscher wird
-        aufgeraeumt, die Messung laeuft unveraendert weiter (manueller
-        Stopp/Aufnahme-Limit funktionieren unabhaengig davon weiter)."""
+        """The serial STOP trigger could not open the configured COM port
+        - unlike the start trigger (`_on_trigger_connection_failed`), this
+        must NOT abort the running recording: real measurement data may
+        already be being written at this point. Only the stop listener is
+        cleaned up, the measurement continues unchanged (manual
+        stop/recording limit keep working independently of this)."""
         logger.error("Serieller Stopp-Trigger fehlgeschlagen: %s", message)
         if self._stop_serial_listener is not None:
             self._stop_serial_listener.stop()
@@ -1010,41 +1014,42 @@ class MainWindow(QMainWindow):
         self._on_start_measurement(config)
 
     def _on_trigger_arm_toggled(self, checked: bool) -> None:
-        """Reagiert auf den Scharf-Button (Setup- UND Live-Ansicht besitzen
-        je ein eigenes, aber gleichbedeutendes Exemplar - siehe
+        """Reacts to the arm button (the setup AND live view each own
+        their own but equivalent instance - see
         `gui/setup_view.py`/`gui/live_view.py::_trigger_arm_button`).
 
-        Scharf schalten (checked=True) startet SOFORT den ersten Zyklus UND
-        setzt `TriggerConfig.auto_rearm`, sodass `_on_stop_measurement`
-        nach JEDEM Stopp (manuell, per Trigger oder Aufnahme-Limit)
-        automatisch neu startet - beide Buttons bleiben dabei die ganze
-        Zeit gedrückt, unabhängig davon wie oft der Zyklus zwischenzeitlich
-        automatisch durchläuft. Entschärfen (checked=False) beendet die
-        automatische Neubewaffnung UND eine gerade laufende/scharfe
-        Messung sofort - das ist der einzige Weg, den Zyklus wirklich zu
-        beenden (ein einzelner manueller Stopp reicht dafür bewusst NICHT,
-        siehe `_on_stop_measurement`).
+        Arming (checked=True) IMMEDIATELY starts the first cycle AND sets
+        `TriggerConfig.auto_rearm`, so that `_on_stop_measurement`
+        automatically restarts after EVERY stop (manual, via trigger, or
+        recording limit) - both buttons stay pressed the whole time,
+        regardless of how many times the cycle runs through automatically
+        in between. Disarming (checked=False) ends the automatic re-arm
+        AND a currently running/armed measurement immediately - this is
+        the only way to actually end the cycle (a single manual stop is
+        deliberately NOT enough for that, see `_on_stop_measurement`).
         """
         self._trigger_config.auto_rearm = checked
-        # Beide Buttons synchron halten, egal welcher den Klick ausgelöst
-        # hat - `set_trigger_armed()` blockt dabei `toggled`, damit kein
-        # Rueckkopplungs-Loop entsteht (siehe dortige Doku).
+        # Keep both buttons in sync, regardless of which one triggered the
+        # click - `set_trigger_armed()` blocks `toggled` here, so no
+        # feedback loop is created (see the docs there).
         self._setup_view.set_trigger_armed(checked)
         self._live_view.set_trigger_armed(checked)
 
         if checked:
             config = self._setup_view.build_current_config()
             if config is None:
-                # Ungueltige Konfiguration (z. B. kein aktiver Kanal) -
-                # Button darf nicht gedrueckt bleiben, es passiert ja nichts.
+                # Invalid configuration (e.g. no active channel) - the
+                # button must not stay pressed since nothing happens
+                # anyway.
                 self._setup_view.set_trigger_armed(False)
                 self._live_view.set_trigger_armed(False)
                 self._trigger_config.auto_rearm = False
                 return
             self._on_start_measurement(config)
             if not self._controller.is_running:
-                # Start ist synchron fehlgeschlagen (siehe Fehlerbehandlung
-                # in `_on_start_measurement`) - Button nicht gedrueckt lassen.
+                # Start failed synchronously (see error handling in
+                # `_on_start_measurement`) - don't leave the button
+                # pressed.
                 self._setup_view.set_trigger_armed(False)
                 self._live_view.set_trigger_armed(False)
                 self._trigger_config.auto_rearm = False
@@ -1057,19 +1062,18 @@ class MainWindow(QMainWindow):
         storage_format: StorageFormat,
         naming: NamingScheme,
     ) -> str | None:
-        """Baut aus dem eingegebenen Messnamen den tatsächlich zu
-        verwendenden Datei-/Messnamen gemäß `naming` auf.
+        """Builds the file/measurement name actually to be used from the
+        entered measurement name, according to `naming`.
 
-        Reihenfolge der optionalen Bestandteile: Name_Datum_Uhrzeit_Nummer.
-        Ist kein Nummernsuffix aktiv und der aufgelöste Name existiert
-        bereits, wird die Messung mit einer Fehlermeldung abgebrochen -
-        ein automatisches Überschreiben vorhandener Messdaten findet
-        bewusst nicht statt.
+        Order of the optional components: Name_Date_Time_Number. If no
+        number suffix is active and the resolved name already exists, the
+        measurement is aborted with an error message - automatic
+        overwriting of existing measurement data deliberately does not
+        happen.
 
         Returns:
-            Den aufzulösenden Namen, oder None, falls die Messung wegen
-            eines Namenskonflikts ohne automatische Auflösung abgebrochen
-            werden soll.
+            The resolved name, or None if the measurement should be
+            aborted due to a name conflict without automatic resolution.
         """
         if self._storage_path is None:
             return base_name
@@ -1111,11 +1115,10 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_stop_measurement(self) -> None:
-        # Noch laufende serielle Trigger-Lauscher (Start UND Stopp) muessen
-        # VOR dem eigentlichen Stoppen beendet werden (z. B. Abbruch
-        # waehrend der Scharf-Phase, oder wenn der Stopp-Trigger selbst
-        # diesen Aufruf ausgeloest hat) - sonst blieben Hintergrund-Threads
-        # verwaist.
+        # Still-running serial trigger listeners (start AND stop) must be
+        # stopped BEFORE the actual stop (e.g. abort during the armed
+        # phase, or when the stop trigger itself triggered this call) -
+        # otherwise background threads would be left orphaned.
         if self._start_serial_listener is not None:
             self._start_serial_listener.stop()
             self._start_serial_listener.deleteLater()
@@ -1125,10 +1128,10 @@ class MainWindow(QMainWindow):
             self._stop_serial_listener.deleteLater()
             self._stop_serial_listener = None
 
-        # WICHTIG: active_device_infos VOR stop_measurement() auslesen -
-        # der Controller leert seine interne Geräteliste beim Stoppen,
-        # danach ausgelesen wäre die Liste immer leer und die
-        # Metadaten-Datei würde nie echte Hardwareinformationen enthalten.
+        # IMPORTANT: read active_device_infos BEFORE stop_measurement() -
+        # the controller clears its internal device list when stopping,
+        # if read afterwards the list would always be empty and the
+        # metadata file would never contain real hardware information.
         device_infos = self._controller.active_device_infos
         session = self._controller.stop_measurement()
         self._live_view.stop_display()
@@ -1137,11 +1140,10 @@ class MainWindow(QMainWindow):
             self._storage_writer.stop()
             self._storage_writer = None
 
-        # Schreibe Metadaten nur, wenn die Messung tatsächlich gespeichert
-        # UND tatsächlich aufgezeichnet wurde - bei einem Abbruch waehrend
-        # der Scharf-Phase (Trigger nie ausgeloest, siehe
-        # `_recording_started`) existiert gar kein StorageWriter/keine
-        # Datendatei, eine Metadaten-Datei dafuer waere irrefuehrend.
+        # Only write metadata if the measurement was actually stored AND
+        # actually recorded - on an abort during the armed phase (trigger
+        # never fired, see `_recording_started`) no StorageWriter/data
+        # file exists at all, a metadata file for it would be misleading.
         if (
             session is not None
             and self._storage_path is not None
@@ -1150,10 +1152,10 @@ class MainWindow(QMainWindow):
         ):
             self._finalize_measurement(session, device_infos)
 
-        # Status IMMER aktualisieren, nicht nur wenn tatsächlich gespeichert
-        # wurde (siehe `_finalize_measurement`) - sonst bliebe die
-        # Statusleiste bei "Nur Live anzeigen" (kein Speichern) dauerhaft
-        # auf "Messung läuft" stehen, obwohl die Messung längst gestoppt ist.
+        # ALWAYS update status, not only when actually stored (see
+        # `_finalize_measurement`) - otherwise, with "live view only" (no
+        # storage), the status bar would permanently stay on "measurement
+        # running" even though the measurement has long since stopped.
         if session is not None:
             self._status_label.setText(
                 t(
@@ -1169,15 +1171,14 @@ class MainWindow(QMainWindow):
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
 
-        # Automatische Neubewaffnung (siehe `TriggerConfig.auto_rearm`):
-        # OHNE das waere ein Start-/Stopp-Trigger kein echter Trigger,
-        # sondern nur eine einmalige Bedingung - nach JEDEM Stopp (egal ob
-        # manuell, per Trigger oder Aufnahme-Limit; dieser Codepfad ist der
-        # gemeinsame Endpunkt aller drei, siehe Aufrufstellen) sofort wieder
-        # scharf schalten, statt auf einen erneuten manuellen Klick auf
-        # "Messung starten" zu warten. Nur relevant, wenn ueberhaupt ein
-        # Trigger konfiguriert ist (sonst waere "neu scharf schalten"
-        # bedeutungslos) - siehe auch
+        # Automatic re-arm (see `TriggerConfig.auto_rearm`): WITHOUT this
+        # a start/stop trigger would not be a real trigger, just a
+        # one-time condition - re-arm immediately after EVERY stop
+        # (whether manual, via trigger, or recording limit; this code
+        # path is the common endpoint of all three, see call sites)
+        # instead of waiting for another manual click on "start
+        # measurement". Only relevant if a trigger is configured at all
+        # (otherwise "re-arm" would be meaningless) - see also
         # `gui/trigger_settings_dialog.py::_update_auto_rearm_visibility`.
         if not self._closing and self._trigger_config.auto_rearm and (
             self._trigger_config.start.kind != TriggerKind.NONE
@@ -1190,7 +1191,7 @@ class MainWindow(QMainWindow):
     def _finalize_measurement(
         self, session: MeasurementSession, device_infos: list[DeviceInfo]
     ) -> None:
-        """Schreibt Metadaten als JSON-Datei im gewählten Speicherordner."""
+        """Writes metadata as a JSON file in the chosen storage folder."""
         assert self._storage_path is not None
         try:
             metadata = build_measurement_metadata(session, device_infos)
@@ -1200,19 +1201,19 @@ class MainWindow(QMainWindow):
             logger.exception("Metadaten konnten nicht gespeichert werden")
 
     def _on_acquisition_error_gui(self, exc: Exception) -> None:
-        """Slot (GUI-Thread) für Fehler aus dem DAQ-Thread."""
+        """Slot (GUI thread) for errors from the DAQ thread."""
         self._live_view.stop_display()
         if self._storage_writer is not None:
             self._storage_writer.stop()
             self._storage_writer = None
-        # Controller hat die Hardware bereits aufgeräumt; hier nur noch
-        # den Zustand final synchronisieren (idempotent).
+        # The controller has already cleaned up the hardware; here only
+        # the state needs a final sync (idempotent).
         self._controller.stop_measurement()
         self._setup_view.set_start_enabled(True, "")
         self._live_view.set_start_enabled(True)
-        # Scharf-Button darf bei einem Hardware-Fehler nicht gedrueckt
-        # bleiben - sonst wuerde die (kaputte) Messung sofort wieder
-        # automatisch neu versucht.
+        # The arm button must not stay pressed after a hardware error -
+        # otherwise the (broken) measurement would immediately be
+        # automatically retried.
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
@@ -1225,7 +1226,7 @@ class MainWindow(QMainWindow):
         self._set_nav_index(_VIEW_SETUP)
 
     # ------------------------------------------------------------------ #
-    # Sonstiges
+    # Miscellaneous
     # ------------------------------------------------------------------ #
 
     def _on_about(self) -> None:
@@ -1234,35 +1235,33 @@ class MainWindow(QMainWindow):
     def _restore_window_geometry(self) -> None:
         geom = self._configuration_manager.settings.window
         self.resize(geom.width, geom.height)
-        # Nur uebernehmen, wenn die Position noch auf einem AKTUELL
-        # angeschlossenen Bildschirm liegt (siehe
-        # `gui/theme.py::is_position_on_screen`) - sonst z. B. nach dem
-        # Abstecken eines zweiten Monitors, auf dem das Fenster zuletzt
-        # stand, unerreichbar. Ohne `.move()` verwendet Qt/der Fenster-
-        # manager seine eigene Standardplatzierung auf dem verbliebenen
-        # (primaeren) Bildschirm.
+        # Only apply if the position is still on a CURRENTLY connected
+        # screen (see `gui/theme.py::is_position_on_screen`) - otherwise
+        # e.g. unreachable after unplugging a second monitor the window
+        # was last on. Without `.move()`, Qt/the window manager uses its
+        # own default placement on the remaining (primary) screen.
         center_x = geom.pos_x + geom.width // 2
         center_y = geom.pos_y + geom.height // 2
         if is_position_on_screen(center_x, center_y):
             self.move(geom.pos_x, geom.pos_y)
         if geom.maximized:
-            # Nur den Zustand vormerken; `main.py` zeigt das vollständig
-            # aufgebaute Fenster anschließend genau einmal an.
+            # Only note down the state; `main.py` then shows the fully
+            # constructed window exactly once.
             self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
 
     def _sync_popout_geometry_to_setup(self) -> None:
-        """Uebernimmt Position/Groesse aller aktuell offenen Kanal-Popout-
-        Fenster in die Setup-Kanaltabelle (siehe
+        """Applies the position/size of all currently open channel popout
+        windows to the setup channel table (see
         `LiveView.get_open_popout_geometries()`/
-        `SetupView.update_channel_display_setting`), damit sie beim
-        naechsten Speichern der Kanalkonfiguration erhalten bleiben.
+        `SetupView.update_channel_display_setting`), so they are preserved
+        the next time the channel configuration is saved.
 
-        Normalerweise reicht dafuer `core/controller.py`s automatisches
-        `save_channel_configuration()` bei JEDEM Messstart - eine waehrend
-        der laufenden (oder gerade beendeten) Messung verschobene Popout-
-        Position wuerde ohne diesen zusaetzlichen Schritt aber verloren
-        gehen, wenn die App direkt geschlossen oder die Konfiguration
-        explizit gespeichert wird, ohne zwischendurch erneut zu starten.
+        Normally, `core/controller.py`'s automatic
+        `save_channel_configuration()` on EVERY measurement start is
+        enough for this - but a popout position moved during a running
+        (or just-finished) measurement would be lost without this
+        additional step if the app is closed directly or the
+        configuration is explicitly saved without restarting in between.
         """
         for key, (x, y, width, height) in self._live_view.get_open_popout_geometries().items():
             self._setup_view.update_channel_display_setting(
@@ -1276,11 +1275,12 @@ class MainWindow(QMainWindow):
             )
 
     def closeEvent(self, event) -> None:
-        """Speichert Fenstergeometrie und stoppt eine ggf. laufende Messung."""
-        # MUSS vor `_on_stop_measurement()` gesetzt werden: sonst würde eine
-        # aktive automatische Neubewaffnung (`TriggerConfig.auto_rearm`)
-        # beim Schließen sofort eine neue Messung starten, während das
-        # Fenster gerade abgebaut wird (siehe dortige Prüfung).
+        """Saves window geometry and stops a measurement that may still
+        be running."""
+        # MUST be set before `_on_stop_measurement()`: otherwise an active
+        # automatic re-arm (`TriggerConfig.auto_rearm`) would immediately
+        # start a new measurement on close, while the window is currently
+        # being torn down (see the check there).
         self._closing = True
         self._sync_popout_geometry_to_setup()
         if self._controller.is_running:
@@ -1311,12 +1311,12 @@ class MainWindow(QMainWindow):
             pos_y=self.y(),
             maximized=self.isMaximized(),
         )
-        # Schreibt u. a. die soeben synchronisierte Popout-Geometrie auf
-        # die Platte (`last_channel_configuration.json`, siehe
-        # `_sync_popout_geometry_to_setup` oben) - sonst bliebe sie nur im
-        # Speicher und ginge beim Schließen verloren, da
-        # `save_channel_configuration()` sonst nur bei jedem Messstart
-        # aufgerufen wird (siehe `core/controller.py::start_measurement`).
+        # Writes, among other things, the just-synced popout geometry to
+        # disk (`last_channel_configuration.json`, see
+        # `_sync_popout_geometry_to_setup` above) - otherwise it would
+        # only stay in memory and be lost on close, since
+        # `save_channel_configuration()` is otherwise only called on every
+        # measurement start (see `core/controller.py::start_measurement`).
         self._configuration_manager.save_channel_configuration(
             self._setup_view.get_configured_channels()
         )

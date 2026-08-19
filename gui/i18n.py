@@ -1,21 +1,21 @@
 """
 gui/i18n.py
 
-Einfaches Internationalisierungs-System für Deutsch und Englisch.
+Simple internationalization system for German and English.
 
-Verwendung:
+Usage:
     from gui.i18n import t, connect_language_changed, set_language
 
-    set_language("de")  # oder "en"
+    set_language("de")  # or "en"
     label.setText(t("start_measurement"))
-    label.setText(t("devices_found", count=3))  # Interpolation via .format()
+    label.setText(t("devices_found", count=3))  # interpolation via .format()
 
-Live-Umschaltung:
-    Jede Ansicht registriert ihre eigene `retranslate_ui`-Methode über
-    `connect_language_changed(self.retranslate_ui)` (typischerweise am Ende
-    von `__init__`). `set_language()` benachrichtigt daraufhin alle
-    registrierten Ansichten, sodass ein Sprachwechsel sofort in der
-    laufenden App sichtbar wird - ohne Neustart.
+Live switching:
+    Each view registers its own `retranslate_ui` method via
+    `connect_language_changed(self.retranslate_ui)` (typically at the end
+    of `__init__`). `set_language()` then notifies all registered views,
+    so a language switch becomes visible in the running app immediately -
+    without a restart.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Callable, Optional
 
 _current_language = "de"
 
-# Übersetzungs-Dictionaries
+# Translation dictionaries
 _translations = {
     "de": {
         # Menu
@@ -355,7 +355,7 @@ _translations = {
         "cancel": "Abbrechen",
         "close_button": "Schließen",
 
-        # Sensor-Datenbank
+        # Sensor Database
         "sensor_database_dialog_title": "Sensor-Datenbank",
         "add_sensor_button": "Sensor hinzufügen",
         "remove_sensor_button": "Sensor entfernen",
@@ -399,7 +399,7 @@ _translations = {
         "searching_devices": "Suche läuft...",
         "device_discovery_failed": "Geräteerkennung fehlgeschlagen",
 
-        # Konfiguration speichern/laden (Datei-Menü)
+        # Saving/loading configuration (File menu)
         "status_config_saved": "Konfiguration gespeichert: {filename}",
         "status_config_loaded": "Konfiguration geladen: {filename}",
         "error_config_save_failed": "Konfiguration konnte nicht gespeichert werden:\n{path}",
@@ -419,7 +419,7 @@ _translations = {
             "Die Messung wurde aufgrund eines Hardwarefehlers beendet:\n{error}"
         ),
 
-        # Über
+        # About
         "window_title": "ezDAQ - Easy Data Acquisition",
         "about_title": "Über ezDAQ",
         "about_body": (
@@ -813,7 +813,7 @@ _translations = {
         "searching_devices": "Searching...",
         "device_discovery_failed": "Device discovery failed",
 
-        # Konfiguration speichern/laden (Datei-Menü)
+        # Saving/loading configuration (File menu)
         "status_config_saved": "Configuration saved: {filename}",
         "status_config_loaded": "Configuration loaded: {filename}",
         "error_config_save_failed": "Configuration could not be saved:\n{path}",
@@ -857,8 +857,8 @@ _translations = {
 
 
 def set_language(lang: str) -> None:
-    """Setzt die aktuelle Sprache auf 'de' oder 'en' und benachrichtigt
-    alle über `connect_language_changed` registrierten Ansichten."""
+    """Sets the current language to 'de' or 'en' and notifies all views
+    registered via `connect_language_changed`."""
     global _current_language
     if lang not in _translations or lang == _current_language:
         return
@@ -867,15 +867,15 @@ def set_language(lang: str) -> None:
 
 
 def get_language() -> str:
-    """Gibt die aktuelle Sprache zurück."""
+    """Returns the current language."""
     return _current_language
 
 
 def t(key: str, **kwargs) -> str:
-    """Übersetzt einen Schlüssel in die aktuelle Sprache.
+    """Translates a key into the current language.
 
-    Fallback auf den Schlüssel selbst, falls nicht gefunden. Optionale
-    kwargs werden per `str.format()` in das Template eingesetzt, z. B.
+    Falls back to the key itself if not found. Optional kwargs are
+    interpolated into the template via `str.format()`, e.g.
     `t("devices_found_count", count=3)`.
     """
     template = _translations.get(_current_language, {}).get(key, key)
@@ -888,15 +888,15 @@ def t(key: str, **kwargs) -> str:
 
 
 # ---------------------------------------------------------------------- #
-# Live-Retranslate-Signal
+# Live retranslate signal
 # ---------------------------------------------------------------------- #
 #
-# Lazy konstruiert: `gui/i18n.py` wird transitiv importiert, BEVOR
-# `QApplication` in main.py erzeugt wird (Importe von `gui.main_window`
-# laufen vor `QApplication(sys.argv)`). Ein QObject darf zu diesem
-# Zeitpunkt nicht instanziiert werden - daher Konstruktion erst beim
-# ersten echten Gebrauch (`set_language()`/`connect_language_changed()`),
-# beides passiert in der Praxis erst nach `QApplication`-Erzeugung.
+# Lazily constructed: `gui/i18n.py` gets transitively imported BEFORE
+# `QApplication` is created in main.py (imports of `gui.main_window` run
+# before `QApplication(sys.argv)`). A QObject must not be instantiated at
+# that point - hence construction only on first actual use
+# (`set_language()`/`connect_language_changed()`), both of which in
+# practice only happen after `QApplication` has been created.
 
 _signals: Optional["_I18nSignals"] = None
 
@@ -914,6 +914,6 @@ def _get_signals() -> "_I18nSignals":
 
 
 def connect_language_changed(slot: Callable[[], None]) -> None:
-    """Registriert `slot` (typischerweise `view.retranslate_ui`), der bei
-    jedem Sprachwechsel aufgerufen wird."""
+    """Registers `slot` (typically `view.retranslate_ui`), which is called
+    on every language change."""
     _get_signals().language_changed.connect(slot)

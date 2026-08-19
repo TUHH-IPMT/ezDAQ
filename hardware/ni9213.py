@@ -1,21 +1,20 @@
 """
 hardware/ni9213.py
 
-Konkrete Implementierung für das NI 9213 Modul (16-Kanal
-Thermoelement-Eingang, ±78 mV, mit eingebauter
-Kaltstellenkompensation/CJC).
+Concrete implementation for the NI 9213 module (16-channel
+thermocouple input, ±78 mV, with built-in
+cold-junction compensation/CJC).
 
-Erbt die Kanalerzeugung von `hardware/ni9210.py::NI9210` - beide Module
-nutzen dafür identisch `add_ai_thrmcpl_chan` und unterscheiden sich
-softwareseitig nur durch Modultyp/Kanalzahl (die Kanalzahl ergibt sich
-bereits automatisch aus den von der Hardware gemeldeten physischen
-Kanälen, siehe `hardware/nidaq_device.py::discover_devices`).
+Inherits channel creation from `hardware/ni9210.py::NI9210` - both modules
+use `add_ai_thrmcpl_chan` identically for this and differ in software
+only by module type/channel count (the channel count already results
+automatically from the physical channels reported by the hardware, see
+`hardware/nidaq_device.py::discover_devices`).
 
-Eine echte Abweichung gibt es beim ADC-Timing-Modus: NUR das NI9213
-unterstützt hardwareseitig einen konfigurierbaren Kompromiss zwischen
-Geschwindigkeit und effektiver Auflösung (das NI9210 hat eine feste
-Abtastrate von 14 S/s ohne diese Option) - daher hier zusätzlich zur
-geerbten Kanalerzeugung gesetzt.
+There is one real difference in the ADC timing mode: ONLY the NI9213
+supports a hardware-configurable trade-off between speed and effective
+resolution (the NI9210 has a fixed sample rate of 14 S/s with no such
+option) - hence set here in addition to the inherited channel creation.
 """
 
 from __future__ import annotations
@@ -34,19 +33,19 @@ logger = logging.getLogger(__name__)
 
 
 class NI9213(NI9210):
-    """NI 9213: 16-Kanal Thermoelement-Eingang (J/K/T/E/N/R/S/B), ±78 mV.
+    """NI 9213: 16-channel thermocouple input (J/K/T/E/N/R/S/B), ±78 mV.
 
-    Siehe `NI9210` für Details zur Kanalerzeugung/Kaltstellenkompensation -
-    zusätzlich wird hier `channel.adc_timing_mode` gesetzt (siehe
-    `data/models.py::ADC_TIMING_MODES`).
+    See `NI9210` for details on channel creation/cold-junction
+    compensation - additionally, `channel.adc_timing_mode` is set here
+    (see `data/models.py::ADC_TIMING_MODES`).
 
-    WICHTIG: nidaqmx verlangt denselben ADC-Timing-Modus für ALLE Kanäle
-    desselben physischen Moduls ("You must use the same ADC timing mode
-    for all channels on a device") - die Kanaltabelle
-    (`gui/widgets/channel_table.py`) überträgt eine Änderung deshalb
-    automatisch auf alle Kanäle desselben Moduls. Hier selbst wird das
-    NICHT geprüft/erzwungen; bei widersprüchlichen Werten meldet der
-    NI-DAQmx-Treiber einen Fehler beim Konfigurieren des Tasks.
+    IMPORTANT: nidaqmx requires the same ADC timing mode for ALL channels
+    of the same physical module ("You must use the same ADC timing mode
+    for all channels on a device") - the channel table
+    (`gui/widgets/channel_table.py`) therefore automatically propagates a
+    change to all channels of the same module. This is NOT checked/
+    enforced here itself; for conflicting values the NI-DAQmx driver
+    reports an error when configuring the task.
     """
 
     _MODULE_TYPE = ModuleType.NI9213

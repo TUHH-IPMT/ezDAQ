@@ -1,4 +1,4 @@
-"""Gemeinsame Dialog-Helfer für die GUI."""
+"""Shared dialog helpers for the GUI."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from gui.i18n import t
 
 
 def confirm_delete(parent: QWidget, body: str) -> bool:
-    """Fragt einheitlich nach der Bestätigung einer Löschaktion."""
+    """Uniformly asks for confirmation of a delete action."""
     box = QMessageBox(parent)
     box.setIcon(QMessageBox.Icon.Question)
     box.setWindowTitle(t("confirm_delete_title"))

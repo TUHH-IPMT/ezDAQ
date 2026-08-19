@@ -1,21 +1,20 @@
 """
 gui/sensor_database_dialog.py
 
-Verwaltungsdialog für den Sensor-Katalog (siehe data/sensor_models.py,
-config/sensor_database.py) - reine CRUD-Oberfläche (Sensoren, Achsen,
-Messbereich-Varianten anlegen/bearbeiten/löschen).
+Management dialog for the sensor catalog (see data/sensor_models.py,
+config/sensor_database.py) - a pure CRUD interface (create/edit/delete
+sensors, axes, measurement-range variants).
 
-Bewusst KEINE automatische Übernahme-Funktion: `ChannelParameterDialog`
-(siehe `gui/widgets/channel_table.py`) bietet nur einen Schnellzugriff-
-Button, der GENAU DIESEN Dialog öffnet - der Nutzer sucht den passenden
-Wert manuell heraus und trägt ihn per Copy&Paste selbst in die
-Kanaleinstellungen ein. Dieser Dialog dient ausschließlich der Pflege
-des Katalogs selbst.
+Deliberately NO automatic apply function: `ChannelParameterDialog`
+(see `gui/widgets/channel_table.py`) only offers a quick-access button
+that opens EXACTLY THIS dialog - the user looks up the appropriate
+value manually and copy-pastes it into the channel settings themselves.
+This dialog serves solely to maintain the catalog itself.
 
-Speicherverhalten: Jede Änderung (Textfeld, Tabellenzelle, Achse/Variante
-hinzufügen/entfernen) wird SOFORT über den `SensorDatabaseManager`
-persistiert - kein OK/Abbrechen, der Katalog verhält sich wie eine kleine,
-dauerhaft gepflegte Datenbank statt wie ein Formular.
+Save behavior: every change (text field, table cell, adding/removing an
+axis/variant) is persisted IMMEDIATELY via `SensorDatabaseManager` - no
+OK/Cancel; the catalog behaves like a small, continuously maintained
+database rather than a form.
 """
 
 from __future__ import annotations
@@ -48,20 +47,20 @@ from gui.widgets.channel_table import SIGNAL_TYPE_LABEL_KEYS
 from gui.widgets.spinbox import format_optional_float, parse_optional_float
 
 _ROLE_SENSOR_ID = int(Qt.ItemDataRole.UserRole)
-# Markiert die dekorative "Kopfzeile" unter einer Achse (siehe
-# `_build_variant_header_item`) - unterscheidet sie beim Lesen/Entfernen
-# von echten Messbereich-Varianten.
+# Marks the decorative "header row" beneath an axis (see
+# `_build_variant_header_item`) - distinguishes it from actual
+# measurement-range variants when reading/removing.
 _ROLE_VARIANT_HEADER = int(Qt.ItemDataRole.UserRole) + 1
 
-# Spaltenindizes des Achsen-/Varianten-Baums. Achsen-Zeilen befuellen
-# LABEL/SIGNAL_TYPE, Varianten-Zeilen (Kinder) LABEL (als freier
-# Messbereichs-Text, z. B. "±50" - bewusst KEINE separaten numerischen
-# Min/Max-Felder) /RANGE_UNIT/SENSITIVITY/SENSITIVITY_UNIT - siehe
-# `_add_axis_item`/`_build_range_item`. Spalte 1 hat je nach Zeilentyp
-# bewusst eine ANDERE Bedeutung (Signaltyp bei der Achse, Messbereich-
-# Einheit bei der Variante) - dank der exklusiven Kopfzeile pro Ebene
-# (siehe `_build_variant_header_item`) bleibt trotzdem an Ort und Stelle
-# klar, was gerade gemeint ist.
+# Column indices of the axis/variant tree. Axis rows populate
+# LABEL/SIGNAL_TYPE, variant rows (children) populate LABEL (as free-form
+# range text, e.g. "±50" - deliberately NO separate numeric min/max
+# fields) /RANGE_UNIT/SENSITIVITY/SENSITIVITY_UNIT - see
+# `_add_axis_item`/`_build_range_item`. Column 1 deliberately has a
+# DIFFERENT meaning depending on the row type (signal type on the axis,
+# range unit on the variant) - thanks to the exclusive header row per
+# level (see `_build_variant_header_item`), it nonetheless stays clear
+# in place what is meant at any given point.
 _COL_LABEL = 0
 _COL_SIGNAL_TYPE = 1
 _COL_RANGE_UNIT = 1
@@ -69,12 +68,12 @@ _COL_SENSITIVITY = 2
 _COL_SENSITIVITY_UNIT = 3
 
 class SensorDatabaseDialog(QDialog):
-    """Verwaltet den Sensor-Katalog: Sensoren links als Liste, rechts
-    Stammdaten + Achsen/Messbereich-Varianten als Baum.
+    """Manages the sensor catalog: sensors as a list on the left, master
+    data + axes/measurement-range variants as a tree on the right.
 
-    Schreibschutz: Der Dialog startet IMMER gesperrt (nur Lesen/Kopieren
-    möglich). Ein einfacher Bearbeiten-/Sperren-Toggle schützt vor
-    versehentlichen Änderungen; er ist keine Sicherheitsfunktion.
+    Write protection: the dialog ALWAYS starts locked (read/copy only).
+    A simple edit/lock toggle guards against accidental changes; it is
+    not a security feature.
     """
 
     def __init__(
@@ -83,11 +82,11 @@ class SensorDatabaseDialog(QDialog):
         super().__init__(parent)
         self._sensor_database = sensor_database
         self._current_sensor_id: Optional[str] = None
-        # Verhindert, dass programmatisches Befüllen der Widgets (siehe
-        # `_show_sensor`) als Nutzeränderung interpretiert und dadurch
-        # ungewollt sofort wieder gespeichert wird.
+        # Prevents programmatic population of the widgets (see
+        # `_show_sensor`) from being interpreted as a user change and
+        # thus unintentionally saved right back.
         self._loading = False
-        # Startet IMMER gesperrt (siehe Klassendoc) - kein Opt-in mehr.
+        # ALWAYS starts locked (see class docstring) - no opt-in anymore.
         self._locked = True
         self._save_timer = QTimer(self)
         self._save_timer.setSingleShot(True)
@@ -112,10 +111,10 @@ class SensorDatabaseDialog(QDialog):
         outer.addLayout(root)
 
         left = QVBoxLayout()
-        # Baum statt flacher Liste: Sensoren werden nach `category`
-        # gruppiert (siehe `_reload_sensor_list`) - Kategorie-Kopfzeilen
-        # sind wie die Messbereich-Kopfzeile weder auswählbar noch
-        # editierbar, nur Sensor-Blätter sind es.
+        # Tree instead of a flat list: sensors are grouped by `category`
+        # (see `_reload_sensor_list`) - category header rows, like the
+        # measurement-range header row, are neither selectable nor
+        # editable; only sensor leaves are.
         self._sensor_list = QTreeWidget()
         self._sensor_list.setHeaderHidden(True)
         self._sensor_list.currentItemChanged.connect(self._on_sensor_selection_changed)
@@ -132,11 +131,11 @@ class SensorDatabaseDialog(QDialog):
 
         right = QVBoxLayout()
         form = QFormLayout()
-        # Freier Text statt fester Auswahlliste (siehe
-        # data/sensor_models.py::SensorEntry.category Moduldoc) -
-        # editierbare Combobox mit Autovervollständigung aus den bereits
-        # verwendeten Kategorien, damit keine Tippfehler-Duplikate wie
-        # "Kraft" vs. "Kraftmessung" entstehen.
+        # Free text instead of a fixed selection list (see
+        # data/sensor_models.py::SensorEntry.category module docstring) -
+        # editable combo box with autocomplete from the categories
+        # already in use, so no typo duplicates like "Force" vs.
+        # "Force measurement" arise.
         self._category_combo = QComboBox()
         self._category_combo.setEditable(True)
         self._category_combo.lineEdit().editingFinished.connect(self._save_current_sensor)
@@ -160,14 +159,16 @@ class SensorDatabaseDialog(QDialog):
         self._tree.setColumnCount(4)
         self._update_tree_headers()
         self._tree.itemChanged.connect(self._on_tree_item_changed)
-        # Etwas mehr Zeilenhöhe (Padding statt fester Pixelzahl, damit es
-        # bei anderer Schriftgröße/DPI mitskaliert) - macht besonders die
-        # zweite Ebene (Messbereich-Varianten) weniger gedrängt.
+        # Slightly more row height (padding instead of a fixed pixel
+        # count, so it scales with a different font size/DPI) - makes
+        # the second level (measurement-range variants) in particular
+        # feel less cramped.
         self._tree.setStyleSheet("QTreeView::item { padding: 4px 0; }")
-        # Zell- statt Zeilen-Selektion: ein Klick markiert nur die
-        # angeklickte Zelle, nicht die ganze Zeile - sonst kaum möglich,
-        # gezielt EINEN Wert (z. B. zum Kopieren) auszuwählen, ohne dass
-        # optisch die komplette Zeile "im Weg" markiert wird.
+        # Cell selection instead of row selection: a click highlights
+        # only the clicked cell, not the whole row - otherwise it's
+        # nearly impossible to select ONE specific value (e.g. to copy
+        # it) without the entire row visually "getting in the way" as
+        # highlighted.
         self._tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectItems)
         right.addWidget(self._tree, stretch=1)
 
@@ -198,12 +199,12 @@ class SensorDatabaseDialog(QDialog):
 
         root.addLayout(right, stretch=2)
 
-        # Ohne dies macht Qt automatisch den ERSTEN erzeugten QPushButton
-        # (hier `_unlock_button`) zum Default-Button des Dialogs - Enter
-        # in irgendeinem Feld (z. B. beim Eintippen eines Sensornamens)
-        # hätte dann ungewollt "Entsperren"/"Sperren" ausgelöst. Dieser
-        # Dialog speichert ohnehin automatisch bei jeder Änderung (siehe
-        # Klassendoc), es gibt also kein sinnvolles "Enter bestätigt"-Ziel.
+        # Without this, Qt automatically makes the FIRST QPushButton
+        # created (here `_unlock_button`) the dialog's default button -
+        # pressing Enter in any field (e.g. while typing a sensor name)
+        # would then unintentionally trigger "Unlock"/"Lock". This
+        # dialog saves automatically on every change anyway (see class
+        # docstring), so there is no meaningful "Enter confirms" target.
         for button in self.findChildren(QPushButton):
             button.setAutoDefault(False)
             button.setDefault(False)
@@ -222,25 +223,25 @@ class SensorDatabaseDialog(QDialog):
         self._remove_range_button.setText(t("remove_range_button"))
         self._close_button.setText(t("close_button"))
         self._update_tree_headers()
-        # Baut auch die pro-Achse eingebetteten Hinweis-Labels (siehe
-        # `_install_axis_widgets`) sowie die Kategorie-Kopfzeilen der
-        # Sensor-Liste (siehe `_reload_sensor_list`) mit neu - keine
-        # eigene zentrale Stelle wie `_update_tree_headers()`, da beide
-        # individuell erzeugt werden. Unschädlich fürs Neuladen: alle
-        # Änderungen sind ohnehin schon gespeichert (siehe
-        # `_save_current_sensor`), es geht nichts verloren.
+        # Also rebuilds the per-axis embedded hint labels (see
+        # `_install_axis_widgets`) and the sensor list's category header
+        # rows (see `_reload_sensor_list`) - there is no dedicated
+        # central spot like `_update_tree_headers()` for these since
+        # both are created individually. Harmless to reload: all changes
+        # are already saved anyway (see `_save_current_sensor`), so
+        # nothing is lost.
         selected_id = self._current_sensor_id
         self._reload_sensor_list()
         if selected_id is not None:
             self._select_sensor_by_id(selected_id)
 
     def _update_tree_headers(self) -> None:
-        # Sensitivitätswert/Einheit bekommen bewusst KEINE Kopfzeilen-
-        # Beschriftung: sie gehören nur zur Messbereich-Zeile (Kind einer
-        # Achse, mindestens eine pro Achse vorhanden) und nicht zur Achse
-        # selbst - eine generische Spaltenüberschrift für beide Ebenen
-        # gemeinsam war genau die ursprüngliche Verwirrung (leere Zellen
-        # ohne erkennbaren Bezug).
+        # Sensitivity value/unit deliberately get NO header label: they
+        # belong only to the measurement-range row (a child of an axis,
+        # at least one present per axis) and not to the axis itself - a
+        # generic column header shared by both levels was exactly the
+        # original source of confusion (empty cells with no recognizable
+        # relation).
         self._tree.setHeaderLabels(
             [
                 t("sensor_col_axis"),
@@ -251,20 +252,20 @@ class SensorDatabaseDialog(QDialog):
         )
 
     # ------------------------------------------------------------------ #
-    # Sperr-/Passwortschutz
+    # Lock/password protection
     # ------------------------------------------------------------------ #
 
     def _apply_state(self) -> None:
-        """Wendet Sperrzustand UND aktuelle Sensor-Auswahl auf alle
-        Widgets an - EINZIGE Stelle, die beides kombiniert (siehe
-        `_show_sensor`/`_set_locked`), damit z. B. ein Sensorwechsel
-        während der Sperre nicht versehentlich Bearbeitung freischaltet.
+        """Applies the lock state AND the current sensor selection to all
+        widgets - the SINGLE place that combines both (see
+        `_show_sensor`/`_set_locked`), so that e.g. switching sensors
+        while locked doesn't accidentally unlock editing.
 
-        Felder bleiben bei Sperre LESBAR/kopierbar (`setReadOnly`/
-        `NoEditTriggers`), statt komplett deaktiviert zu werden
-        (`setEnabled(False)`) - genau das war der Zweck des
-        Passwortschutzes: Werte weiterhin einsehen können, nur nicht
-        versehentlich verändern.
+        While locked, fields stay READABLE/copyable (`setReadOnly`/
+        `NoEditTriggers`) rather than being fully disabled
+        (`setEnabled(False)`) - that is precisely the point of the
+        password protection: values remain viewable, just not
+        accidentally editable.
         """
         has_sensor = self._current_sensor_id is not None
         editable = has_sensor and not self._locked
@@ -320,16 +321,17 @@ class SensorDatabaseDialog(QDialog):
         self._set_locked(not self._locked)
 
     # ------------------------------------------------------------------ #
-    # Sensor-Liste
+    # Sensor list
     # ------------------------------------------------------------------ #
 
     def _reload_sensor_list(self) -> None:
-        """Baut die Sensor-Liste neu auf, gruppiert nach `category`
-        (siehe data/sensor_models.py::SensorEntry.category Moduldoc) -
-        Sensoren ohne Kategorie landen gesammelt unter
-        `sensor_uncategorized_label`. Kategorie-Kopfzeilen sind wie die
-        Messbereich-Kopfzeile (siehe `_build_variant_header_item`) weder
-        auswählbar noch editierbar, nur die Sensor-Blätter darunter."""
+        """Rebuilds the sensor list, grouped by `category` (see
+        data/sensor_models.py::SensorEntry.category module docstring) -
+        sensors without a category are collected under
+        `sensor_uncategorized_label`. Category header rows, like the
+        measurement-range header row (see `_build_variant_header_item`),
+        are neither selectable nor editable; only the sensor leaves
+        beneath them are."""
         self._loading = True
         self._sensor_list.clear()
         groups: dict[str, QTreeWidgetItem] = {}
@@ -377,9 +379,9 @@ class SensorDatabaseDialog(QDialog):
     ) -> None:
         if self._loading:
             return
-        # `current.data(0, _ROLE_SENSOR_ID)` ist `None` für eine
-        # Kategorie-Kopfzeile (nie damit versehen) - wird hier genauso wie
-        # "keine Auswahl" behandelt.
+        # `current.data(0, _ROLE_SENSOR_ID)` is `None` for a category
+        # header row (never assigned one) - treated here the same as
+        # "no selection".
         sensor_id = current.data(0, _ROLE_SENSOR_ID) if current is not None else None
         self._current_sensor_id = sensor_id
         sensor = self._sensor_database.get_sensor(sensor_id) if sensor_id else None
@@ -407,14 +409,14 @@ class SensorDatabaseDialog(QDialog):
         self._reload_sensor_list()
 
     # ------------------------------------------------------------------ #
-    # Stammdaten + Achsen/Varianten-Baum für den ausgewählten Sensor
+    # Master data + axis/variant tree for the selected sensor
     # ------------------------------------------------------------------ #
 
     def _show_sensor(self, sensor: Optional[SensorEntry]) -> None:
         self._loading = True
-        # Autovervollständigungs-Liste bei jedem Sensorwechsel neu
-        # aufbauen, damit zwischenzeitlich an anderen Sensoren vergebene
-        # neue Kategorien sofort verfügbar sind (siehe
+        # Rebuild the autocomplete list on every sensor switch, so new
+        # categories assigned to other sensors in the meantime are
+        # immediately available (see
         # `config/sensor_database.py::list_categories`).
         self._category_combo.clear()
         self._category_combo.addItems(self._sensor_database.list_categories())
@@ -434,10 +436,10 @@ class SensorDatabaseDialog(QDialog):
 
     @staticmethod
     def _align_item_columns(item: QTreeWidgetItem, column_count: int = 4) -> None:
-        """Setzt links-/vertikal-zentrierte Textausrichtung für alle
-        Spalten eines Items - Qt richtet Text in Baum-Zellen sonst nur
-        horizontal aus, vertikal am oberen Rand, was bei der erhöhten
-        Zeilenhöhe (siehe `__init__`) unruhig aussieht."""
+        """Sets left-aligned/vertically-centered text alignment for all
+        columns of an item - Qt otherwise only aligns text in tree cells
+        horizontally, vertically pinned to the top, which looks
+        unsettled with the increased row height (see `__init__`)."""
         alignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         for col in range(column_count):
             item.setTextAlignment(col, alignment)
@@ -448,9 +450,9 @@ class SensorDatabaseDialog(QDialog):
         self._align_item_columns(item)
         self._tree.addTopLevelItem(item)
         self._install_axis_widgets(item, axis)
-        # Exklusive "Kopfzeile" NUR für die Messbereich-Ebene - siehe
-        # `_build_variant_header_item` - immer das ERSTE Kind, direkt
-        # sichtbar beim Aufklappen, vor den echten Varianten.
+        # Exclusive "header row" ONLY for the measurement-range level -
+        # see `_build_variant_header_item` - always the FIRST child,
+        # immediately visible when expanded, ahead of the real variants.
         item.addChild(self._build_variant_header_item())
         for variant in axis.ranges:
             range_item = self._build_range_item(variant)
@@ -458,16 +460,18 @@ class SensorDatabaseDialog(QDialog):
         return item
 
     def _install_axis_widgets(self, item: QTreeWidgetItem, axis: SensorChannelDefinition) -> None:
-        """Setzt die Signaltyp-Combo einer Achsen-Zeile und blockiert die
-        Sensitivitätswert-/Einheit-Spalten auf DIESER Zeile (die haben
-        hier keine Bedeutung - ihre exklusive Kopfzeile lebt stattdessen
-        im ersten Kind, siehe `_build_variant_header_item`). Ohne diesen
-        Block wären die dort leeren Zellen trotzdem technisch
-        beschreibbar (Item-Flags gelten zeilenweise, nicht pro Spalte).
+        """Sets up the signal-type combo box for an axis row and blocks
+        the sensitivity-value/unit columns on THIS row (they have no
+        meaning here - their exclusive header row lives in the first
+        child instead, see `_build_variant_header_item`). Without this
+        block, the otherwise-empty cells there would still be
+        technically writable (item flags apply per row, not per
+        column).
 
-        `setItemWidget` wirkt nur auf bereits im Baum eingehängte Items -
-        `item` muss daher VOR diesem Aufruf via `addTopLevelItem` in
-        `self._tree` eingefügt worden sein (siehe `_add_axis_item`).
+        `setItemWidget` only works on items already attached to the
+        tree - `item` must therefore have been inserted into
+        `self._tree` via `addTopLevelItem` BEFORE this call (see
+        `_add_axis_item`).
         """
         signal_combo = QComboBox()
         for signal_type in SignalType:
@@ -484,20 +488,20 @@ class SensorDatabaseDialog(QDialog):
 
     @staticmethod
     def _build_variant_header_item() -> QTreeWidgetItem:
-        """Exklusive "Kopfzeile" NUR für die Messbereich-Kindzeilen einer
-        Achse (siehe Klassendoc) - erscheint als allererstes Kind, direkt
-        beim Aufklappen sichtbar. `_ROLE_VARIANT_HEADER` markiert sie,
-        damit sie beim Lesen/Entfernen NICHT als echte Variante behandelt
-        wird (siehe `_iter_variant_items`).
+        """Exclusive "header row" ONLY for the measurement-range child
+        rows of an axis (see class docstring) - appears as the very
+        first child, immediately visible when expanded.
+        `_ROLE_VARIANT_HEADER` marks it so it is NOT treated as a real
+        variant when reading/removing (see `_iter_variant_items`).
 
-        Bewusst NICHT `Qt.ItemFlag.NoItemFlags`: ein Item ohne
-        `ItemIsEnabled` rendert Qt standardmäßig mit der "deaktiviert"-
-        Palette (stark abgeblendet, schwer lesbar) - hier reicht
-        `ItemIsEnabled` allein (normaler Kontrast), OHNE
-        `ItemIsSelectable`/`ItemIsEditable` bleibt die Zeile trotzdem
-        weder auswählbar noch editierbar. Fett+Kursiv statt Farbe hebt
-        sie zusätzlich optisch von echten Datenzeilen ab, ohne eine feste
-        (Theme-unabhängige) Farbe zu erzwingen.
+        Deliberately NOT `Qt.ItemFlag.NoItemFlags`: by default Qt
+        renders an item without `ItemIsEnabled` using the "disabled"
+        palette (heavily dimmed, hard to read) - here `ItemIsEnabled`
+        alone is enough (normal contrast); WITHOUT
+        `ItemIsSelectable`/`ItemIsEditable` the row still remains
+        neither selectable nor editable. Bold+italic instead of color
+        additionally sets it visually apart from real data rows, without
+        forcing a fixed (theme-independent) color.
         """
         item = QTreeWidgetItem(
             [t("sensor_col_range"), t("col_unit"), t("sensor_col_sensitivity"), t("col_unit")]
@@ -528,10 +532,10 @@ class SensorDatabaseDialog(QDialog):
 
     @staticmethod
     def _iter_variant_items(axis_item: QTreeWidgetItem):
-        """Liefert nur die ECHTEN Messbereich-Varianten-Kinder einer
-        Achse - überspringt die dekorative Kopfzeile (siehe
-        `_build_variant_header_item`), die immer als erstes Kind
-        vorhanden ist."""
+        """Yields only the REAL measurement-range variant children of an
+        axis - skips the decorative header row (see
+        `_build_variant_header_item`), which is always present as the
+        first child."""
         for j in range(axis_item.childCount()):
             child = axis_item.child(j)
             if child.data(0, _ROLE_VARIANT_HEADER):
@@ -581,7 +585,7 @@ class SensorDatabaseDialog(QDialog):
         )
 
     def _save_current_sensor(self) -> None:
-        """Plant das Speichern nach einer kurzen Änderungspause ein."""
+        """Schedules the save after a brief pause in changes."""
         self._save_timer.start()
 
     def _save_current_sensor_now(self) -> None:
@@ -596,17 +600,18 @@ class SensorDatabaseDialog(QDialog):
         current_group = current_item.parent() if current_item is not None else None
         expected_category = sensor.category or t("sensor_uncategorized_label")
         if current_group is not None and current_group.text(0) != expected_category:
-            # Kategorie hat sich geändert - Sensor gehört jetzt zu einem
-            # anderen (ggf. neuen) Gruppenknoten, den `_reload_sensor_list`
-            # bei Bedarf frisch anlegt. Ein einfaches `setText` würde den
-            # Eintrag optisch in der falschen Gruppe belassen.
+            # Category has changed - the sensor now belongs to a
+            # different (possibly new) group node, which
+            # `_reload_sensor_list` creates fresh as needed. A simple
+            # `setText` would visually leave the entry in the wrong
+            # group.
             self._reload_sensor_list()
             self._select_sensor_by_id(sensor.id)
         elif current_item is not None and current_item.text(0) != display_name:
             current_item.setText(0, display_name)
 
     # ------------------------------------------------------------------ #
-    # Achsen/Varianten hinzufügen/entfernen
+    # Add/remove axes/variants
     # ------------------------------------------------------------------ #
 
     def _on_add_axis_clicked(self) -> None:
@@ -644,7 +649,7 @@ class SensorDatabaseDialog(QDialog):
         if self._locked or item is None or item.parent() is None:
             return
         if item.data(0, _ROLE_VARIANT_HEADER):
-            # Die dekorative Kopfzeile selbst ist nie entfernbar (siehe
+            # The decorative header row itself is never removable (see
             # `_build_variant_header_item`).
             return
         axis_item = item.parent()

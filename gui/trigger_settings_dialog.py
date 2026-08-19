@@ -1,22 +1,23 @@
 """
 gui/trigger_settings_dialog.py
 
-Dialog "Trigger-Einstellungen": Konfiguration von Start- UND Stopp-Trigger
-für Messungen (siehe `data/models.py::TriggerConfig`), erreichbar über
-Einstellungen -> "Trigger-Einstellungen..." (siehe
+"Trigger Settings" dialog: configuration of the start AND stop trigger
+for measurements (see `data/models.py::TriggerConfig`), reachable via
+Settings -> "Trigger Settings..." (see
 `gui/main_window.py::_on_open_trigger_settings_dialog`).
 
-Aufgeschobene Übernahme wie `gui/live_view.py::ChannelDisplayDialog`:
-nichts wirkt vor OK, Abbrechen verwirft rückstandslos (inkl. eines
-laufenden Test-Lauschers, siehe `reject()`).
+Deferred apply, like `gui/live_view.py::ChannelDisplayDialog`: nothing
+takes effect before OK; Cancel discards everything without a trace
+(including a running test listener, see `reject()`).
 
-Start und Stopp sind unabhängig konfigurierbar (je eine `TriggerCondition`,
-Modus Manuell/Schwellwert/Seriell) - beide Sektionen werden über denselben
-Baustein `_build_condition_section()` erzeugt, EIN Codepfad statt zwei
-Kopien. Das Test-Panel hat bewusst eigene, unabhängige Port-/Baudrate-/
-Signal-Felder (nicht an Start oder Stopp gebunden) - der Zweck ("kommt das
-Signal wirklich an") ist unabhängig davon, wofür der Port später genutzt
-wird, und ohnehin ist immer nur ein Port gleichzeitig sinnvoll testbar.
+Start and stop are independently configurable (one `TriggerCondition`
+each, mode Manual/Threshold/Serial) - both sections are built via the
+same building block `_build_condition_section()`, ONE code path instead
+of two copies. The test panel deliberately has its own, independent
+port/baud-rate/signal fields (not tied to start or stop) - the purpose
+("is the signal actually arriving") is independent of what the port
+will later be used for, and in any case only one port at a time can
+meaningfully be tested.
 """
 
 from __future__ import annotations
@@ -58,13 +59,13 @@ _TRIGGER_DIRECTION_LABEL_KEYS: dict[TriggerDirection, str] = {
     TriggerDirection.FALLS_BELOW: "trigger_direction_falls_below",
     TriggerDirection.ABS_EXCEEDS: "trigger_direction_abs_exceeds",
 }
-# Von `gui/setup_view.py` hierher übernommen (dort entfällt die Trigger-UI
-# komplett, siehe Rückbau in derselben Umsetzungsrunde).
+# Moved here from `gui/setup_view.py` (the trigger UI is removed there
+# entirely, see the corresponding cleanup in the same round of changes).
 TRIGGER_SERIAL_BAUD_RATES = ["9600", "19200", "38400", "57600", "115200"]
 
 
 class _ConditionSectionWidgets:
-    """Hält die Widget-Referenzen EINER Start- oder Stopp-Sektion (siehe
+    """Holds the widget references for ONE start or stop section (see
     `TriggerSettingsDialog._build_condition_section`)."""
 
     kind_combo: QComboBox
@@ -80,16 +81,17 @@ class _ConditionSectionWidgets:
 
 
 class TriggerSettingsDialog(QDialog):
-    """Dialog zur Konfiguration von Start- UND Stopp-Trigger, inkl. eines
-    Test-Panels für den seriellen Trigger.
+    """Dialog for configuring the start AND stop trigger, including a
+    test panel for the serial trigger.
 
     Args:
-        trigger_config: Aktuelle Konfiguration (Vorbelegung der Felder).
-        channels: Aktive Kanäle, aus denen für einen Schwellwert-Trigger
-            gewählt werden kann (siehe `gui/main_window.py`, übergibt die
-            im Setup konfigurierten AKTIVEN Kanäle).
+        trigger_config: Current configuration (pre-fills the fields).
+        channels: Active channels available for selection as a
+            threshold-trigger source (see `gui/main_window.py`, passes
+            the ACTIVE channels configured in setup).
 
-    Ergebnis nach `exec() == QDialog.DialogCode.Accepted` über `results()`.
+    Result available via `results()` after `exec() ==
+    QDialog.DialogCode.Accepted`.
     """
 
     def __init__(
@@ -101,17 +103,17 @@ class TriggerSettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(t("trigger_settings_dialog_title"))
         self._channels = channels
-        # `auto_rearm` wird nicht mehr hier im Dialog gesteuert, sondern
-        # über den Scharf-Button neben "Messung starten" (siehe
+        # `auto_rearm` is no longer controlled here in the dialog, but
+        # via the arm button next to "Start measurement" (see
         # `gui/setup_view.py::_trigger_arm_button`/
-        # `gui/main_window.py::_on_trigger_arm_toggled`) - dieser Dialog
-        # reicht den beim Öffnen aktuellen Wert unverändert durch, damit
-        # ein Speichern anderer Trigger-Einstellungen ihn nicht überschreibt.
+        # `gui/main_window.py::_on_trigger_arm_toggled`) - this dialog
+        # passes the value current at open time through unchanged, so
+        # saving other trigger settings doesn't overwrite it.
         self._auto_rearm = trigger_config.auto_rearm
         self._test_listener: SerialTriggerListener | None = None
-        # (label, port, baud_rate, message) des laufenden Tests - erlaubt
-        # `_rearm_test_listener()` nach einem Treffer einen frischen
-        # Listener mit denselben Parametern zu starten, siehe dort.
+        # (label, port, baud_rate, message) of the running test - lets
+        # `_rearm_test_listener()` start a fresh listener with the same
+        # parameters after a match, see there.
         self._active_test_condition: tuple[str, str, int, str] | None = None
         self._result: TriggerConfig | None = None
 
@@ -132,7 +134,7 @@ class TriggerSettingsDialog(QDialog):
         sections_row.addWidget(self._stop_group)
         layout.addLayout(sections_row)
 
-        # --- Test-Panel (siehe Klassendoc oben) ---
+        # --- Test panel (see class docstring above) ---
         self._test_group = QGroupBox(t("trigger_test_group_title"))
         test_layout = QVBoxLayout(self._test_group)
         test_form = QFormLayout()
@@ -146,10 +148,10 @@ class TriggerSettingsDialog(QDialog):
         self._test_toggle_button.clicked.connect(self._on_test_toggle_clicked)
         test_layout.addWidget(self._test_toggle_button)
 
-        # Zeigt fortlaufend, was auf dem Test-Port tatsächlich ankommt
-        # (siehe `gui/serial_trigger.py::SerialTriggerListener.data_received`)
-        # - so kann der Nutzer VOR dem eigentlichen Einsatz als Trigger
-        # prüfen, ob das erwartete Signal wirklich eintrifft.
+        # Continuously shows what actually arrives on the test port (see
+        # `gui/serial_trigger.py::SerialTriggerListener.data_received`)
+        # - lets the user verify BEFORE actual use as a trigger whether
+        # the expected signal really arrives.
         self._test_log = QPlainTextEdit()
         self._test_log.setReadOnly(True)
         self._test_log.setMaximumBlockCount(500)
@@ -169,7 +171,7 @@ class TriggerSettingsDialog(QDialog):
         layout.addWidget(button_box)
 
     # ------------------------------------------------------------------ #
-    # Aufbau
+    # Construction
     # ------------------------------------------------------------------ #
 
     def _build_condition_section(
@@ -179,9 +181,9 @@ class TriggerSettingsDialog(QDialog):
         channels: list[Channel],
         show_pretrigger: bool,
     ) -> tuple[QGroupBox, _ConditionSectionWidgets]:
-        """Baut EINE Start- oder Stopp-Sektion (Modus-Combo + je nach Modus
-        sichtbare Schwellwert-/Seriell-Felder) - gemeinsam genutzt für
-        beide Seiten, siehe Klassendoc oben."""
+        """Builds ONE start or stop section (mode combo box + the
+        threshold/serial fields visible depending on mode) - shared by
+        both sides, see class docstring above."""
         group = QGroupBox(title)
         v = QVBoxLayout(group)
         widgets = _ConditionSectionWidgets()
@@ -197,7 +199,7 @@ class TriggerSettingsDialog(QDialog):
         v.addLayout(mode_row)
         widgets.kind_combo = kind_combo
 
-        # Schwellwert-Felder - nur sichtbar bei kind=THRESHOLD.
+        # Threshold fields - only visible when kind=THRESHOLD.
         threshold_widget = QWidget()
         threshold_form = QFormLayout(threshold_widget)
         threshold_form.setContentsMargins(0, 0, 0, 0)
@@ -233,7 +235,7 @@ class TriggerSettingsDialog(QDialog):
         widgets.direction_combo = direction_combo
         widgets.pretrigger_spin = pretrigger_spin
 
-        # Seriell-Felder - nur sichtbar bei kind=SERIAL.
+        # Serial fields - only visible when kind=SERIAL.
         serial_widget = QWidget()
         serial_form = QFormLayout(serial_widget)
         serial_form.setContentsMargins(0, 0, 0, 0)
@@ -271,9 +273,9 @@ class TriggerSettingsDialog(QDialog):
 
     @staticmethod
     def _refresh_ports(combo: QComboBox) -> None:
-        """Listet die aktuell verfügbaren seriellen Schnittstellen neu auf
-        - editierbare Combo, der Wert muss beim Konfigurieren nicht
-        zwingend bereits angeschlossen sein (siehe vormals
+        """Re-lists the currently available serial ports - editable
+        combo box, the value doesn't necessarily have to be already
+        connected while configuring (see formerly
         `gui/setup_view.py::_refresh_serial_ports`)."""
         previous = combo.currentText()
         combo.blockSignals(True)
@@ -289,7 +291,7 @@ class TriggerSettingsDialog(QDialog):
         combo.blockSignals(False)
 
     # ------------------------------------------------------------------ #
-    # Test-Panel
+    # Test panel
     # ------------------------------------------------------------------ #
 
     def _serial_conditions(
@@ -365,8 +367,8 @@ class TriggerSettingsDialog(QDialog):
         self._start_test_listener()
 
     def _start_test_listener(self) -> None:
-        """Startet einen frischen `SerialTriggerListener` für
-        `self._active_test_condition` (muss vorher gesetzt sein)."""
+        """Starts a fresh `SerialTriggerListener` for
+        `self._active_test_condition` (must be set beforehand)."""
         _label, port, baud_rate, message = self._active_test_condition
         listener = SerialTriggerListener(port, baud_rate, message.encode("utf-8"))
         listener.data_received.connect(self._on_test_data_received)
@@ -392,13 +394,14 @@ class TriggerSettingsDialog(QDialog):
         self._rearm_test_listener()
 
     def _rearm_test_listener(self) -> None:
-        """Baut nach einem Treffer automatisch einen frischen Listener auf.
+        """Automatically builds a fresh listener after a match.
 
-        `SerialTriggerListener` ist bewusst Single-Shot (siehe
-        `gui/serial_trigger.py`) - für eine echte Messung ist das richtig
-        (einmal ausgelöst, fertig). Im Testbereich soll man dagegen die
-        Überbrückung beliebig oft hintereinander auslösen können, ohne
-        "Test starten" jedes Mal erneut klicken zu müssen.
+        `SerialTriggerListener` is deliberately single-shot (see
+        `gui/serial_trigger.py`) - that's correct for an actual
+        measurement (triggers once, done). In the test area, however,
+        one should be able to trigger the bridging signal repeatedly, as
+        many times as desired, without having to click "Start test"
+        again each time.
         """
         old_listener = self._test_listener
         self._test_listener = None
@@ -416,12 +419,13 @@ class TriggerSettingsDialog(QDialog):
         self._test_log.appendPlainText(text)
 
     # ------------------------------------------------------------------ #
-    # OK / Abbrechen
+    # OK / Cancel
     # ------------------------------------------------------------------ #
 
     def reject(self) -> None:
-        """Stoppt einen ggf. laufenden Test-Lauscher (siehe Klassendoc
-        oben) - deckt Abbrechen-Button, Esc UND Fenster-X gleichermaßen ab."""
+        """Stops a running test listener, if any (see class docstring
+        above) - covers the Cancel button, Esc, AND the window's X
+        equally."""
         self._stop_test_listener()
         super().reject()
 
@@ -447,8 +451,8 @@ class TriggerSettingsDialog(QDialog):
         super().accept()
 
     def _read_condition(self, widgets: _ConditionSectionWidgets) -> TriggerCondition | None:
-        """Baut eine `TriggerCondition` aus den UI-Feldern EINER Sektion,
-        mit Validierung je Modus - dieselben 4 Regeln wie vormals
+        """Builds a `TriggerCondition` from the UI fields of ONE section,
+        with validation per mode - the same 4 rules as formerly
         `gui/setup_view.py::_build_trigger_config`."""
         kind = TriggerKind(widgets.kind_combo.currentData())
 
@@ -488,7 +492,7 @@ class TriggerSettingsDialog(QDialog):
         return TriggerCondition(kind=TriggerKind.NONE)
 
     def results(self) -> TriggerConfig:
-        """Gibt die im Dialog eingestellte `TriggerConfig` zurück - nur
-        gültig, wenn `exec()` zuvor `QDialog.DialogCode.Accepted` ergab."""
+        """Returns the `TriggerConfig` set in the dialog - only valid if
+        `exec()` previously returned `QDialog.DialogCode.Accepted`."""
         assert self._result is not None
         return self._result

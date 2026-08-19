@@ -1,8 +1,8 @@
 """
 data/loader.py
 
-Lädt gespeicherte Messdaten (Parquet/CSV) zusammen mit ihren Metadaten
-für die Analyse-Ansicht (Drag & Drop, siehe `gui/analysis_view.py`).
+Loads saved measurement data (Parquet/CSV) together with its metadata
+for the analysis view (drag & drop, see `gui/analysis_view.py`).
 """
 
 from __future__ import annotations
@@ -21,25 +21,25 @@ logger = logging.getLogger(__name__)
 
 
 class LoaderError(Exception):
-    """Wird geworfen, wenn eine Messdatendatei nicht geladen werden kann."""
+    """Raised when a measurement data file cannot be loaded."""
 
 
 @dataclass
 class LoadedMeasurement:
-    """Container für eine geladene, abgeschlossene Messung.
+    """Container for a loaded, completed measurement.
 
     Attributes:
-        data: DataFrame mit Spalte "time_s" und einer Spalte je Kanal
-            (bereits physikalisch skaliert, siehe `data/exporter.py::StorageWriter`).
-        channels: Kanalliste aus den Metadaten (leer, falls keine
-            Metadaten-Datei gefunden/angegeben wurde).
-        metadata: Rohes Metadaten-Dictionary (leer, falls keine Metadaten geladen wurden).
-        source_path: Pfad der geladenen Messdatendatei.
-        x_column: Name der x-Achsen-Spalte in `data`. Für reguläre
-            Messdateien immer "time_s"; Analyseergebnisse mit anderer
-            x-Achse (z. B. FFT-Ergebnisse mit "frequency_hz", siehe
-            `gui/analysis_view.py`) verwenden einen synthetischen
-            `LoadedMeasurement` mit abweichendem `x_column`.
+        data: DataFrame with column "time_s" and one column per channel
+            (already physically scaled, see `data/exporter.py::StorageWriter`).
+        channels: Channel list from the metadata (empty if no metadata
+            file was found/given).
+        metadata: Raw metadata dictionary (empty if no metadata was loaded).
+        source_path: Path of the loaded measurement data file.
+        x_column: Name of the x-axis column in `data`. Always "time_s"
+            for regular measurement files; analysis results with a
+            different x-axis (e.g. FFT results with "frequency_hz", see
+            `gui/analysis_view.py`) use a synthetic `LoadedMeasurement`
+            with a different `x_column`.
     """
 
     data: pd.DataFrame
@@ -50,29 +50,29 @@ class LoadedMeasurement:
 
     @property
     def channel_names(self) -> list[str]:
-        """Namen der Datenspalten ohne die x-Achsen-Spalte."""
+        """Names of the data columns, excluding the x-axis column."""
         return [c for c in self.data.columns if c != self.x_column]
 
 
 def load_measurement_file(
     path: Path, metadata_path: Optional[Path] = None
 ) -> LoadedMeasurement:
-    """Lädt eine Messdatendatei (.parquet oder .csv), optional mit Metadaten.
+    """Loads a measurement data file (.parquet or .csv), optionally with metadata.
 
     Args:
-        path: Pfad zur Messdatendatei. Das Format wird anhand der
-            Dateiendung erkannt (".parquet" bzw. ".csv").
-        metadata_path: Optionaler Pfad zur zugehörigen
-            "<name>_info.json"-Datei. Falls angegeben, aber nicht
-            vorhanden, wird dies nur geloggt (keine Exception) - die
-            Messdaten können auch ohne Kanalinformationen geladen werden.
+        path: Path to the measurement data file. The format is detected
+            from the file extension (".parquet" or ".csv").
+        metadata_path: Optional path to the associated
+            "<name>_info.json" file. If given but not present, this is
+            only logged (no exception) - the measurement data can still
+            be loaded without channel information.
 
     Returns:
-        `LoadedMeasurement` mit Daten, Kanälen (falls verfügbar) und Metadaten.
+        `LoadedMeasurement` with data, channels (if available), and metadata.
 
     Raises:
-        LoaderError: falls die Datei nicht existiert oder das Format
-            nicht unterstützt wird.
+        LoaderError: if the file does not exist or the format is not
+            supported.
     """
     if not path.exists():
         raise LoaderError(f"Messdatendatei nicht gefunden: {path}")
@@ -114,14 +114,15 @@ def load_measurement_file(
 
 
 def infer_metadata_path(measurement_path: Path) -> Path:
-    """Errät den wahrscheinlichen Metadaten-Pfad zu einer Messdatendatei.
+    """Guesses the likely metadata path for a measurement data file.
 
-    Passend zur Namenskonvention aus `data/metadata.py::MeasurementProject`::
+    Matching the naming convention from `data/metadata.py::MeasurementProject`::
 
         measurements/<name>.parquet -> metadata/<name>_info.json
 
-    Nützlich für Drag & Drop in der Analyse-Ansicht, wo der Nutzer nur die
-    Messdatendatei auswählt/hineinzieht, ohne die Metadaten-Datei anzugeben.
+    Useful for drag & drop in the analysis view, where the user only
+    selects/drops the measurement data file without specifying the
+    metadata file.
     """
     name = measurement_path.stem
     same_dir = measurement_path.with_name(f"{name}_info.json")

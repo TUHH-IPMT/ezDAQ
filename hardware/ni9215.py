@@ -1,11 +1,11 @@
 """
 hardware/ni9215.py
 
-Konkrete Implementierung für das NI 9215 Modul (4 analoge
-Spannungseingänge, ±10 V, IEPE nicht unterstützt).
+Concrete implementation for the NI 9215 module (4 analog voltage
+inputs, ±10 V, IEPE not supported).
 
-Siehe `hardware/nidaq_device.py` für den gemeinsamen Task-Lebenszyklus
-(Konfiguration, Start/Stop, Lesen) und den Hinweis zum Hardware-Testvorbehalt.
+See `hardware/nidaq_device.py` for the shared task lifecycle
+(configuration, start/stop, reading) and the note on the hardware testing caveat.
 """
 
 from __future__ import annotations
@@ -21,17 +21,17 @@ if NIDAQMX_AVAILABLE:
 
 logger = logging.getLogger(__name__)
 
-# Physikalische Grenzen des NI 9215 laut Datenblatt.
+# Physical limits of the NI 9215 per datasheet.
 NI9215_MIN_VOLTAGE = -10.0
 NI9215_MAX_VOLTAGE = 10.0
 
 
 class NI9215(NIDAQDevice):
-    """NI 9215: 4-Kanal analoger Spannungseingang, ±10 V.
+    """NI 9215: 4-channel analog voltage input, ±10 V.
 
-    Erwartet, dass alle übergebenen Kanäle `signal_type == SignalType.VOLTAGE`
-    verwenden. `min_range`/`max_range` der Kanäle werden auf den zulässigen
-    Bereich des Moduls begrenzt (Clamping) und geloggt, falls sie außerhalb liegen.
+    Expects all passed-in channels to use `signal_type == SignalType.VOLTAGE`.
+    Channel `min_range`/`max_range` are clamped to the module's allowed
+    range and logged if they lie outside it.
     """
 
     def __init__(self, device_info: DeviceInfo, channels: list[Channel]) -> None:

@@ -1,13 +1,13 @@
 """
 config/settings.py
 
-Definiert Speicherorte und Default-Werte für die persistente
-Anwendungs-Konfiguration (Fenstergeometrie, zuletzt verwendete Hardware,
-Benutzereinstellungen).
+Defines storage locations and default values for the persistent
+application configuration (window geometry, last used hardware,
+user settings).
 
-Dieses Modul enthält bewusst keine Lade-/Speicherlogik - das übernimmt
-`config/configuration_manager.py`. Hier stehen ausschließlich Pfade und
-reine Datenstrukturen.
+This module deliberately contains no loading/saving logic - that is
+handled by `config/configuration_manager.py`. This file contains only
+paths and plain data structures.
 """
 
 from __future__ import annotations
@@ -22,20 +22,20 @@ APP_NAME = "ezDAQ"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
-# Sensor-Katalog (siehe config/sensor_database.py) - bewusst eine eigene
-# Datei, komplett getrennt von Mess-/Kanalkonfigurationen (siehe
-# data/sensor_models.py Moduldoc).
+# Sensor catalog (see config/sensor_database.py) - deliberately a
+# separate file, completely independent of measurement/channel
+# configurations (see data/sensor_models.py module doc).
 SENSOR_DATABASE_FILE_NAME = "sensor_database.json"
 
 
 def get_resource_path(*parts: str) -> Path:
-    """Liefert den Pfad zu einer mitgelieferten Ressourcendatei (z. B. Icon).
+    """Returns the path to a bundled resource file (e.g. an icon).
 
-    Funktioniert sowohl im Entwicklungsbetrieb (``python main.py``, Basis ist
-    dann das Projektverzeichnis) als auch in einer mit PyInstaller gepackten
-    Anwendung: Im "onefile"-Modus liegen mit ``--add-data`` gebündelte
-    Dateien im temporären Entpackverzeichnis (``sys._MEIPASS``), im
-    "onedir"-Modus (siehe README) neben der ``.exe`` (``sys.executable``).
+    Works both in development (``python main.py``, in which case the
+    base is the project directory) and in a PyInstaller-packaged
+    application: in "onefile" mode, files bundled with ``--add-data``
+    live in the temporary extraction directory (``sys._MEIPASS``), in
+    "onedir" mode (see README) next to the ``.exe`` (``sys.executable``).
     """
     if getattr(sys, "frozen", False):
         base = Path(getattr(sys, "_MEIPASS", None) or Path(sys.executable).parent)
@@ -45,12 +45,12 @@ def get_resource_path(*parts: str) -> Path:
 
 
 def get_config_directory() -> Path:
-    """Liefert das plattformspezifische Verzeichnis für Konfigurationsdateien.
+    """Returns the platform-specific directory for configuration files.
 
-    Unter Windows wird ``%APPDATA%/ezDAQ`` verwendet, da dies der
-    Standardort für benutzerbezogene Anwendungsdaten ist. Auf anderen
-    Plattformen (Entwicklungs-/Testumgebung) wird ``~/.config/ezDAQ``
-    als Fallback genutzt, damit main.py auch dort lauffähig bleibt.
+    On Windows, ``%APPDATA%/ezDAQ`` is used, since this is the standard
+    location for user-specific application data. On other platforms
+    (development/test environment), ``~/.config/ezDAQ`` is used as a
+    fallback, so main.py remains runnable there as well.
     """
     appdata = os.environ.get("APPDATA")
     if appdata:
@@ -62,7 +62,7 @@ def get_config_directory() -> Path:
 
 @dataclass
 class WindowGeometry:
-    """Persistierte Fenstergeometrie des Hauptfensters."""
+    """Persisted window geometry of the main window."""
 
     width: int = 1400
     height: int = 900
@@ -73,35 +73,35 @@ class WindowGeometry:
 
 @dataclass
 class AppSettings:
-    """Persistente Benutzereinstellungen der Anwendung.
+    """Persistent user settings of the application.
 
     Attributes:
-        window: Zuletzt verwendete Fenstergeometrie.
-        last_project_path: Pfad des zuletzt geöffneten Messprojekts.
-        last_device_name: Name des zuletzt verwendeten NI-cDAQ-Geräts.
-        default_sample_rate_hz: Vorbelegte Abtastrate fuer neue Messungen.
-        default_storage_format: Vorbelegtes Speicherformat
-            (Wert von ``data.models.StorageFormat``, z. B. "parquet").
-        last_measurement_name: Zuletzt verwendeter Messname.
-        language: Zuletzt gewählte UI-Sprache ("de"/"en").
-        theme: Zuletzt gewähltes Farbschema ("light"/"dark").
-        name_use_number_suffix: Ob beim Messstart automatisch ein
-            Nummernsuffix an den Messnamen angehängt wird.
-        name_number_suffix_digits: Stellenzahl des Nummernsuffix (z. B. 3 -> "_001").
-        name_include_date: Ob das aktuelle Datum in den Messnamen einfließt.
-        name_include_time: Ob die aktuelle Uhrzeit in den Messnamen einfließt.
-        last_recording_unlimited: Letzte Auswahl für "Unbegrenzt (bis
-            Speicherplatz voll)" - siehe
+        window: Last used window geometry.
+        last_project_path: Path of the last opened measurement project.
+        last_device_name: Name of the last used NI cDAQ device.
+        default_sample_rate_hz: Default sample rate for new measurements.
+        default_storage_format: Default storage format
+            (value of ``data.models.StorageFormat``, e.g. "parquet").
+        last_measurement_name: Last used measurement name.
+        language: Last selected UI language ("de"/"en").
+        theme: Last selected color theme ("light"/"dark").
+        name_use_number_suffix: Whether a number suffix is automatically
+            appended to the measurement name when a measurement starts.
+        name_number_suffix_digits: Number of digits of the number suffix (e.g. 3 -> "_001").
+        name_include_date: Whether the current date is included in the measurement name.
+        name_include_time: Whether the current time is included in the measurement name.
+        last_recording_unlimited: Last selection for "Unlimited (until
+            storage is full)" - see
             `data.models.MeasurementConfig.recording_unlimited`.
-        last_recording_stop_value: Zuletzt eingegebener Grenzwert (siehe
+        last_recording_stop_value: Last entered limit value (see
             `data.models.MeasurementConfig.recording_stop_value`).
-        last_recording_stop_unit: Zuletzt gewählte Einheit (Wert von
-            `data.models.RecordingStopUnit`, z. B. "samples").
-        last_trigger_config: Zuletzt verwendete Trigger-Konfiguration für
-            Start UND Stopp, als Rohdaten von
-            `data.models.TriggerConfig.to_dict()` (analog zu `window`
-            oben - direkt als Dict statt eigener flacher Felder, da
-            `TriggerConfig` selbst schon verschachtelt ist).
+        last_recording_stop_unit: Last selected unit (value of
+            `data.models.RecordingStopUnit`, e.g. "samples").
+        last_trigger_config: Last used trigger configuration for both
+            start AND stop, as raw data from
+            `data.models.TriggerConfig.to_dict()` (analogous to `window`
+            above - stored directly as a dict instead of its own flat
+            fields, since `TriggerConfig` itself is already nested).
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -123,16 +123,16 @@ class AppSettings:
     last_trigger_config: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialisiert die Einstellungen in ein JSON-kompatibles Dictionary."""
+        """Serializes the settings into a JSON-compatible dictionary."""
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AppSettings":
-        """Erstellt AppSettings aus einem Dictionary, robust gegen fehlende Felder.
+        """Creates AppSettings from a dictionary, robust against missing fields.
 
-        Fehlende oder unbekannte Felder fallen auf die Default-Werte zurück,
-        damit ältere oder unvollständige Konfigurationsdateien nicht zu
-        einem Absturz führen.
+        Missing or unknown fields fall back to the default values, so
+        that older or incomplete configuration files do not cause a
+        crash.
         """
         window_data = data.get("window", {}) or {}
         window = WindowGeometry(
