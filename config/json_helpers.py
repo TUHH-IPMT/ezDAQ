@@ -1,4 +1,4 @@
-"""Gemeinsame Hilfsfunktionen für persistierte JSON-Listen."""
+"""Shared helper functions for persisted JSON lists."""
 
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ def load_json_list(
     list_key: str | None = None,
     extra_exceptions: tuple[type[BaseException], ...] = (),
 ) -> list[T]:
-    """Lädt eine JSON-Liste und wandelt deren Elemente in Modelle um.
+    """Loads a JSON list and converts its elements into models.
 
-    Bei fehlender, beschädigter oder strukturell inkompatibler Datei wird
-    eine leere Liste zurückgegeben. `list_key` erlaubt zusätzlich ein
-    rückwärtskompatibles Wrapper-Format wie ``{"sensors": [...]}``.
+    If the file is missing, corrupted, or structurally incompatible, an
+    empty list is returned. `list_key` additionally allows a
+    backward-compatible wrapper format like ``{"sensors": [...]}``.
     """
     if not path.exists():
         logger.info("Keine Datei gefunden: %s", path)

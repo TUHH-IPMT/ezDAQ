@@ -1,17 +1,17 @@
 """
 hardware/ni9210.py
 
-Konkrete Implementierung für das NI 9210 Modul (4-Kanal
-Thermoelement-Eingang, ±78 mV, mit eingebauter
-Kaltstellenkompensation/CJC).
+Concrete implementation for the NI 9210 module (4-channel
+thermocouple input, ±78 mV, with built-in
+cold-junction compensation/CJC).
 
-Siehe `hardware/nidaq_device.py` für den gemeinsamen Task-Lebenszyklus
-und den Hinweis zum Hardware-Testvorbehalt.
+See `hardware/nidaq_device.py` for the shared task lifecycle
+and the note on the hardware testing caveat.
 
-Basis auch für `hardware/ni9213.py` (NI 9213, 16 Kanäle): beide Module
-nutzen zur Kanalerzeugung identisch `add_ai_thrmcpl_chan` und
-unterscheiden sich softwareseitig nur durch Modultyp/Kanalzahl - NI9213
-erbt daher direkt von `NI9210`, statt die Kanal-Logik zu duplizieren.
+Also the base for `hardware/ni9213.py` (NI 9213, 16 channels): both
+modules use `add_ai_thrmcpl_chan` identically for channel creation and
+differ in software only by module type/channel count - NI9213 therefore
+inherits directly from `NI9210` instead of duplicating the channel logic.
 """
 
 from __future__ import annotations
@@ -36,37 +36,37 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Fallback-Messbereich, falls ein unbekannter thermocouple_type-Wert
-# auftritt (z. B. aus einer älteren Konfigurationsdatei) - deckt den
-# größten praktischen Bereich der unterstützten Typen ab (siehe
+# Fallback measurement range in case an unknown thermocouple_type value
+# occurs (e.g. from an older config file) - covers the largest practical
+# range across the supported types (see
 # `data.models.THERMOCOUPLE_TEMPERATURE_RANGES_C`).
 _DEFAULT_TEMPERATURE_RANGE_C = (-200.0, 1372.0)
 
 
 class NI9210(NIDAQDevice):
-    """NI 9210: 4-Kanal Thermoelement-Eingang (J/K/T/E/N/R/S/B), ±78 mV.
+    """NI 9210: 4-channel thermocouple input (J/K/T/E/N/R/S/B), ±78 mV.
 
-    Erwartet, dass alle übergebenen Kanäle `signal_type ==
-    SignalType.THERMOCOUPLE` verwenden. Die Kaltstellenkompensation
-    erfolgt über den eingebauten CJC-Sensor des Moduls
-    (`CJCSource.BUILT_IN`) - keine externe CJC-Quelle konfigurierbar, da
-    das Modul dafür keine zusätzlichen Anschlüsse bietet.
+    Expects all passed-in channels to use `signal_type ==
+    SignalType.THERMOCOUPLE`. Cold-junction compensation is provided by
+    the module's built-in CJC sensor (`CJCSource.BUILT_IN`) - no external
+    CJC source can be configured, since the module offers no additional
+    terminals for that.
 
-    Der Temperaturmessbereich (`min_val`/`max_val` für
-    `add_ai_thrmcpl_chan`) wird NICHT aus `channel.min_range`/`max_range`
-    übernommen (deren Dataclass-Default -10.0/10.0 V ist für °C
-    bedeutungslos und in der Kanaltabelle nicht editierbar), sondern aus
-    `THERMOCOUPLE_TEMPERATURE_RANGES_C` anhand von
-    `channel.thermocouple_type` abgeleitet.
+    The temperature measurement range (`min_val`/`max_val` for
+    `add_ai_thrmcpl_chan`) is NOT taken from `channel.min_range`/
+    `max_range` (their dataclass default of -10.0/10.0 V is meaningless
+    for °C and not editable in the channel table), but derived from
+    `THERMOCOUPLE_TEMPERATURE_RANGES_C` based on
+    `channel.thermocouple_type`.
 
-    HINWEIS ADC-Timing-Modus: Das NI9210 hat - anders als das NI9213 -
-    eine feste Abtastrate (14 S/s gesamt) ohne konfigurierbaren
-    ADC-Timing-Modus; `channel.adc_timing_mode` wird hier deshalb bewusst
-    NICHT ausgewertet (siehe `hardware/ni9213.py`, wo das der Fall ist).
+    NOTE ON ADC TIMING MODE: unlike the NI9213, the NI9210 has a fixed
+    sample rate (14 S/s total) with no configurable ADC timing mode;
+    `channel.adc_timing_mode` is therefore deliberately NOT evaluated
+    here (see `hardware/ni9213.py`, where it is).
     """
 
-    # Von `NI9213` überschrieben (siehe hardware/ni9213.py) - steuert
-    # sowohl den zugewiesenen ModuleType als auch die Fehlermeldungstexte.
+    # Overridden by `NI9213` (see hardware/ni9213.py) - controls both the
+    # assigned ModuleType and the error message texts.
     _MODULE_TYPE = ModuleType.NI9210
     _MODULE_LABEL = "NI9210"
 
@@ -93,9 +93,9 @@ class NI9210(NIDAQDevice):
             channel.thermocouple_type, _DEFAULT_TEMPERATURE_RANGE_C
         )
 
-        # Rückgabewert (das erzeugte AIChannel-Objekt) wird von NI9213
-        # genutzt, um zusätzlich den ADC-Timing-Modus zu setzen (siehe
-        # hardware/ni9213.py) - hier selbst ungenutzt.
+        # Return value (the created AIChannel object) is used by NI9213
+        # to additionally set the ADC timing mode (see
+        # hardware/ni9213.py) - unused here itself.
         return task.ai_channels.add_ai_thrmcpl_chan(
             physical_channel=channel.hardware_channel,
             name_to_assign_to_channel=channel.display_name,

@@ -1,18 +1,18 @@
 """
 data/exporter.py
 
-Storage Writer: liest kontinuierlich und verlustfrei aus dem Ring Buffer
-und schreibt Messdaten WÄHREND der Messung blockweise auf die
-Festplatte (Parquet oder CSV).
+Storage Writer: reads continuously and losslessly from the ring buffer
+and writes measurement data to disk in blocks WHILE the measurement is
+running (Parquet or CSV).
 
-Architektur (siehe Vorgabe):
+Architecture (per spec):
 
-    DAQ Thread -> Ring Buffer -> Storage Writer
+    DAQ thread -> ring buffer -> storage writer
 
-Der Storage Writer registriert sich als eigener, unabhängiger
-Ring-Buffer-Reader (siehe `core/ringbuffer.py::RingBuffer`) und liest
-OHNE `max_samples`-Begrenzung, damit er garantiert keine Samples verliert
-- unabhängig davon, wie schnell oder langsam die Live View parallel liest.
+The storage writer registers itself as its own, independent ring-buffer
+reader (see `core/ringbuffer.py::RingBuffer`) and reads WITHOUT a
+`max_samples` limit, so it's guaranteed not to lose any samples -
+regardless of how fast or slow the live view reads in parallel.
 """
 
 from __future__ import annotations
@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 
 
 def _sanitize_column_name(name: str) -> str:
-    """Stellt sicher, dass ein Kanal-Anzeigename als Spaltenname nutzbar ist.
+    """Ensures a channel display name is usable as a column name.
 
-    Ändert nicht den `display_name` des Kanals selbst - nur den in der
-    Datei verwendeten Spaltennamen (z. B. falls der Anzeigename leer wäre).
+    Does not change the channel's own `display_name` - only the column
+    name used in the file (e.g. in case the display name were empty).
     """
     stripped = name.strip()
     return stripped if stripped else "kanal"
@@ -51,8 +51,8 @@ def _build_dataframe(
     start_sample_index: int,
     sample_rate_hz: float,
 ) -> pd.DataFrame:
-    """Wandelt einen bereits physikalisch skalierten Rohdaten-Block in
-    einen DataFrame mit berechneter Zeitspalte ("time_s") um."""
+    """Converts an already physically scaled raw data block into a
+    DataFrame with a computed time column ("time_s")."""
     n = scaled_block.shape[1]
     time_s = (start_sample_index + np.arange(n)) / sample_rate_hz
     data: dict[str, np.ndarray] = {"time_s": time_s}
@@ -62,18 +62,18 @@ def _build_dataframe(
 
 
 class StorageWriter:
-    """Schreibt Messdaten während der Messung kontinuierlich auf die Festplatte.
+    """Writes measurement data to disk continuously while the measurement is running.
 
-    Liest über einen eigenen Ring-Buffer-Reader und schreibt neue Blöcke
-    jeweils sofort in die Zieldatei:
-        * Parquet: inkrementell über `pyarrow.parquet.ParquetWriter`
-          (ein Writer bleibt über die gesamte Messung geöffnet, jeder
-          Block wird als weitere Row-Group angehängt).
-        * CSV: inkrementelles Anhängen (`DataFrame.to_csv(mode="a")`).
+    Reads via its own ring-buffer reader and writes new blocks to the
+    target file immediately as they arrive:
+        * Parquet: incrementally via `pyarrow.parquet.ParquetWriter`
+          (one writer stays open for the entire measurement, each block
+          is appended as another row group).
+        * CSV: incremental appending (`DataFrame.to_csv(mode="a")`).
 
-    Dadurch bleiben Messdaten auch bei einem Absturz während einer langen
-    Messung bis zum zuletzt geschriebenen Block erhalten (siehe
-    Projektvorgabe "Daten während der Messung speichern").
+    This means measurement data survives up to the last block written
+    even if the app crashes during a long measurement (see project spec
+    "save data while the measurement is running").
     """
 
     def __init__(
@@ -86,27 +86,28 @@ class StorageWriter:
         poll_interval_seconds: float = 0.05,
         reader_back_samples: int = 0,
     ) -> None:
-        """Initialisiert den Storage Writer.
+        """Initializes the storage writer.
 
         Args:
-            ring_buffer: Ring Buffer der laufenden Messung.
-            channels: Aktive Kanäle in der Reihenfolge der Ring-Buffer-Zeilen
-                (muss der Reihenfolge entsprechen, mit der der DAQ-Thread
-                schreibt, siehe `core/measurement.py::create_devices`).
-            output_path: Zieldatei. Die Endung wird NICHT automatisch
-                angepasst - siehe `data/metadata.py::MeasurementProject.measurement_data_path`.
-            storage_format: `StorageFormat.PARQUET` oder `StorageFormat.CSV`.
-            sample_rate_hz: Abtastrate, für die berechnete Zeitspalte.
-            poll_interval_seconds: Wartezeit zwischen Lesevorgängen, wenn
-                aktuell keine neuen Daten im Ring Buffer vorliegen.
-            reader_back_samples: Optionaler Vorlauf in Samples - lässt den
-                internen Ring-Buffer-Reader rückwirkend beginnen (siehe
-                `core/ringbuffer.py::RingBuffer.register_reader`), damit
-                bereits vor dem Erzeugen dieses StorageWriters gepufferte
-                Daten mitgeschrieben werden (Pre-Trigger-Aufzeichnung beim
-                Schwellwert-Trigger, siehe
-                `gui/main_window.py::_on_trigger_fired`). `0` (Standard)
-                entspricht dem bisherigen Verhalten (Start "jetzt").
+            ring_buffer: Ring buffer of the running measurement.
+            channels: Active channels in the order of the ring buffer rows
+                (must match the order the DAQ thread writes in, see
+                `core/measurement.py::create_devices`).
+            output_path: Target file. The extension is NOT adjusted
+                automatically - see
+                `data/metadata.py::MeasurementProject.measurement_data_path`.
+            storage_format: `StorageFormat.PARQUET` or `StorageFormat.CSV`.
+            sample_rate_hz: Sample rate used for the computed time column.
+            poll_interval_seconds: Wait time between read attempts when
+                no new data is currently available in the ring buffer.
+            reader_back_samples: Optional lead-in in samples - lets the
+                internal ring-buffer reader start retroactively (see
+                `core/ringbuffer.py::RingBuffer.register_reader`), so
+                data already buffered before this StorageWriter was
+                created gets written too (pre-trigger recording for the
+                threshold trigger, see
+                `gui/main_window.py::_on_trigger_fired`). `0` (default)
+                matches the previous behavior (start "now").
         """
         self._ring_buffer = ring_buffer
         self._channels = channels
@@ -126,41 +127,41 @@ class StorageWriter:
 
     @property
     def is_running(self) -> bool:
-        """True, während der Storage-Writer-Thread aktiv läuft."""
+        """True while the storage-writer thread is actively running."""
         return self._thread is not None and self._thread.is_alive()
 
     @property
     def last_error(self) -> Optional[Exception]:
-        """Der zuletzt aufgetretene Fehler, falls der Thread deswegen beendet wurde."""
+        """The most recent error, if the thread terminated because of it."""
         return self._last_error
 
     @property
     def total_samples_written(self) -> int:
-        """Anzahl bisher geschriebener Samples pro Kanal."""
+        """Number of samples written so far, per channel."""
         return self._total_samples_written
 
     @property
     def output_path(self) -> Path:
-        """Zieldatei, in die geschrieben wird."""
+        """Target file being written to."""
         return self._output_path
 
     @property
     def pending_samples(self) -> int:
-        """Anzahl der vom DAQ-Thread bereits geschriebenen, vom StorageWriter
-        aber noch nicht auf die Festplatte übertragenen Samples.
+        """Number of samples already written by the DAQ thread but not yet
+        transferred to disk by the StorageWriter.
 
-        Nähert sich dieser Wert der Ring-Buffer-Kapazität an (z. B. weil die
-        Festplatte nicht mitkommt oder voll ist), droht ein Overrun -
-        unwiederbringlicher Datenverlust, siehe
+        If this value approaches the ring buffer capacity (e.g. because
+        the disk can't keep up or is full), an overrun is imminent -
+        unrecoverable data loss, see
         `core/ringbuffer.py::RingBuffer._check_overruns_locked`.
         """
         return self._ring_buffer.available_samples(self._reader_id)
 
     def start(self) -> None:
-        """Startet den Storage-Writer-Thread.
+        """Starts the storage-writer thread.
 
         Raises:
-            RuntimeError: falls der Thread bereits läuft.
+            RuntimeError: if the thread is already running.
         """
         if self.is_running:
             raise RuntimeError("StorageWriter läuft bereits.")
@@ -173,10 +174,10 @@ class StorageWriter:
         logger.info("StorageWriter gestartet: %s", self._output_path)
 
     def stop(self, timeout: float = 10.0) -> None:
-        """Stoppt den Storage-Writer-Thread und schließt die Zieldatei sauber.
+        """Stops the storage-writer thread and closes the target file cleanly.
 
-        Wartet, bis der Thread alle bereits gelesenen, aber noch nicht
-        geschriebenen Daten verarbeitet hat, bevor die Datei geschlossen wird.
+        Waits until the thread has processed all data already read but
+        not yet written, before the file is closed.
         """
         self._stop_event.set()
         if self._thread is not None:
@@ -211,7 +212,7 @@ class StorageWriter:
             self._last_error = exc
 
     def _write_block(self, raw_block: np.ndarray) -> None:
-        """Skaliert und schreibt einen einzelnen Rohdaten-Block."""
+        """Scales and writes a single raw data block."""
         scaled = apply_scaling(raw_block, self._channels)
         df = _build_dataframe(
             scaled, self._channels, self._total_samples_written, self._sample_rate_hz
@@ -232,7 +233,7 @@ class StorageWriter:
             self._csv_header_written = True
 
     def _close_writer(self) -> None:
-        """Schließt einen ggf. offenen Parquet-Writer (idempotent)."""
+        """Closes a possibly open Parquet writer (idempotent)."""
         if self._parquet_writer is not None:
             try:
                 self._parquet_writer.close()

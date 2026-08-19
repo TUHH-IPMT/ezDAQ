@@ -1,21 +1,21 @@
 """
 gui/i18n.py
 
-Einfaches Internationalisierungs-System für Deutsch und Englisch.
+Simple internationalization system for German and English.
 
-Verwendung:
+Usage:
     from gui.i18n import t, connect_language_changed, set_language
 
-    set_language("de")  # oder "en"
+    set_language("de")  # or "en"
     label.setText(t("start_measurement"))
-    label.setText(t("devices_found", count=3))  # Interpolation via .format()
+    label.setText(t("devices_found", count=3))  # interpolation via .format()
 
-Live-Umschaltung:
-    Jede Ansicht registriert ihre eigene `retranslate_ui`-Methode über
-    `connect_language_changed(self.retranslate_ui)` (typischerweise am Ende
-    von `__init__`). `set_language()` benachrichtigt daraufhin alle
-    registrierten Ansichten, sodass ein Sprachwechsel sofort in der
-    laufenden App sichtbar wird - ohne Neustart.
+Live switching:
+    Each view registers its own `retranslate_ui` method via
+    `connect_language_changed(self.retranslate_ui)` (typically at the end
+    of `__init__`). `set_language()` then notifies all registered views,
+    so a language switch becomes visible in the running app immediately -
+    without a restart.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from typing import Callable, Optional
 
 _current_language = "de"
 
-# Übersetzungs-Dictionaries
+# Translation dictionaries
 _translations = {
     "de": {
         # Menu
@@ -115,11 +115,18 @@ _translations = {
             "51200 Hz / n (n = 1…31, also 51200, 25600, 17066,7, ... bis "
             "1651,6 S/s). Nächster gültiger Wert nach oben: {suggestion} S/s."
         ),
+        "error_ni9235_invalid_sample_rate": (
+            "Das NI9235 unterstützt nur Abtastraten nach der Formel "
+            "50000 Hz / n (n = 5…63, also 10000, 8333,3, ... bis "
+            "793,7 S/s). Nächster gültiger Wert nach oben: {suggestion} S/s."
+        ),
         "error_ni9213_rate_too_high": (
             "Das NI9213 ({device}, {count} aktive(r) Kanal/Kanäle, "
             "Timing-Modus \"{mode}\") unterstützt bei dieser Kanalzahl "
             "maximal {max_rate} S/s."
         ),
+        "resolved_rate_preview_target": "Zielrate: {rate} S/s",
+        "resolved_rate_preview_fixed": "{modules} (fest): {rate} S/s",
         "error_channel_missing_hw_channel": (
             "Folgende(r) aktive Kanal/Kanäle hat/haben noch keinen Hardwarekanal "
             "zugewiesen: {names}. Bitte über \"Kanal zuweisen...\" einen echten "
@@ -282,6 +289,7 @@ _translations = {
         "signal_type_voltage": "Spannung",
         "signal_type_iepe": "IEPE-Beschleunigung",
         "signal_type_thermocouple": "Thermoelement",
+        "signal_type_strain": "Dehnung",
         "add_channel_button": "Kanal hinzufügen",
         "remove_channel_button": "Ausgewählten Kanal entfernen",
         "default_channel_name": "Kanal {index}",
@@ -295,6 +303,11 @@ _translations = {
         "param_adc_timing_mode_hint": "Gilt für alle Kanäle dieses Moduls (nur NI9213).",
         "adc_timing_mode_high_resolution": "Hohe Auflösung",
         "adc_timing_mode_high_speed": "Hohe Geschwindigkeit",
+        "param_gage_factor_label": "Gage-Faktor (k):",
+        "param_strain_bridge_type_label": "Brückentyp:",
+        "param_lead_wire_resistance_label": "Zuleitungswiderstand (Ω):",
+        "bridge_type_quarter_i": "Viertelbrücke (1 aktives Gitter)",
+        "bridge_type_quarter_ii": "Viertelbrücke (1 aktives + 1 Dummy-Gitter)",
         "two_point_cal_button": "2-Punkt-Kalibrierung...",
         "two_point_cal_dialog_title": "2-Punkt-Kalibrierung",
         "two_point_cal_hint": (
@@ -314,6 +327,13 @@ _translations = {
             "\"Angeschlossene Geräte\" auf \"Geräte suchen\" klicken."
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
+        "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
+        "device_module_unsupported": "nicht unterstützt",
+        "unsupported_modules_title": "Nicht unterstützte Module",
+        "unsupported_modules_body": (
+            "Die folgenden Module werden derzeit nicht unterstützt und können "
+            "keinem Kanal zugewiesen werden:\n\n{modules}"
+        ),
         "no_hw_channel_available": "Kein freier Hardwarekanal mehr verfügbar.",
         "all_channels_assigned_title": "Alle Kanäle belegt",
         "all_channels_assigned_body": (
@@ -335,7 +355,7 @@ _translations = {
         "cancel": "Abbrechen",
         "close_button": "Schließen",
 
-        # Sensor-Datenbank
+        # Sensor Database
         "sensor_database_dialog_title": "Sensor-Datenbank",
         "add_sensor_button": "Sensor hinzufügen",
         "remove_sensor_button": "Sensor entfernen",
@@ -379,7 +399,7 @@ _translations = {
         "searching_devices": "Suche läuft...",
         "device_discovery_failed": "Geräteerkennung fehlgeschlagen",
 
-        # Konfiguration speichern/laden (Datei-Menü)
+        # Saving/loading configuration (File menu)
         "status_config_saved": "Konfiguration gespeichert: {filename}",
         "status_config_loaded": "Konfiguration geladen: {filename}",
         "error_config_save_failed": "Konfiguration konnte nicht gespeichert werden:\n{path}",
@@ -399,7 +419,7 @@ _translations = {
             "Die Messung wurde aufgrund eines Hardwarefehlers beendet:\n{error}"
         ),
 
-        # Über
+        # About
         "window_title": "ezDAQ - Easy Data Acquisition",
         "about_title": "Über ezDAQ",
         "about_body": (
@@ -509,11 +529,18 @@ _translations = {
             "51200 Hz / n (n = 1...31, i.e. 51200, 25600, 17066.7, ... down "
             "to 1651.6 S/s). Next valid value at or above: {suggestion} S/s."
         ),
+        "error_ni9235_invalid_sample_rate": (
+            "The NI9235 only supports sample rates following the formula "
+            "50000 Hz / n (n = 5...63, i.e. 10000, 8333.3, ... down to "
+            "793.7 S/s). Next valid value at or above: {suggestion} S/s."
+        ),
         "error_ni9213_rate_too_high": (
             "The NI9213 ({device}, {count} active channel(s), timing mode "
             "\"{mode}\") supports a maximum of {max_rate} S/s at this "
             "channel count."
         ),
+        "resolved_rate_preview_target": "Target rate: {rate} S/s",
+        "resolved_rate_preview_fixed": "{modules} (fixed): {rate} S/s",
         "error_channel_missing_hw_channel": (
             "The following active channel(s) have no hardware channel assigned "
             "yet: {names}. Please use \"Assign channel...\" to pick a real "
@@ -676,6 +703,7 @@ _translations = {
         "signal_type_voltage": "Voltage",
         "signal_type_iepe": "IEPE Acceleration",
         "signal_type_thermocouple": "Thermocouple",
+        "signal_type_strain": "Strain",
         "add_channel_button": "Add Channel",
         "remove_channel_button": "Remove Selected Channel",
         "default_channel_name": "Channel {index}",
@@ -689,6 +717,11 @@ _translations = {
         "param_adc_timing_mode_hint": "Applies to all channels of this module (NI9213 only).",
         "adc_timing_mode_high_resolution": "High Resolution",
         "adc_timing_mode_high_speed": "High Speed",
+        "param_gage_factor_label": "Gage Factor (k):",
+        "param_strain_bridge_type_label": "Bridge Type:",
+        "param_lead_wire_resistance_label": "Lead Wire Resistance (Ω):",
+        "bridge_type_quarter_i": "Quarter Bridge (1 active gage)",
+        "bridge_type_quarter_ii": "Quarter Bridge (1 active + 1 dummy gage)",
         "two_point_cal_button": "2-Point Calibration...",
         "two_point_cal_dialog_title": "2-Point Calibration",
         "two_point_cal_hint": (
@@ -708,6 +741,13 @@ _translations = {
             "the \"Connected Devices\" section first."
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
+        "hw_channel_unsupported_module": "{channel} (module not supported)",
+        "device_module_unsupported": "not supported",
+        "unsupported_modules_title": "Unsupported Modules",
+        "unsupported_modules_body": (
+            "The following modules are currently not supported and cannot be "
+            "assigned to a channel:\n\n{modules}"
+        ),
         "no_hw_channel_available": "No free hardware channel available.",
         "all_channels_assigned_title": "All Channels Assigned",
         "all_channels_assigned_body": (
@@ -773,7 +813,7 @@ _translations = {
         "searching_devices": "Searching...",
         "device_discovery_failed": "Device discovery failed",
 
-        # Konfiguration speichern/laden (Datei-Menü)
+        # Saving/loading configuration (File menu)
         "status_config_saved": "Configuration saved: {filename}",
         "status_config_loaded": "Configuration loaded: {filename}",
         "error_config_save_failed": "Configuration could not be saved:\n{path}",
@@ -817,8 +857,8 @@ _translations = {
 
 
 def set_language(lang: str) -> None:
-    """Setzt die aktuelle Sprache auf 'de' oder 'en' und benachrichtigt
-    alle über `connect_language_changed` registrierten Ansichten."""
+    """Sets the current language to 'de' or 'en' and notifies all views
+    registered via `connect_language_changed`."""
     global _current_language
     if lang not in _translations or lang == _current_language:
         return
@@ -827,15 +867,15 @@ def set_language(lang: str) -> None:
 
 
 def get_language() -> str:
-    """Gibt die aktuelle Sprache zurück."""
+    """Returns the current language."""
     return _current_language
 
 
 def t(key: str, **kwargs) -> str:
-    """Übersetzt einen Schlüssel in die aktuelle Sprache.
+    """Translates a key into the current language.
 
-    Fallback auf den Schlüssel selbst, falls nicht gefunden. Optionale
-    kwargs werden per `str.format()` in das Template eingesetzt, z. B.
+    Falls back to the key itself if not found. Optional kwargs are
+    interpolated into the template via `str.format()`, e.g.
     `t("devices_found_count", count=3)`.
     """
     template = _translations.get(_current_language, {}).get(key, key)
@@ -848,15 +888,15 @@ def t(key: str, **kwargs) -> str:
 
 
 # ---------------------------------------------------------------------- #
-# Live-Retranslate-Signal
+# Live retranslate signal
 # ---------------------------------------------------------------------- #
 #
-# Lazy konstruiert: `gui/i18n.py` wird transitiv importiert, BEVOR
-# `QApplication` in main.py erzeugt wird (Importe von `gui.main_window`
-# laufen vor `QApplication(sys.argv)`). Ein QObject darf zu diesem
-# Zeitpunkt nicht instanziiert werden - daher Konstruktion erst beim
-# ersten echten Gebrauch (`set_language()`/`connect_language_changed()`),
-# beides passiert in der Praxis erst nach `QApplication`-Erzeugung.
+# Lazily constructed: `gui/i18n.py` gets transitively imported BEFORE
+# `QApplication` is created in main.py (imports of `gui.main_window` run
+# before `QApplication(sys.argv)`). A QObject must not be instantiated at
+# that point - hence construction only on first actual use
+# (`set_language()`/`connect_language_changed()`), both of which in
+# practice only happen after `QApplication` has been created.
 
 _signals: Optional["_I18nSignals"] = None
 
@@ -874,6 +914,6 @@ def _get_signals() -> "_I18nSignals":
 
 
 def connect_language_changed(slot: Callable[[], None]) -> None:
-    """Registriert `slot` (typischerweise `view.retranslate_ui`), der bei
-    jedem Sprachwechsel aufgerufen wird."""
+    """Registers `slot` (typically `view.retranslate_ui`), which is called
+    on every language change."""
     _get_signals().language_changed.connect(slot)

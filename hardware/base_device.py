@@ -1,16 +1,16 @@
 """
 hardware/base_device.py
 
-Abstrakte Schnittstelle für Hardware-Module.
+Abstract interface for hardware modules.
 
-Die GUI und der Messcontroller (`core/controller.py`) kommunizieren
-AUSSCHLIESSLICH über diese Schnittstelle - niemals direkt mit `nidaqmx`
-oder einer konkreten Geräteklasse. Das erlaubt es, später weitere Module
-(z. B. NI 9411 Digital-I/O, ein Simulationsgerät für Tests ohne
-Hardware, oder Geräte anderer Hersteller) hinzuzufügen, ohne GUI oder
-Controller anzupassen.
+The GUI and the measurement controller (`core/controller.py`) communicate
+EXCLUSIVELY through this interface - never directly with `nidaqmx`
+or a concrete device class. This makes it possible to add further modules
+later (e.g. NI 9411 digital I/O, a simulation device for tests without
+hardware, or devices from other manufacturers) without having to modify
+the GUI or the controller.
 
-Architektur (siehe Vorgabe):
+Architecture (see spec):
 
     GUI -> Measurement Controller -> Hardware Interface -> nidaqmx -> NI cDAQ
 """
@@ -25,36 +25,36 @@ from data.models import Channel, DeviceInfo
 
 
 class AcquisitionError(Exception):
-    """Wird bei Fehlern während Konfiguration, Start oder Erfassung geworfen.
+    """Raised for errors during configuration, start, or acquisition.
 
-    Fasst nidaqmx-spezifische Fehler (`nidaqmx.DaqError`) in einen
-    hardware-unabhängigen Fehlertyp, damit GUI/Controller nicht gegen
-    `nidaqmx`-Exceptions programmieren müssen.
+    Wraps nidaqmx-specific errors (`nidaqmx.DaqError`) in a
+    hardware-independent error type, so GUI/controller code doesn't have
+    to program against `nidaqmx` exceptions.
     """
 
 
 class BaseDevice(ABC):
-    """Abstrakte Basisklasse für ein einzelnes Hardware-Modul.
+    """Abstract base class for a single hardware module.
 
-    Ein konkretes Gerät (z. B. `NI9215`, `NI9234`) kapselt die komplette
-    Kommunikation mit der zugrunde liegenden Treiber-API. Diese Basisklasse
-    definiert einen synchronen Lebenszyklus:
+    A concrete device (e.g. `NI9215`, `NI9234`) encapsulates the complete
+    communication with the underlying driver API. This base class
+    defines a synchronous lifecycle:
 
-        configure() -> start() -> read() [wiederholt] -> stop()
+        configure() -> start() -> read() [repeated] -> stop()
 
-    Die kontinuierliche Erfassung in einem eigenen Thread (DAQ Thread) und
-    das Schreiben in den Ring Buffer sind NICHT Teil dieser Klasse, sondern
-    Aufgabe von `core/acquisition.py`. Diese Trennung hält die
-    Hardware-Schicht testbar (synchron, ohne Threading-Komplexität).
+    Continuous acquisition on a dedicated thread (DAQ thread) and
+    writing into the ring buffer are NOT part of this class, but are the
+    responsibility of `core/acquisition.py`. This separation keeps the
+    hardware layer testable (synchronous, without threading complexity).
     """
 
     def __init__(self, device_info: DeviceInfo, channels: list[Channel]) -> None:
-        """Initialisiert das Gerät mit Geräteinformationen und Kanalliste.
+        """Initializes the device with device info and channel list.
 
         Args:
-            device_info: Beschreibung des physischen Moduls.
-            channels: Zu erfassende Kanäle (nur `enabled`-Kanäle werden
-                von den konkreten Implementierungen tatsächlich konfiguriert).
+            device_info: Description of the physical module.
+            channels: Channels to acquire (only `enabled` channels are
+                actually configured by the concrete implementations).
         """
         self.device_info = device_info
         self.channels = channels
@@ -63,17 +63,17 @@ class BaseDevice(ABC):
 
     @property
     def is_configured(self) -> bool:
-        """True, sobald `configure()` erfolgreich aufgerufen wurde."""
+        """True as soon as `configure()` has been called successfully."""
         return self._is_configured
 
     @property
     def is_running(self) -> bool:
-        """True, während die Erfassung läuft (zwischen `start()` und `stop()`)."""
+        """True while acquisition is running (between `start()` and `stop()`)."""
         return self._is_running
 
     @property
     def active_channels(self) -> list[Channel]:
-        """Nur die aktivierten Kanäle (siehe `Channel.enabled`)."""
+        """Only the enabled channels (see `Channel.enabled`)."""
         return [ch for ch in self.channels if ch.enabled]
 
     @abstractmethod
@@ -83,58 +83,73 @@ class BaseDevice(ABC):
         samples_per_read: int,
         sample_clock_source: str | None = None,
     ) -> None:
-        """Konfiguriert die Hardware für eine Messung.
+        """Configures the hardware for a measurement.
 
-        Legt typischerweise den zugrunde liegenden Task an, fügt alle
-        aktiven Kanäle hinzu und konfiguriert das Sample-Clock-Timing.
+        Typically creates the underlying task, adds all active channels,
+        and configures the sample clock timing.
 
         Args:
-            sample_rate_hz: Abtastrate in Hz.
-            samples_per_read: Blockgröße für spätere `read()`-Aufrufe
-                (bestimmt u. a. den Timing-Buffer der Hardware).
-            sample_clock_source: Optionale Clock-Quelle für Geräte, die
-                ohne gemeinsamen Task arbeiten. Bei NI-Geräten mit einem
-                gemeinsamen Shared-Task wird die Abtastung in der Regel über
-                die Standard-Onboard-Clock des gemeinsamen Tasks gesteuert.
+            sample_rate_hz: Sample rate in Hz.
+            samples_per_read: Block size for later `read()` calls
+                (among other things, determines the hardware's timing buffer).
+            sample_clock_source: Optional clock source for devices that
+                operate without a shared task. For NI devices with a
+                shared task, sampling is normally driven by the shared
+                task's default onboard clock.
 
         Raises:
-            AcquisitionError: falls die Konfiguration fehlschlägt
-                (z. B. ungültiger Kanal, Gerät nicht erreichbar).
+            AcquisitionError: if configuration fails
+                (e.g. invalid channel, device unreachable).
         """
 
     @abstractmethod
     def start(self) -> None:
-        """Startet die Erfassung.
+        """Starts acquisition.
 
         Raises:
-            AcquisitionError: falls das Gerät nicht konfiguriert ist
-                oder der Start fehlschlägt.
+            AcquisitionError: if the device is not configured
+                or the start fails.
         """
 
     @abstractmethod
     def stop(self) -> None:
-        """Stoppt die Erfassung und gibt Hardware-Ressourcen frei.
+        """Stops acquisition and releases hardware resources.
 
-        Muss idempotent sein (mehrfacher Aufruf darf nicht fehlschlagen).
+        Must be idempotent (calling it multiple times must not fail).
         """
 
     @abstractmethod
     def read(self, samples_per_channel: int, timeout: float = 10.0) -> np.ndarray:
-        """Liest einen Block von Rohwerten (unskaliert) von der Hardware.
+        """Reads a block of raw (unscaled) values from the hardware.
 
         Args:
-            samples_per_channel: Anzahl zu lesender Samples pro Kanal.
-            timeout: Timeout in Sekunden, bevor ein Fehler geworfen wird.
+            samples_per_channel: Number of samples to read per channel.
+            timeout: Timeout in seconds before an error is raised.
 
         Returns:
-            Array der Form (num_active_channels, samples_per_channel).
+            Array of shape (num_active_channels, samples_per_channel).
 
         Raises:
-            AcquisitionError: bei Timeout oder Lesefehler.
+            AcquisitionError: on timeout or read error.
+        """
+
+    @abstractmethod
+    def available_samples(self) -> int:
+        """Number of samples per channel currently available in the
+        hardware buffer that have NOT yet been read - a NON-blocking
+        query (a pure status query to the driver, does not wait for new
+        data).
+
+        Intended for callers that want to decide for themselves how many
+        samples they can read WITHOUT blocking (see
+        `core/rate_merge.py::RateMerger` - prevents a slow,
+        hardware-fixed sample rate like the NI9210's from blocking the
+        acquisition thread while a faster group keeps running in
+        parallel).
         """
 
     def close(self) -> None:
-        """Räumt Ressourcen auf. Idempotent, ruft `stop()` falls nötig."""
+        """Cleans up resources. Idempotent, calls `stop()` if needed."""
         if self._is_running:
             try:
                 self.stop()

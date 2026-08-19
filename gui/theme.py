@@ -1,21 +1,22 @@
 """
 gui/theme.py
 
-Einfaches Hell/Dunkel-Theming für die gesamte Anwendung.
+Simple light/dark theming for the entire application.
 
-Verwendung (siehe `gui/i18n.py` für dasselbe Grundmuster):
+Usage (see `gui/i18n.py` for the same basic pattern):
     from gui.theme import init_theme, set_theme, connect_theme_changed
 
-    init_theme(app)          # einmalig beim App-Start, nach QApplication(...)
-    set_theme("dark")        # oder "light" - wirkt sofort auf alle Qt-Widgets
+    init_theme(app)          # once at app startup, after QApplication(...)
+    set_theme("dark")        # or "light" - takes effect immediately on all Qt widgets
 
-Live-Umschaltung:
-    Qt-Standardwidgets (Buttons, Labels, Menüs, ...) folgen automatisch der
-    `QApplication`-`QPalette` - dafür reicht `set_theme()`. PyQtGraph-Plots
-    (Live View, Analyse) folgen der Palette NICHT automatisch; Ansichten mit
-    Plots registrieren sich über `connect_theme_changed(self.retheme_plots)`
-    und färben ihre bereits vorhandenen Plot-Widgets über
-    `style_plot_container()`/`style_plot_item()` selbst nach.
+Live switching:
+    Standard Qt widgets (buttons, labels, menus, ...) automatically follow
+    the `QApplication` `QPalette` - `set_theme()` alone is enough for that.
+    PyQtGraph plots (Live View, Analysis) do NOT follow the palette
+    automatically; views with plots register via
+    `connect_theme_changed(self.retheme_plots)` and recolor their existing
+    plot widgets themselves via
+    `style_plot_container()`/`style_plot_item()`.
 """
 
 from __future__ import annotations
@@ -40,33 +41,34 @@ from PyQt6.QtGui import (
 _current_theme = "light"
 
 _PLOT_COLORS = {
-    # Bewusst Hex statt PyQtGraph-Kurzformen ("w"/"k"): die werden auch in
-    # echten Qt-Stylesheets verwendet (siehe
-    # `gui/live_view.py::ChannelPopoutWindow._style_value_labels`), wo
-    # "w"/"k" KEIN gueltiges CSS sind und dort still verworfen wurden -
-    # sichtbar als komplett schwarze Messwertanzeige im Light-Theme (die
-    # Kurzformen versteht nur PyQtGraph selbst, nicht Qt's CSS-Parser).
-    # `is_theme_default_plot_background()` erkennt "w" als Altwert
-    # weiterhin (siehe dort), betrifft also nur NEU gespeicherte Werte.
+    # Deliberately hex instead of PyQtGraph shorthand ("w"/"k"): those are
+    # also used in real Qt stylesheets (see
+    # `gui/live_view.py::ChannelPopoutWindow._style_value_labels`), where
+    # "w"/"k" are NOT valid CSS and were silently dropped there -
+    # visible as a completely black value display in the light theme (the
+    # shorthand is only understood by PyQtGraph itself, not Qt's CSS
+    # parser). `is_theme_default_plot_background()` still recognizes "w"
+    # as a legacy value (see there), so this only affects NEWLY saved
+    # values.
     "light": {"background": "#ffffff", "foreground": "#000000", "curve": "#1565c0"},
     "dark": {"background": "#232323", "foreground": "#e0e0e0", "curve": "#64b5f6"},
 }
 
-# Hintergrundfarbe des Plot-CONTAINERS (Achsentick-Rand, Zwischenraeume
-# zwischen Subplots, Messwertanzeige-Boxen) - bewusst NICHT dieselbe wie
-# `_PLOT_COLORS[...]["background"]` (das bleibt reserviert fuer die
-# eigentliche Plotflaeche, wo Daten/Kurven landen, siehe
-# `_channel_background_color` in gui/live_view.py). Entspricht exakt
-# `QPalette.ColorRole.Window` aus `_build_light_palette`/
-# `_build_dark_palette` unten, damit der Rand der Plot-Widgets optisch mit
-# dem Rest der App-Oberflaeche (Fenster-/Panel-Hintergrund) verschmilzt,
-# statt wie ein eigenstaendiges weisses/schwarzes Rechteck zu wirken.
+# Background color of the plot CONTAINER (axis tick border, gaps between
+# subplots, value display boxes) - deliberately NOT the same as
+# `_PLOT_COLORS[...]["background"]` (that stays reserved for the actual
+# plot area where data/curves are drawn, see `_channel_background_color`
+# in gui/live_view.py). Matches exactly `QPalette.ColorRole.Window` from
+# `_build_light_palette`/`_build_dark_palette` below, so the border of the
+# plot widgets visually blends with the rest of the app surface (window/
+# panel background) instead of looking like a standalone white/black
+# rectangle.
 _PLOT_CONTAINER_COLORS = {"light": "#f0f0f0", "dark": "#353535"}
 
-# Relativ zur App-Standardschriftgroesse (nicht fest codiert, siehe
-# `_AXIS_TICK_FONT_SIZE_INCREASE` fuer denselben Grundsatz) - Play/
-# Aufnahme/Stop/Scharf-Button wirken bei der Standardgroesse etwas klein
-# fuer derart praesente Aktions-Buttons.
+# Relative to the app's default font size (not hard-coded, see
+# `_AXIS_TICK_FONT_SIZE_INCREASE` for the same principle) - the play/
+# record/stop/arm buttons look a bit small at the default size for such
+# prominent action buttons.
 _ACTION_BUTTON_FONT_SIZE_INCREASE = 1
 
 
@@ -74,30 +76,29 @@ def _action_button_font_size_pt() -> int:
     return QFont().pointSize() + _ACTION_BUTTON_FONT_SIZE_INCREASE
 
 
-# Gemeinsamer Grundstil fuer Play/Aufnahme/Stop UND den Trigger-Scharf-
-# Button (`_trigger_arm_button`) in BEIDEN Ansichten (`gui/setup_view.py`/
-# `gui/live_view.py`) - An einer Stelle definiert, damit sie nicht
-# auseinanderlaufen koennen. Text-/Hintergrundfarbe kommen bewusst NICHT
-# als Literal, sondern ueber `palette(button-text)`/`palette(button)` -
-# folgen so automatisch dem aktuellen Theme (inkl. automatisch gedimmter
-# Farbe im deaktivierten Zustand, ganz ohne eigene `:disabled`-Regel -
-# das ist der Sinn von `palette(...)` in Qt-Stylesheets). `Button` und
-# `Window` sind in beiden Paletten (siehe `_build_light_palette`/
-# `_build_dark_palette`) bewusst IDENTISCH - ohne eigenen Rahmen waeren
-# die Buttons daher optisch nicht vom Hintergrund zu unterscheiden, daher
-# der sichtbare `border`. `palette(mid)` waere dafuer zu kontrastarm
-# (siehe Kommentar zu den Navigationskacheln in gui/main_window.py -
-# derselbe Befund), daher `palette(dark)`. Hover/Press bekommen einen
-# dezenten Effekt ueber `palette(midlight)`/`palette(mid)`.
-# Grosszuegigeres Padding als Qt's Standard macht die Buttons insgesamt
-# etwas hoeher/praesenter.
+# Shared base style for play/record/stop AND the trigger arm button
+# (`_trigger_arm_button`) in BOTH views (`gui/setup_view.py`/
+# `gui/live_view.py`) - defined in one place so they can't drift apart.
+# Text/background color deliberately do NOT come as literals but via
+# `palette(button-text)`/`palette(button)` - so they automatically follow
+# the current theme (including automatically dimmed color in the disabled
+# state, without any dedicated `:disabled` rule - that's the whole point
+# of `palette(...)` in Qt stylesheets). `Button` and `Window` are
+# deliberately IDENTICAL in both palettes (see `_build_light_palette`/
+# `_build_dark_palette`) - without their own border, the buttons would
+# therefore be visually indistinguishable from the background, hence the
+# visible `border`. `palette(mid)` would be too low-contrast for that
+# (see the comment on the navigation tiles in gui/main_window.py - same
+# finding), hence `palette(dark)`. Hover/press get a subtle effect via
+# `palette(midlight)`/`palette(mid)`. More generous padding than Qt's
+# default makes the buttons overall a bit taller/more prominent.
 #
-# ALS FUNKTION statt fester String-Konstante (anders vor dieser Aenderung):
-# `QFont()` (fuer die Schriftgroesse, siehe `_action_button_font_size_pt`)
-# darf erst NACH `QApplication`-Erzeugung aufgerufen werden - `gui/theme.py`
-# wird aber teils schon davor importiert (siehe `gui/i18n.py`-Kommentar
-# zum selben Problem). Aufrufer verwenden daher `action_button_style()`
-# statt einer Modulebene-Konstante.
+# AS A FUNCTION instead of a fixed string constant (different before this
+# change): `QFont()` (for the font size, see
+# `_action_button_font_size_pt`) may only be called AFTER `QApplication`
+# has been created - but `gui/theme.py` is sometimes imported before that
+# (see the `gui/i18n.py` comment on the same issue). Callers therefore use
+# `action_button_style()` instead of a module-level constant.
 def action_button_style() -> str:
     size = _action_button_font_size_pt()
     return (
@@ -114,12 +115,12 @@ def action_button_style() -> str:
     )
 
 
-# Wie `action_button_style()`, aber zusaetzlich mit einem deutlich
-# sichtbaren "scharf/aktiv"-Zustand (`:checked`, bleibt gedrueckt bis
-# erneut geklickt) - dafuer `palette(highlight)`/`palette(highlighted-text)`
-# (Qt's dedizierte Rollen fuer genau diesen Zweck: ein hervorgehobenes
-# Element mit garantiert lesbarem Text darauf, in beiden Themes ein
-# kraeftiger Akzentton statt eines neutralen Grautons).
+# Like `action_button_style()`, but with an additional, clearly visible
+# "armed/active" state (`:checked`, stays pressed until clicked again) -
+# using `palette(highlight)`/`palette(highlighted-text)` for that (Qt's
+# dedicated roles for exactly this purpose: a highlighted element with
+# guaranteed readable text on top, a strong accent tone in both themes
+# instead of a neutral gray).
 def trigger_arm_button_style() -> str:
     size = _action_button_font_size_pt()
     return (
@@ -140,16 +141,15 @@ def trigger_arm_button_style() -> str:
         "}"
     )
 
-# Feste (theme-unabhaengige) Symbolfarben fuer die Play-/Aufnahme-Buttons
-# (siehe `draw_play_icon`/`draw_record_icon` unten sowie
-# `gui/setup_view.py`/`gui/live_view.py`) - Gruen = nur Live-Anzeige (kein
-# Speichern), Rot = Aufzeichnung MIT Speicherung. Stop UND der
-# Trigger-Scharf-Button bekommen bewusst KEINE feste Icon-Farbe (bleiben
-# bei der theme-abhaengigen `nav_icon_color()`) - "Rot fuer Stop" ist hier
-# schon durch den Aufnahme-Button belegt, und ein fest weisses Icon waere
-# auf einem hellen Theme-Hintergrund unsichtbar (beide Buttons haben seit
-# `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE` keinen fest dunklen
-# Hintergrund mehr).
+# Fixed (theme-independent) icon colors for the play/record buttons (see
+# `draw_play_icon`/`draw_record_icon` below as well as
+# `gui/setup_view.py`/`gui/live_view.py`) - green = live view only (no
+# saving), red = recording WITH saving. Stop AND the trigger arm button
+# deliberately get NO fixed icon color (they stay on the theme-dependent
+# `nav_icon_color()`) - "red for stop" is already taken here by the
+# record button, and a fixed white icon would be invisible on a light
+# theme background (neither button has had a fixed dark background since
+# `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE`).
 PLAY_ICON_COLOR = QColor(46, 204, 113)
 RECORD_ICON_COLOR = QColor(220, 53, 69)
 
@@ -166,12 +166,12 @@ def _build_light_palette() -> QPalette:
     palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(0, 0, 0))
     palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-    # 3D-Schattierungsrollen (Light/Midlight/Dark/Mid/Shadow) - werden von
-    # QPalette NICHT automatisch aus Button/Window abgeleitet, wenn man
-    # (wie hier) einzelne Rollen statt des Ein-Farb-Konstruktors setzt.
-    # Ohne sie fallen QSS-Referenzen wie "palette(light)"/"palette(dark)"
-    # (siehe Navigationskacheln in gui/main_window.py) auf Qts
-    # themenunabhängige Standardgrautöne zurück statt auf dieses Theme.
+    # 3D shading roles (Light/Midlight/Dark/Mid/Shadow) - NOT automatically
+    # derived by QPalette from Button/Window when (as here) individual
+    # roles are set instead of using the single-color constructor. Without
+    # them, QSS references like "palette(light)"/"palette(dark)" (see the
+    # navigation tiles in gui/main_window.py) fall back to Qt's
+    # theme-independent default grays instead of this theme.
     palette.setColor(QPalette.ColorRole.Light, QColor(255, 255, 255))
     palette.setColor(QPalette.ColorRole.Midlight, QColor(247, 247, 247))
     palette.setColor(QPalette.ColorRole.Dark, QColor(160, 160, 160))
@@ -198,8 +198,8 @@ def _build_dark_palette() -> QPalette:
     palette.setColor(QPalette.ColorRole.Button, QColor(53, 53, 53))
     palette.setColor(QPalette.ColorRole.ButtonText, QColor(255, 255, 255))
     palette.setColor(QPalette.ColorRole.BrightText, QColor(255, 0, 0))
-    # Siehe Kommentar in _build_light_palette() - dieselben Rollen fehlten
-    # hier ebenfalls.
+    # See the comment in _build_light_palette() - the same roles were
+    # missing here as well.
     palette.setColor(QPalette.ColorRole.Light, QColor(90, 90, 90))
     palette.setColor(QPalette.ColorRole.Midlight, QColor(70, 70, 70))
     palette.setColor(QPalette.ColorRole.Dark, QColor(20, 20, 20))
@@ -218,77 +218,76 @@ _PALETTES = {"light": _build_light_palette, "dark": _build_dark_palette}
 
 
 def init_theme(app) -> None:
-    """Muss einmalig beim App-Start aufgerufen werden (nach `QApplication(...)`,
-    vor der ersten Fenster-Erzeugung).
+    """Must be called once at app startup (after `QApplication(...)`,
+    before the first window is created).
 
-    Setzt den `Fusion`-Stil, damit Light/Dark-Paletten auf allen Plattformen
-    zuverlässig greifen (der native Windows-Stil ignoriert eine eigene
-    `QPalette` für viele Widgets).
+    Sets the `Fusion` style so that light/dark palettes take effect
+    reliably on all platforms (the native Windows style ignores a custom
+    `QPalette` for many widgets).
     """
     app.setStyle("Fusion")
     app.setPalette(_PALETTES[_current_theme]())
-    # Globaler PyQtGraph-Default fuer neu erzeugte Widgets, BEVOR
-    # `style_plot_container()` explizit greift - Fenster-Hintergrundfarbe
-    # (siehe dort), nicht die Plotflaechen-Farbe.
+    # Global PyQtGraph default for newly created widgets, BEFORE
+    # `style_plot_container()` applies explicitly - window background
+    # color (see there), not the plot area color.
     pg.setConfigOption("background", _PLOT_CONTAINER_COLORS[_current_theme])
     pg.setConfigOption("foreground", _PLOT_COLORS[_current_theme]["foreground"])
 
 
 def get_theme() -> str:
-    """Gibt das aktuelle Theme zurück ("light" oder "dark")."""
+    """Returns the current theme ("light" or "dark")."""
     return _current_theme
 
 
 def curve_color() -> str:
-    """Standard-Kurvenfarbe für neue Plots im aktuellen Theme."""
+    """Default curve color for new plots in the current theme."""
     return _PLOT_COLORS[_current_theme]["curve"]
 
 
 def plot_foreground_color() -> str:
-    """Standard-Vordergrundfarbe (Achsen/Text) im aktuellen Theme."""
+    """Default foreground color (axes/text) in the current theme."""
     return _PLOT_COLORS[_current_theme]["foreground"]
 
 
 def plot_background_color() -> str:
-    """Standard-Hintergrundfarbe für neue Plots im aktuellen Theme.
+    """Default background color for new plots in the current theme.
 
-    Fallback für Kanäle ohne individuell konfigurierte Hintergrundfarbe
-    (siehe `gui/live_view.py::ChannelDisplayDialog`).
+    Fallback for channels without an individually configured background
+    color (see `gui/live_view.py::ChannelDisplayDialog`).
     """
     return _PLOT_COLORS[_current_theme]["background"]
 
 
 def plot_container_background_color() -> str:
-    """Hintergrundfarbe für den Plot-CONTAINER (alles außer der eigentlichen
-    Plotfläche, siehe `_PLOT_CONTAINER_COLORS`) - für die Messwertanzeige-
-    Boxen (siehe `gui/live_view.py`) UND `style_plot_container()`."""
+    """Background color for the plot CONTAINER (everything except the
+    actual plot area, see `_PLOT_CONTAINER_COLORS`) - for the value
+    display boxes (see `gui/live_view.py`) AND `style_plot_container()`."""
     return _PLOT_CONTAINER_COLORS[_current_theme]
 
 
 def is_theme_default_plot_background(color: str | None) -> bool:
-    """Erkennt gespeicherte Plot-Hintergründe aus einem Theme-Default.
+    """Recognizes stored plot backgrounds that came from a theme default.
 
-    Ältere Konfigurationen speichern den hellen Default als ``"w"``;
-    spätere Versionen können die Hexwerte des hellen oder dunklen Themes
-    enthalten. Diese Werte sind keine individuellen Kanalfarben und sollen
-    bei einem Theme-Wechsel dem aktuellen Theme folgen.
+    Older configurations store the light default as ``"w"``; later
+    versions may contain the hex values of the light or dark theme. These
+    values are not individual channel colors and should follow the
+    current theme on a theme switch.
     """
     return color in {"w", "#ffffff", "#232323"}
 
 
 def style_plot_container(widget) -> None:
-    """Setzt den Hintergrund eines PyQtGraph-Containers (`PlotWidget` oder
-    `GraphicsLayoutWidget`) auf die Fenster-Hintergrundfarbe (siehe
-    `plot_container_background_color()`) - NICHT auf die Plotflächen-Farbe,
-    die bleibt der eigentlichen Datenfläche (ViewBox) vorbehalten."""
+    """Sets the background of a PyQtGraph container (`PlotWidget` or
+    `GraphicsLayoutWidget`) to the window background color (see
+    `plot_container_background_color()`) - NOT the plot area color, which
+    remains reserved for the actual data area (ViewBox)."""
     widget.setBackground(_PLOT_CONTAINER_COLORS[_current_theme])
 
 
-# PyQtGraph rendert Achsenticks standardmaessig in der App-Standard-
-# Schriftgroesse - auf den eng gepackten Achsen der Live-/Analyse-Plots
-# wirkt das unnoetig klein. `+2pt` relativ zur Standardgroesse (statt
-# einer festen Punktgroesse), damit eine System-Schriftgroessen-Aenderung
-# weiterhin respektiert wird.
+# PyQtGraph renders axis ticks in the app's default font size by default -
+# on the tightly packed axes of the live/analysis plots that looks
+# unnecessarily small. `+2pt` relative to the default size (instead of a
+# fixed point size) so a system font size change is still respected.
 _AXIS_TICK_FONT_SIZE_INCREASE = 2
 
 
@@ -299,25 +298,24 @@ def _axis_tick_font() -> QFont:
 
 
 def axis_tick_point_size() -> int:
-    """Punktgroesse der Achsentick-Beschriftung (siehe `_axis_tick_font`) -
-    oeffentlich, damit Achsen-LABEL (z. B. "Zeit [s]", Kanalname/Einheit
-    auf der Y-Achse, siehe `gui/live_view.py`) dieselbe Schriftgroesse
-    verwenden koennen wie die Tick-Werte selbst, statt PyQtGraph's
-    kleinerem Default fuer Achsentitel."""
+    """Point size of the axis tick labels (see `_axis_tick_font`) - public
+    so axis LABELS (e.g. "Time [s]", channel name/unit on the Y axis, see
+    `gui/live_view.py`) can use the same font size as the tick values
+    themselves, instead of PyQtGraph's smaller default for axis titles."""
     return _axis_tick_font().pointSize()
 
 
 def style_plot_item(plot_item) -> None:
-    """Färbt Achsen und Titel eines einzelnen PyQtGraph-`PlotItem` im
-    aktuellen Theme und vergrössert die Achsentick-Beschriftung leicht
-    (siehe `_axis_tick_font`).
+    """Colors the axes and title of a single PyQtGraph `PlotItem` in the
+    current theme and slightly enlarges the axis tick labels (see
+    `_axis_tick_font`).
 
-    Nötig, weil bereits erzeugte `PlotItem`s die globalen
-    `pg.setConfigOption(...)`-Werte NICHT rückwirkend übernehmen - nur neu
-    erzeugte Plots tun das automatisch. Der Titel (`addPlot(title=...)`)
-    ist davon extra betroffen: er bleibt sonst in seiner ursprünglichen
-    Farbe (z. B. Schwarz aus dem Hell-Theme) hängen, auch nachdem die
-    Achsen bereits per `axis.setTextPen(...)` umgefärbt wurden.
+    Necessary because already-created `PlotItem`s do NOT retroactively
+    pick up the global `pg.setConfigOption(...)` values - only newly
+    created plots do that automatically. The title (`addPlot(title=...)`)
+    is especially affected by this: it otherwise stays stuck in its
+    original color (e.g. black from the light theme), even after the axes
+    have already been recolored via `axis.setTextPen(...)`.
     """
     foreground = _PLOT_COLORS[_current_theme]["foreground"]
     tick_font = _axis_tick_font()
@@ -332,26 +330,25 @@ def style_plot_item(plot_item) -> None:
 
 
 def repolish(widget) -> None:
-    """Erzwingt eine erneute Auswertung des Stylesheets eines Widgets."""
+    """Forces a widget's stylesheet to be re-evaluated."""
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     widget.update()
 
 
 def fix_toggle_button_width(button, *texts: str) -> None:
-    """Verhindert eine Breitenaenderung eines Buttons, dessen Text sich zur
-    Laufzeit aendert (z. B. der Trigger-Scharf-Button - "Trigger scharf
-    schalten" vs. "Trigger entschärfen" sind unterschiedlich lang, ein
-    Umschalten liess den Button bisher sichtbar in der Breite springen).
+    """Prevents a width change on a button whose text changes at runtime
+    (e.g. the trigger arm button - "Arm Trigger" vs. "Disarm Trigger" are
+    different lengths; toggling used to make the button visibly jump in
+    width).
 
-    Setzt testweise JEDEN uebergebenen Text, misst dabei `sizeHint()`
-    (beruecksichtigt automatisch Icon/Padding/Rahmen aus dem aktuell
-    gesetzten Stylesheet, statt diese Werte hier per Hand nachzubilden)
-    und fixiert die Breite auf den breitesten Kandidaten. `texts` muessen
-    bereits fertig formatiert sein (inkl. z. B. fuehrender Leerzeichen fuer
-    den Icon-Abstand) - der Aufrufer ruft dies nach JEDER Textaenderung
-    erneut auf (auch nach einem Sprachwechsel), da sich die Breite pro
-    Sprache unterscheidet.
+    Sets EVERY given text as a trial, measuring `sizeHint()` each time
+    (automatically accounts for icon/padding/border from the currently
+    set stylesheet, instead of reproducing those values here by hand) and
+    fixes the width to the widest candidate. `texts` must already be
+    fully formatted (including e.g. leading spaces for icon spacing) - the
+    caller calls this again after EVERY text change (including after a
+    language switch), since the width differs per language.
     """
     original_text = button.text()
     widest = 0
@@ -363,31 +360,31 @@ def fix_toggle_button_width(button, *texts: str) -> None:
 
 
 def is_position_on_screen(x: int, y: int) -> bool:
-    """Prueft, ob der Punkt `(x, y)` auf einem AKTUELL angeschlossenen
-    Bildschirm liegt (siehe `QGuiApplication.screenAt`).
+    """Checks whether the point `(x, y)` lies on a CURRENTLY connected
+    screen (see `QGuiApplication.screenAt`).
 
-    Genutzt beim Wiederherstellen einer gespeicherten Fensterposition
-    (Hauptfenster in `gui/main_window.py`, Kanal-Popout-Fenster in
-    `gui/live_view.py`) - ohne diese Pruefung koennte ein Fenster, das
-    zuletzt auf einem inzwischen abgesteckten zweiten Monitor stand, an
-    einer unerreichbaren Position landen (ausserhalb aller sichtbaren
-    Bildschirme, z. B. mit negativen oder sehr grossen Koordinaten)."""
+    Used when restoring a saved window position (main window in
+    `gui/main_window.py`, channel popout windows in `gui/live_view.py`) -
+    without this check, a window that was last positioned on a second
+    monitor that has since been unplugged could end up at an unreachable
+    position (outside all visible screens, e.g. with negative or very
+    large coordinates)."""
     return QGuiApplication.screenAt(QPoint(x, y)) is not None
 
 
 # ---------------------------------------------------------------------- #
-# Einfache, selbst gezeichnete Navigations-Icons
+# Simple, self-drawn navigation icons
 # ---------------------------------------------------------------------- #
 #
-# `QStyle.standardIcon(...)` wäre die naheliegende Alternative, liefert
-# für die hier gebrauchten Symbole aber FEST eingefärbte Pixmaps, die der
-# Palette nicht folgen - ein Theme-Wechsel würde die Icon-Farbe nicht
-# ändern. Diese Icons werden stattdessen mit der aktuellen
-# `WindowText`-Farbe gezeichnet und bei jedem Theme-Wechsel neu erzeugt.
+# `QStyle.standardIcon(...)` would be the obvious alternative, but for the
+# icons used here it delivers FIXED-colored pixmaps that don't follow the
+# palette - a theme switch would not change the icon color. These icons
+# are instead drawn with the current `WindowText` color and recreated on
+# every theme switch.
 
 
 def nav_icon_color() -> QColor:
-    """Aktuelle Vordergrundfarbe für Navigations-Icons (folgt der Palette)."""
+    """Current foreground color for navigation icons (follows the palette)."""
     from PyQt6.QtWidgets import QApplication
 
     app = QApplication.instance()
@@ -396,16 +393,38 @@ def nav_icon_color() -> QColor:
     return QColor(0, 0, 0)
 
 
-def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
-    """Erzeugt eine leere Pixmap für ein selbst gezeichnetes Icon.
+def disabled_text_color() -> QColor:
+    """Theme-dependent text color for disabled/unavailable entries (see
+    `_build_light_palette`/`_build_dark_palette`,
+    `QPalette.ColorGroup.Disabled`).
 
-    Wird in Geräte-Pixeln (nicht logischen Pixeln) angelegt und mit dem
-    aktuellen `devicePixelRatio()` markiert - sonst erscheinen die Icons bei
-    Windows-Skalierung >100% (hier: 250%) sichtbar verpixelt, weil Qt die
-    sonst zu kleine Pixmap beim Zeichnen hochskaliert. Zeichencode in den
-    draw_*_icon()-Funktionen bleibt unverändert (nutzt weiterhin `size` in
-    logischen Einheiten) - QPainter skaliert automatisch anhand des
-    devicePixelRatio der Ziel-Pixmap.
+    Set as an EXPLICIT foreground color on individual `QTreeWidgetItem`s
+    (e.g. `gui/widgets/channel_table.py::HardwareChannelPickerDialog` for
+    "already assigned"/unsupported channels, `gui/setup_view.py`'s device
+    tree for unsupported modules) - Qt does NOT reliably apply the
+    disabled color group automatically just because a single item loses
+    its `ItemIsEnabled` flag (unlike a fully disabled widget); the item
+    would otherwise still look like a normal, enabled entry despite the
+    flag being set.
+    """
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        return app.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+    return QColor(150, 150, 150)
+
+
+def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
+    """Creates an empty pixmap for a self-drawn icon.
+
+    Allocated in device pixels (not logical pixels) and marked with the
+    current `devicePixelRatio()` - otherwise the icons appear visibly
+    pixelated at Windows scaling >100% (here: 250%), because Qt upscales
+    the otherwise too-small pixmap when drawing. Drawing code in the
+    draw_*_icon() functions stays unchanged (still uses `size` in logical
+    units) - QPainter automatically scales based on the target pixmap's
+    devicePixelRatio.
     """
     from PyQt6.QtWidgets import QApplication
 
@@ -422,10 +441,10 @@ def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
 
 
 def draw_gear_icon(size: int = 36) -> QPixmap:
-    """Zahnrad-Symbol (Setup/Konfiguration).
+    """Gear symbol (Setup/Configuration).
 
-    Blockige, rechteckige Zähne statt dünner Speichen - dünne Linien vom
-    Kreis nach außen sehen bei kleiner Größe eher wie eine Sonne aus.
+    Blocky, rectangular teeth instead of thin spokes - thin lines
+    radiating out from the circle look more like a sun at small sizes.
     """
     pixmap, painter = _new_icon_pixmap(size)
     color = nav_icon_color()
@@ -438,7 +457,7 @@ def draw_gear_icon(size: int = 36) -> QPixmap:
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(color)
 
-    # Zähne: kleine Rechtecke, radial um den Mittelpunkt verteilt.
+    # Teeth: small rectangles, distributed radially around the center.
     for i in range(8):
         painter.save()
         painter.translate(center, center)
@@ -446,10 +465,10 @@ def draw_gear_icon(size: int = 36) -> QPixmap:
         painter.drawRect(QRectF(body_radius, -tooth_width / 2, tooth_len, tooth_width))
         painter.restore()
 
-    # Zahnkranz-Körper.
+    # Gear ring body.
     painter.drawEllipse(QPointF(center, center), body_radius, body_radius)
 
-    # Mittelloch ausstanzen, damit ein echter Ring entsteht.
+    # Punch out the center hole so a real ring results.
     painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
     painter.drawEllipse(QPointF(center, center), hole_radius, hole_radius)
 
@@ -458,13 +477,13 @@ def draw_gear_icon(size: int = 36) -> QPixmap:
 
 
 def draw_play_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
-    """Play-Dreieck (Live View).
+    """Play triangle (Live View).
 
-    `y_offset` erlaubt eine kleine vertikale Feinausrichtung für Buttons.
-    `color` überschreibt die sonst theme-abhängige `nav_icon_color()` -
-    nötig für Buttons mit fest codiertem (nicht theme-abhängigem)
-    Hintergrund, z. B. den grünen Start-Button in `gui/setup_view.py`,
-    wo Schwarz (Hell-Modus-Vordergrundfarbe) auf Dunkelgrün kaum sichtbar wäre.
+    `y_offset` allows a small vertical fine-adjustment for buttons.
+    `color` overrides the otherwise theme-dependent `nav_icon_color()` -
+    needed for buttons with a fixed (non-theme-dependent) background, e.g.
+    the green start button in `gui/setup_view.py`, where black (the light
+    mode foreground color) would barely be visible on dark green.
     """
     pixmap, painter = _new_icon_pixmap(size)
     painter.setPen(Qt.PenStyle.NoPen)
@@ -484,12 +503,12 @@ def draw_play_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None =
 
 
 def draw_record_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
-    """Gefuellter Kreis - das gebraeuchliche Aufnahme-Symbol (Video-/Audio-
-    Geraete), fuer den Button, der eine Messung MIT Speicherung startet
-    (siehe `gui/setup_view.py`/`gui/live_view.py`) - unterscheidet ihn
-    optisch vom reinen Live-Anzeige-Button (`draw_play_icon`).
+    """Filled circle - the customary record symbol (video/audio devices),
+    for the button that starts a measurement WITH saving (see
+    `gui/setup_view.py`/`gui/live_view.py`) - visually distinguishes it
+    from the pure live-display button (`draw_play_icon`).
 
-    `y_offset`/`color` wie bei `draw_play_icon`.
+    `y_offset`/`color` as in `draw_play_icon`.
     """
     pixmap, painter = _new_icon_pixmap(size)
     painter.setPen(Qt.PenStyle.NoPen)
@@ -502,13 +521,13 @@ def draw_record_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None
 
 
 def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
-    """Blitz-Symbol für den Trigger-Scharf-Button (`_trigger_arm_button` in
-    `gui/setup_view.py`/`gui/live_view.py`) - das gebräuchliche Zeichen für
-    "Trigger" (z. B. auch bei Oszilloskopen).
+    """Lightning bolt symbol for the trigger arm button
+    (`_trigger_arm_button` in `gui/setup_view.py`/`gui/live_view.py`) -
+    the customary sign for "trigger" (e.g. also used on oscilloscopes).
 
-    `y_offset`/`color` wie bei `draw_play_icon` - der Button hat einen fest
-    codierten grauen Hintergrund unabhängig vom Theme, das Icon braucht
-    daher ebenso IMMER Weiß statt der sonst theme-abhängigen
+    `y_offset`/`color` as in `draw_play_icon` - the button has a fixed
+    gray background independent of the theme, so the icon likewise always
+    needs white instead of the otherwise theme-dependent
     `nav_icon_color()`.
     """
     pixmap, painter = _new_icon_pixmap(size)
@@ -534,12 +553,12 @@ def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | Non
 
 
 def draw_magnifier_icon(size: int = 36) -> QPixmap:
-    """Lupe mit einem schematischen Zeitgraphen im Inneren (Analyse).
+    """Magnifying glass with a schematic time graph inside it (Analysis).
 
-    Der Graph ist auf das Lupenglas geclippt (liegt also wirklich "in" der
-    Lupe, nicht nur daneben). Der Griff verläuft exakt radial vom
-    Kreisrand nach außen (45°-Richtung von der Lupenmitte), statt versetzt
-    tangential anzusetzen.
+    The graph is clipped to the lens (so it really sits "in" the lens, not
+    just next to it). The handle runs exactly radially outward from the
+    circle's edge (45° direction from the lens center), instead of being
+    offset tangentially.
     """
     pixmap, painter = _new_icon_pixmap(size)
     color = nav_icon_color()
@@ -547,7 +566,7 @@ def draw_magnifier_icon(size: int = 36) -> QPixmap:
     lens_center = QPointF(size * 0.44, size * 0.44)
     lens_radius = size * 0.32
 
-    # Schematischer Zeitgraph (Zickzack-Linie), auf das Lupenglas geclippt.
+    # Schematic time graph (zigzag line), clipped to the lens.
     inner_radius = lens_radius * 0.82
     clip_path = QPainterPath()
     clip_path.addEllipse(lens_center, inner_radius, inner_radius)
@@ -571,7 +590,7 @@ def draw_magnifier_icon(size: int = 36) -> QPixmap:
         painter.drawLine(p1, p2)
     painter.restore()
 
-    # Lupenrand.
+    # Lens rim.
     lens_pen = QPen(color)
     lens_pen.setWidthF(size * 0.09)
     lens_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
@@ -579,9 +598,9 @@ def draw_magnifier_icon(size: int = 36) -> QPixmap:
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.drawEllipse(lens_center, lens_radius, lens_radius)
 
-    # Griff: startet exakt auf dem Kreisrand und läuft radial (45°) weiter
-    # nach außen - dieselbe Richtung wie die Linie von der Lupenmitte zum
-    # Startpunkt, also kein Versatz/Tangente.
+    # Handle: starts exactly on the circle's edge and continues radially
+    # (45°) outward - the same direction as the line from the lens center
+    # to the start point, so no offset/tangent.
     angle = math.radians(45)
     direction = QPointF(math.cos(angle), math.sin(angle))
     handle_start = QPointF(
@@ -600,7 +619,7 @@ def draw_magnifier_icon(size: int = 36) -> QPixmap:
 
 
 def draw_plus_icon(size: int = 16) -> QPixmap:
-    """Plus-Symbol für Aktionsbuttons (z. B. Kanal hinzufügen)."""
+    """Plus symbol for action buttons (e.g. add channel)."""
     pixmap, painter = _new_icon_pixmap(size)
     pen = QPen(nav_icon_color())
     pen.setWidthF(max(1.8, size * 0.14))
@@ -615,7 +634,7 @@ def draw_plus_icon(size: int = 16) -> QPixmap:
 
 
 def draw_minus_icon(size: int = 16) -> QPixmap:
-    """Minus-Symbol für Aktionsbuttons (z. B. Kanal entfernen)."""
+    """Minus symbol for action buttons (e.g. remove channel)."""
     pixmap, painter = _new_icon_pixmap(size)
     pen = QPen(nav_icon_color())
     pen.setWidthF(max(1.8, size * 0.14))
@@ -629,13 +648,13 @@ def draw_minus_icon(size: int = 16) -> QPixmap:
 
 
 def draw_stop_icon(size: int = 16, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
-    """Quadratisches Stop-Symbol für Abbruch-/Stop-Aktionen.
+    """Square stop symbol for cancel/stop actions.
 
-    `color` wie bei `draw_play_icon` - fuer Buttons mit fest codiertem
-    (nicht theme-abhaengigem) Hintergrund IMMER Weiss statt der sonst
-    theme-abhaengigen `nav_icon_color()`; ohne Override (z. B. die Stop-
-    Buttons in `gui/setup_view.py`/`gui/live_view.py`, die normal der
-    QPalette folgen) faellt das Icon auf `nav_icon_color()` zurueck.
+    `color` as in `draw_play_icon` - for buttons with a fixed (non-theme-
+    dependent) background, ALWAYS white instead of the otherwise theme-
+    dependent `nav_icon_color()`; without an override (e.g. the stop
+    buttons in `gui/setup_view.py`/`gui/live_view.py`, which normally
+    follow the QPalette), the icon falls back to `nav_icon_color()`.
     """
     pixmap, painter = _new_icon_pixmap(size)
     painter.setPen(Qt.PenStyle.NoPen)
@@ -648,9 +667,9 @@ def draw_stop_icon(size: int = 16, y_offset: float = 0.0, color: QColor | None =
 
 
 def draw_ellipsis_icon(size: int = 16) -> QPixmap:
-    """Drei-Punkte-Symbol ("…") als Hinweis, dass ein Button ein eigenes
-    Auswahlfenster öffnet statt einer Direktaktion (z. B. Hardwarekanal-/
-    Signaltyp-Auswahl in `gui/widgets/channel_table.py`)."""
+    """Three-dot symbol ("…") indicating that a button opens its own
+    selection window instead of a direct action (e.g. hardware channel/
+    signal type selection in `gui/widgets/channel_table.py`)."""
     pixmap, painter = _new_icon_pixmap(size)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(nav_icon_color())
@@ -663,7 +682,7 @@ def draw_ellipsis_icon(size: int = 16) -> QPixmap:
 
 
 def draw_fft_icon(size: int = 36) -> QPixmap:
-    """Spektrum-Symbol (Balken unterschiedlicher Höhe) für die FFT-Analyse."""
+    """Spectrum symbol (bars of varying height) for FFT analysis."""
     pixmap, painter = _new_icon_pixmap(size)
     color = nav_icon_color()
     painter.setPen(Qt.PenStyle.NoPen)
@@ -685,8 +704,8 @@ def draw_fft_icon(size: int = 36) -> QPixmap:
 
 
 def _draw_filter_response_icon(size: int, rising: bool) -> QPixmap:
-    """Gemeinsame Basis für Tief-/Hochpass-Icons: schematischer
-    Amplitudengang (Kurve, die auf einer Seite abfällt/ansteigt)."""
+    """Shared base for the lowpass/highpass icons: schematic amplitude
+    response (a curve that falls/rises on one side)."""
     pixmap, painter = _new_icon_pixmap(size)
     color = nav_icon_color()
 
@@ -724,18 +743,18 @@ def _draw_filter_response_icon(size: int, rising: bool) -> QPixmap:
 
 
 def draw_lowpass_icon(size: int = 36) -> QPixmap:
-    """Amplitudengang-Symbol für Tiefpassfilter (fällt nach rechts ab)."""
+    """Amplitude response symbol for a lowpass filter (falls off to the right)."""
     return _draw_filter_response_icon(size, rising=False)
 
 
 def draw_highpass_icon(size: int = 36) -> QPixmap:
-    """Amplitudengang-Symbol für Hochpassfilter (steigt nach rechts an)."""
+    """Amplitude response symbol for a highpass filter (rises to the right)."""
     return _draw_filter_response_icon(size, rising=True)
 
 
 def draw_smoothing_icon(size: int = 36) -> QPixmap:
-    """Symbol für den Glättungsfilter: verrauschte Linie über einer
-    geglätteten Kurve."""
+    """Symbol for the smoothing filter: a noisy line above a smoothed
+    curve."""
     pixmap, painter = _new_icon_pixmap(size)
     color = nav_icon_color()
 
@@ -771,13 +790,13 @@ def draw_smoothing_icon(size: int = 36) -> QPixmap:
 
 
 def set_theme(theme: str) -> None:
-    """Setzt das Theme auf "light" oder "dark" und wendet es sofort an.
+    """Sets the theme to "light" or "dark" and applies it immediately.
 
-    Aktualisiert die `QApplication`-Palette (wirkt automatisch auf alle
-    Standard-Qt-Widgets) und die globalen PyQtGraph-Farboptionen (wirkt auf
-    ab jetzt neu erzeugte Plots) - und benachrichtigt registrierte Ansichten
-    über `connect_theme_changed`, damit sie ihre bereits vorhandenen Plots
-    selbst nachfärben.
+    Updates the `QApplication` palette (automatically affects all
+    standard Qt widgets) and the global PyQtGraph color options (affects
+    plots created from now on) - and notifies registered views via
+    `connect_theme_changed` so they can recolor their existing plots
+    themselves.
     """
     global _current_theme
     if theme not in _PALETTES or theme == _current_theme:
@@ -797,11 +816,11 @@ def set_theme(theme: str) -> None:
 
 
 # ---------------------------------------------------------------------- #
-# Live-Umschalt-Signal
+# Live theme switch signal
 # ---------------------------------------------------------------------- #
 #
-# Lazy konstruiert aus demselben Grund wie in `gui/i18n.py`: dieses Modul
-# kann importiert werden, bevor `QApplication` existiert.
+# Lazily constructed for the same reason as in `gui/i18n.py`: this module
+# can be imported before `QApplication` exists.
 
 _signals: Optional["_ThemeSignals"] = None
 
@@ -819,6 +838,6 @@ def _get_signals() -> "_ThemeSignals":
 
 
 def connect_theme_changed(slot: Callable[[], None]) -> None:
-    """Registriert `slot` (typischerweise `view.retheme_plots`), der bei
-    jedem Theme-Wechsel aufgerufen wird."""
+    """Registers `slot` (typically `view.retheme_plots`), which is called
+    on every theme change."""
     _get_signals().theme_changed.connect(slot)

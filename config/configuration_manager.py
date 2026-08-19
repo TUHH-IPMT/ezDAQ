@@ -1,13 +1,13 @@
 """
 config/configuration_manager.py
 
-Zentrale Zugriffsstelle für persistente Anwendungskonfiguration.
+Central access point for persistent application configuration.
 
-Die GUI- und Core-Schicht greifen ausschließlich über den
-`ConfigurationManager` auf gespeicherte Einstellungen zu - niemals direkt
-über Dateipfade oder `json`-Aufrufe. Das hält die Persistenzlogik an einer
-Stelle testbar, austauschbar (z. B. später gegen eine Datenbank) und
-robust gegen fehlerhafte/fehlende Konfigurationsdateien.
+The GUI and core layers access stored settings exclusively through the
+`ConfigurationManager` - never directly via file paths or `json` calls.
+This keeps the persistence logic testable in one place, replaceable
+(e.g. with a database later), and robust against corrupted/missing
+configuration files.
 """
 
 from __future__ import annotations
@@ -30,30 +30,30 @@ logger = logging.getLogger(__name__)
 
 
 class ConfigurationManager:
-    """Lädt, verwaltet und speichert die persistente Anwendungskonfiguration.
+    """Loads, manages, and saves the persistent application configuration.
 
-    Verantwortlichkeiten:
-        * Laden/Speichern der allgemeinen `AppSettings` (Fenstergeometrie,
-          zuletzt verwendetes Projekt/Gerät, Defaults für neue Messungen).
-        * Laden/Speichern der zuletzt verwendeten Kanalkonfiguration
-          (Liste von `Channel`-Objekten), unabhängig von einem konkreten
-          Messprojekt - z. B. um dem Nutzer beim nächsten Start dieselbe
-          Kanalbelegung vorzuschlagen.
+    Responsibilities:
+        * Loading/saving the general `AppSettings` (window geometry,
+          last used project/device, defaults for new measurements).
+        * Loading/saving the last used channel configuration
+          (list of `Channel` objects), independent of a specific
+          measurement project - e.g. to suggest the same channel
+          assignment to the user on the next start.
 
-    Fehlerverhalten:
-        Fehlt eine Konfigurationsdatei oder ist sie fehlerhaft, wird dies
-        geloggt und auf sinnvolle Defaults zurückgefallen - die Anwendung
-        startet in jedem Fall, auch bei einer korrupten Konfiguration.
+    Error handling:
+        If a configuration file is missing or corrupted, this is logged
+        and reasonable defaults are used instead - the application
+        always starts, even with a corrupted configuration.
     """
 
     def __init__(self, config_dir: Optional[Path] = None) -> None:
-        """Initialisiert den ConfigurationManager.
+        """Initializes the ConfigurationManager.
 
         Args:
-            config_dir: Optionales, explizites Konfigurationsverzeichnis.
-                Wird v. a. für Tests verwendet, um nicht das reale
-                Benutzerverzeichnis zu beschreiben. Im Normalbetrieb wird
-                `get_config_directory()` verwendet.
+            config_dir: Optional, explicit configuration directory.
+                Mainly used for tests, to avoid writing to the real
+                user directory. In normal operation,
+                `get_config_directory()` is used.
         """
         self._config_dir = config_dir or get_config_directory()
         self._config_dir.mkdir(parents=True, exist_ok=True)
@@ -64,12 +64,12 @@ class ConfigurationManager:
         self._settings: AppSettings = self._load_settings()
 
     # ------------------------------------------------------------------ #
-    # Allgemeine Einstellungen
+    # General settings
     # ------------------------------------------------------------------ #
 
     @property
     def settings(self) -> AppSettings:
-        """Gibt die aktuell geladenen Einstellungen zurück."""
+        """Returns the currently loaded settings."""
         return self._settings
 
     def _load_settings(self) -> AppSettings:
@@ -94,7 +94,7 @@ class ConfigurationManager:
             return AppSettings()
 
     def save_settings(self) -> None:
-        """Speichert die aktuellen Einstellungen auf die Festplatte."""
+        """Saves the current settings to disk."""
         try:
             with self._settings_path.open("w", encoding="utf-8") as f:
                 json.dump(self._settings.to_dict(), f, indent=2, ensure_ascii=False)
@@ -110,10 +110,10 @@ class ConfigurationManager:
         pos_y: int,
         maximized: bool = False,
     ) -> None:
-        """Aktualisiert und speichert die Fenstergeometrie.
+        """Updates and saves the window geometry.
 
-        Wird von `gui/main_window.py` z. B. im `closeEvent` aufgerufen,
-        damit die Anwendung beim nächsten Start Größe und Position wiederherstellt.
+        Called by `gui/main_window.py`, e.g. in `closeEvent`, so the
+        application restores size and position on the next start.
         """
         self._settings.window.width = width
         self._settings.window.height = height
@@ -123,27 +123,27 @@ class ConfigurationManager:
         self.save_settings()
 
     def update_last_project_path(self, path: str) -> None:
-        """Merkt sich den Pfad des zuletzt geöffneten Messprojekts."""
+        """Remembers the path of the last opened measurement project."""
         self._settings.last_project_path = path
         self.save_settings()
 
     def update_last_storage_path(self, path: str) -> None:
-        """Merkt sich das zuletzt verwendete Speicherverzeichnis."""
+        """Remembers the last used storage directory."""
         self._settings.last_storage_path = path
         self.save_settings()
 
     def update_last_device_name(self, device_name: str) -> None:
-        """Merkt sich den Namen des zuletzt verwendeten NI-cDAQ-Geräts."""
+        """Remembers the name of the last used NI cDAQ device."""
         self._settings.last_device_name = device_name
         self.save_settings()
 
     def update_language(self, language: str) -> None:
-        """Merkt sich die zuletzt gewählte UI-Sprache."""
+        """Remembers the last selected UI language."""
         self._settings.language = language
         self.save_settings()
 
     def update_theme(self, theme: str) -> None:
-        """Merkt sich das zuletzt gewählte Farbschema."""
+        """Remembers the last selected color theme."""
         self._settings.theme = theme
         self.save_settings()
 
@@ -154,7 +154,7 @@ class ConfigurationManager:
         include_date: bool,
         include_time: bool,
     ) -> None:
-        """Merkt sich das zuletzt gewählte Namensschema für neue Messungen."""
+        """Remembers the last selected naming scheme for new measurements."""
         self._settings.name_use_number_suffix = use_number_suffix
         self._settings.name_number_suffix_digits = number_suffix_digits
         self._settings.name_include_date = include_date
@@ -170,10 +170,10 @@ class ConfigurationManager:
         recording_stop_value: float = 0.0,
         recording_stop_unit: str = "samples",
     ) -> None:
-        """Speichert die zuletzt verwendeten Messparameter.
+        """Saves the last used measurement parameters.
 
-        Diese Werte werden beim naechsten App-Start in der Setup-Ansicht
-        automatisch als Messparameter vorbelegt.
+        These values are automatically pre-filled as measurement
+        parameters in the setup view on the next app start.
         """
         self._settings.last_measurement_name = measurement_name
         self._settings.default_sample_rate_hz = sample_rate_hz
@@ -184,22 +184,22 @@ class ConfigurationManager:
         self.save_settings()
 
     def update_last_trigger_settings(self, trigger: TriggerConfig) -> None:
-        """Merkt sich die zuletzt verwendete Mess-Trigger-Konfiguration für
-        Start UND Stopp (siehe `data/models.py::TriggerConfig`) - wie bei
-        `update_last_measurement_parameters` werden diese Werte beim
-        nächsten App-Start automatisch vorbelegt."""
+        """Remembers the last used measurement trigger configuration for
+        both start AND stop (see `data/models.py::TriggerConfig`) - as
+        with `update_last_measurement_parameters`, these values are
+        automatically pre-filled on the next app start."""
         self._settings.last_trigger_config = trigger.to_dict()
         self.save_settings()
 
     # ------------------------------------------------------------------ #
-    # Kanalkonfiguration
+    # Channel configuration
     # ------------------------------------------------------------------ #
 
     def save_channel_configuration(self, channels: list[Channel]) -> None:
-        """Speichert die aktuelle Kanalkonfiguration als JSON-Datei.
+        """Saves the current channel configuration as a JSON file.
 
         Args:
-            channels: Liste der zu speichernden Kanäle (Setup-Ansicht).
+            channels: List of channels to save (setup view).
         """
         try:
             data = [ch.to_dict() for ch in channels]
@@ -216,11 +216,11 @@ class ConfigurationManager:
             )
 
     def load_channel_configuration(self) -> list[Channel]:
-        """Lädt die zuletzt gespeicherte Kanalkonfiguration.
+        """Loads the last saved channel configuration.
 
         Returns:
-            Liste der gespeicherten Kanäle, oder eine leere Liste, falls
-            keine Datei existiert oder diese nicht lesbar ist.
+            List of the saved channels, or an empty list if no file
+            exists or it is not readable.
         """
         if not self._channel_config_path.exists():
             logger.info(
@@ -236,33 +236,32 @@ class ConfigurationManager:
         )
 
     # ------------------------------------------------------------------ #
-    # Gespeicherte Messkonfigurationen
+    # Saved measurement configurations
     # ------------------------------------------------------------------ #
 
     def save_measurement_config(self, config: MeasurementConfig, file_path: Path) -> None:
-        """Speichert eine Messkonfiguration unter einem vom Nutzer gewählten Pfad.
+        """Saves a measurement configuration to a path chosen by the user.
 
-        Der Speicherort wird bewusst vom Aufrufer (GUI, per Dateidialog)
-        vorgegeben statt intern verwaltet zu werden - Konfigurationen sind
-        damit normale Dateien, die der Nutzer frei ablegen, umbenennen,
-        teilen oder löschen kann.
+        The save location is deliberately provided by the caller (GUI,
+        via a file dialog) instead of being managed internally -
+        configurations are therefore normal files that the user can
+        freely place, rename, share, or delete.
 
         Raises:
-            OSError: falls die Datei nicht geschrieben werden kann. Der
-                Fehler wird bewusst NICHT verschluckt, damit ein expliziter
-                "Speichern"-Klick in der GUI eine sichtbare Fehlermeldung
-                auslösen kann.
+            OSError: if the file cannot be written. The error is
+                deliberately NOT swallowed, so that an explicit "Save"
+                click in the GUI can trigger a visible error message.
         """
         with file_path.open("w", encoding="utf-8") as f:
             json.dump(config.to_dict(), f, indent=2, ensure_ascii=False)
         logger.debug("Messkonfiguration '%s' gespeichert: %s", config.name, file_path)
 
     def load_measurement_config(self, file_path: Path) -> Optional[MeasurementConfig]:
-        """Lädt eine zuvor gespeicherte Messkonfiguration von einem Dateipfad.
+        """Loads a previously saved measurement configuration from a file path.
 
         Returns:
-            Die geladene Konfiguration, oder None falls die Datei nicht
-            existiert oder nicht lesbar ist.
+            The loaded configuration, or None if the file does not
+            exist or is not readable.
         """
         if not file_path.exists():
             logger.warning("Messkonfigurationsdatei nicht gefunden: %s", file_path)

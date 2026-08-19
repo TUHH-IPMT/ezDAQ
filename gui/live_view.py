@@ -1,56 +1,54 @@
 """
 gui/live_view.py
 
-Live View: Echtzeit-Darstellung der Messdaten während einer laufenden Messung.
+Live view: real-time display of measurement data during a running measurement.
 
-Funktionen (siehe Vorgabe):
-    * Echtzeitplots mehrerer Kanäle gleichzeitig (PyQtGraph)
-    * Kanallegende (ein Subplot pro Kanal, da unterschiedliche
-      physikalische Einheiten pro Kanal möglich sind - z. B. Kraft in N
-      und Beschleunigung in g gemeinsam in einem Diagramm zu zeichnen
-      wäre irreführend)
-    * Zoom/Pan (nativ durch PyQtGraph)
-    * Start/Stop, Messdauer, Samplingrate
+Features (see spec):
+    * Real-time plots of multiple channels simultaneously (PyQtGraph)
+    * Channel legend (one subplot per channel, since different channels
+      can have different physical units - e.g. plotting force in N and
+      acceleration in g together in one chart would be misleading)
+    * Zoom/pan (native via PyQtGraph)
+    * Start/stop, measurement duration, sampling rate
 
-Darstellungsart (Sweep, wie ein Oszilloskop):
-    Die X-Achse jedes Subplots ist fensterbreit (Default 5 s) und scrollt
-    NICHT kontinuierlich mit. Die Kurve zeichnet innerhalb dieses festen
-    Fensters von links nach rechts durch; ist das Fenster voll, beginnt
-    sofort ein neuer Durchlauf und die alte Kurve verschwindet komplett
-    (siehe `_write_to_display_buffer`/`_get_channel_display_view`). Das
-    unterscheidet sich bewusst von einem scrollenden Ringpuffer, bei dem
-    alte Daten langsam am linken Rand herauslaufen.
+Display mode (sweep, like an oscilloscope):
+    The X axis of each subplot is window-wide (default 5 s) and does NOT
+    scroll continuously. The curve draws left to right within this fixed
+    window; once the window is full, a new sweep starts immediately and
+    the old curve disappears completely (see
+    `_write_to_display_buffer`/`_get_channel_display_view`). This is
+    deliberately different from a scrolling ring buffer, where old data
+    slowly scrolls out at the left edge.
 
-    Die Achsenbeschriftung zeigt dabei die tatsächliche Messzeit (z. B.
-    "40-45s" im 9. Durchlauf eines 5s-Fensters), nicht immer "0-5s" - der
-    X-Bereich springt bei jedem neuen Durchlauf auf die nächste absolute
-    Zeitspanne (siehe `_cycle_start_seconds`), auch wenn die Kurve selbst
-    weiterhin bei x=Fensterstart neu beginnt.
+    The axis label shows the actual measurement time (e.g. "40-45s" on
+    the 9th sweep of a 5s window), not always "0-5s" - the X range jumps
+    to the next absolute time span on every new sweep (see
+    `_cycle_start_seconds`), even though the curve itself keeps starting
+    over at x=window start.
 
-Architektur-Hinweis (bewusst KEIN Reveal-Pacing):
-    Der DAQ-Thread liefert neue Daten in Bloecken von ~25ms (Hardware-
-    Read-Granularitaet, siehe
-    `gui/setup_view.py::_calculate_samples_per_read` - bewusst nicht
-    kleiner, sonst Pufferueberlauf-Risiko bei echter Hardware). Dadurch
-    ist mit blossem Auge ein leicht "blockweises" Kurvenwachstum sichtbar.
-    Ein Versuch, das ueber eine kuenstliche, zeitbasierte Nachzieh-
-    Verzoegerung der Anzeige zu glaetten, wurde bewusst wieder verworfen:
-    das fuehrte bei einem direkten Reiz-Reaktions-Test (Klopftest auf
-    einen Beschleunigungssensor waehrend die App laeuft) zu spuerbarer
-    zusaetzlicher Latenz. Fuer ein Live-Messinstrument ist Latenz
-    wichtiger als Anzeige-Glaette - `_get_channel_display_view()` zeigt
-    daher IMMER sofort den vollen aktuell eingetroffenen Stand.
+Architecture note (deliberately NO reveal pacing):
+    The DAQ thread delivers new data in blocks of ~25ms (hardware read
+    granularity, see `gui/setup_view.py::_calculate_samples_per_read` -
+    deliberately not smaller, otherwise there's a buffer overrun risk on
+    real hardware). As a result, a slightly "blocky" curve growth is
+    visible to the naked eye. An attempt to smooth this out via an
+    artificial, time-based reveal delay on the display was deliberately
+    reverted: in a direct stimulus-response test (tapping an
+    accelerometer while the app is running), it introduced noticeable
+    additional latency. For a live measurement instrument, latency
+    matters more than display smoothness - `_get_channel_display_view()`
+    therefore ALWAYS immediately shows the full currently-arrived state.
 
-Architektur-Hinweis (Performance):
-    Der Anzeigepuffer für das aktuelle Sweep-Fenster ist ein einmalig
-    vorallokiertes NumPy-Array (`_ensure_display_buffer`) - keine
-    Allokationen pro Datenblock. Das ist für "normale" Laborabtastraten
-    (bis einige kHz über mehrere Kanäle) ausreichend performant. Bei sehr
-    hohen Abtastraten (z. B. 100 kHz über viele Kanäle) über lange
-    Anzeigefenster würde ein Downsampling der Anzeigedaten (z. B.
-    Min/Max-Dezimierung pro Pixel) die Zeichenlast weiter reduzieren -
-    das ist als spätere Optimierung vorgesehen und hier bewusst noch
-    nicht implementiert (Version 1).
+Architecture note (performance):
+    The display buffer for the current sweep window is a NumPy array
+    allocated once up front (`_ensure_display_buffer`) - no allocations
+    per data block. That's sufficiently performant for "normal" lab
+    sample rates (up to a few kHz across several channels). At very high
+    sample rates (e.g. 100 kHz across many channels) over long display
+    windows, downsampling the display data (e.g. min/max decimation per
+    pixel) would further reduce the drawing load - that's planned as a
+    later optimization and deliberately not yet implemented here
+    (version 1).
 """
 
 from __future__ import annotations
@@ -86,7 +84,7 @@ from PyQt6.QtWidgets import (
 from core.controller import MeasurementController
 from core.measurement import apply_scaling
 from data.exporter import StorageWriter
-from data.models import Channel, TriggerConfig, TriggerDirection, TriggerKind
+from data.models import Channel, RateGroup, TriggerConfig, TriggerDirection, TriggerKind
 from gui.i18n import connect_language_changed, get_language, t
 from gui.theme import (
     PLAY_ICON_COLOR,
@@ -115,41 +113,40 @@ from gui.widgets.spinbox import NoWheelDoubleSpinBox, PrecisionDoubleSpinBox
 
 logger = logging.getLogger(__name__)
 
-# Ein Diagnose-Log zeigte: die eigentliche Datenverarbeitung pro Tick
-# dauert unter 1,5ms, der Abstand zwischen Ticks lag aber durchgehend bei
-# ~100-130ms statt der konfigurierten ~33ms. Isolierte Tests (QTimer allein,
-# QTimer + DAQ-Thread, QTimer + DAQ-Thread + sichtbares Plot) haben den
-# DAQ-Thread und Antialiasing als Ursache ausgeschlossen und das eigentliche
-# SOFTWARE-Rendering von PyQtGraph (QGraphicsView/GraphicsLayoutWidget ohne
-# GPU-Beschleunigung) als Flaschenhals identifiziert - `useOpenGL=True`
-# (benoetigt PyOpenGL, siehe requirements.txt) hat den Tick-Abstand im
-# Test von durchschnittlich ~89ms auf ~34ms gesenkt.
+# A diagnostic log showed: the actual per-tick data processing takes
+# under 1.5ms, but the gap between ticks was consistently ~100-130ms
+# instead of the configured ~33ms. Isolated tests (QTimer alone,
+# QTimer + DAQ thread, QTimer + DAQ thread + visible plot) ruled out
+# the DAQ thread and antialiasing as the cause and identified PyQtGraph's
+# actual SOFTWARE rendering (QGraphicsView/GraphicsLayoutWidget without
+# GPU acceleration) as the bottleneck - `useOpenGL=True` (requires
+# PyOpenGL, see requirements.txt) reduced the tick gap in testing from
+# an average of ~89ms to ~34ms.
 pg.setConfigOptions(antialias=True, useOpenGL=True)
 
 _DEFAULT_DISPLAY_WINDOW_SECONDS = 5.0
-_UI_UPDATE_INTERVAL_MS = 15  # ~66 Hz; mit useOpenGL=True ist Rendering nicht mehr der Flaschenhals
-_STORAGE_UPDATE_INTERVAL_MS = 1000  # Dateizugriff (stat) seltener als das Plot-Update
-# Obergrenze fuer die an `curve.setData()` uebergebene Punktzahl (siehe
-# `_downsample_for_display`) - deutlich mehr als jeder Bildschirm an
-# horizontalen Pixeln hat, Kurve sieht also visuell unveraendert aus.
+_UI_UPDATE_INTERVAL_MS = 15  # ~66 Hz; with useOpenGL=True, rendering is no longer the bottleneck
+_STORAGE_UPDATE_INTERVAL_MS = 1000  # file access (stat) less often than the plot update
+# Upper bound on the point count passed to `curve.setData()` (see
+# `_downsample_for_display`) - well more than any screen has horizontal
+# pixels, so the curve looks visually unchanged.
 _MAX_DISPLAY_POINTS_PER_CURVE = 2000
-# Grosse Messwertanzeige neben dem Subplot (siehe `Channel.plot_show_value`)
-# in Hauptraster-Spalte und Popout-Fenster, je in EIGENER Spalte/Label fuer
-# Zahl und Einheit. Die Zahl wird nach einem festen Format aus
-# `Channel.plot_value_integer_digits` Vorkomma- + `_VALUE_DECIMALS`
-# Nachkommastellen dargestellt (siehe `_format_channel_value`) - IMMER
-# exakt gleich lang (Vorzeichen-Platz reserviert, nullaufgefuellt), sonst
-# wuerde die Anzeige bei jedem neuen Wert leicht hin und her springen bzw.
-# bei wachsender Ziffernanzahl abgeschnitten werden. Passt ein Wert NICHT
-# in das konfigurierte Format, erscheinen statt einer irrefuehrend
-# abgeschnittenen Zahl Rauten (wie bei einer DIAdem/LabVIEW-
-# Digitalanzeige) - die Feldbreite wird daher direkt aus dem Format
-# berechnet (siehe `_number_field_width_px`), nicht geraten. Die Einheit
-# bekommt zusaetzlich ein EIGENES Label, das nur einmal beim Aufbau
-# gesetzt und danach NIE mehr pro Tick aktualisiert wird - stuende sie
-# stattdessen im selben Text wie die Zahl, wuerde sie bei jedem neuen
-# Zahlenwert mit "hin und her springen", selbst innerhalb eines fest
-# breiten Gesamtfelds.
+# Large value display next to the subplot (see `Channel.plot_show_value`)
+# in the main grid column and popout window, each with its OWN
+# column/label for the number and the unit. The number is rendered in a
+# fixed format made of `Channel.plot_value_integer_digits` integer digits
+# plus `_VALUE_DECIMALS` decimal digits (see `_format_channel_value`) -
+# ALWAYS exactly the same length (sign space reserved, zero-padded),
+# otherwise the display would jitter slightly on every new value, or get
+# truncated as the digit count grows. If a value does NOT fit the
+# configured format, hash marks appear instead of a misleadingly
+# truncated number (like on a DIAdem/LabVIEW digital readout) - the
+# field width is therefore computed directly from the format (see
+# `_number_field_width_px`), not guessed. The unit additionally gets its
+# OWN label, which is set once at build time and never updated per tick
+# again - if it were instead part of the same text as the number, it
+# would "jitter" with every new value, even within an overall
+# fixed-width field.
 _VALUE_DECIMALS = 3
 _VALUE_NUMBER_POINT_SIZE = 18
 _VALUE_UNIT_POINT_SIZE = 18
@@ -160,7 +157,7 @@ _STORAGE_CRITICAL_PERCENT = 90.0
 
 
 def _format_bytes(num_bytes: float) -> str:
-    """Formatiert eine Byte-Anzahl menschenlesbar (z. B. "12.3 MB")."""
+    """Formats a byte count in a human-readable way (e.g. "12.3 MB")."""
     value = float(num_bytes)
     for unit in ("B", "KB", "MB", "GB"):
         if abs(value) < 1024.0:
@@ -170,13 +167,12 @@ def _format_bytes(num_bytes: float) -> str:
 
 
 def _channel_background_color(channel: Channel) -> str:
-    """Hintergrundfarbe EINES Kanals fuer die eigentliche Plotflaeche
-    (ViewBox) - Theme-Default, falls keine eigene Farbe konfiguriert ist.
-    Gilt bewusst NUR fuer die Plotflaeche selbst, NICHT fuer die
-    umgebende Messwert-/Einheit-Anzeige (siehe
-    `gui/theme.py::plot_container_background_color`) - eine individuelle
-    Kanalfarbe soll ausschliesslich dort sichtbar sein, wo tatsaechlich
-    Daten landen."""
+    """Background color of ONE channel for the actual plot area
+    (ViewBox) - theme default if no custom color is configured. Applies
+    deliberately ONLY to the plot area itself, NOT to the surrounding
+    value/unit display (see
+    `gui/theme.py::plot_container_background_color`) - a custom channel
+    color should only be visible where data actually lands."""
     return (
         plot_background_color()
         if is_theme_default_plot_background(channel.plot_background)
@@ -185,61 +181,58 @@ def _channel_background_color(channel: Channel) -> str:
 
 
 def _channel_grid_color(channel: Channel) -> str:
-    """Gitterlinienfarbe EINES Kanals - Theme-Standard (Vordergrundfarbe),
-    falls keine eigene Farbe konfiguriert ist. Wird ueber
-    `AxisItem.setTickPen()` gesetzt (siehe `_apply_channel_curve_style`) -
-    PyQtGraph leitet Gitterlinien standardmaessig aus dem Achsen-Stift
-    (`setPen()`, Achsentext-/Tickfarbe) ab; ein eigener `tickPen` erlaubt
-    eine davon unabhaengige Farbe, ohne die Achsentext-/Tickstrich-Farbe
-    selbst zu aendern (siehe `style_plot_item`)."""
+    """Grid line color of ONE channel - theme default (foreground color)
+    if no custom color is configured. Set via `AxisItem.setTickPen()`
+    (see `_apply_channel_curve_style`) - by default, PyQtGraph derives
+    grid lines from the axis pen (`setPen()`, axis text/tick color); a
+    separate `tickPen` allows an independent color without changing the
+    axis text/tick mark color itself (see `style_plot_item`)."""
     return channel.plot_grid_color or plot_foreground_color()
 
 
 def _axis_label_style() -> dict[str, str]:
-    """CSS-Style-Kwargs fuer `AxisItem.setLabel()` - gleiche Punktgroesse
-    wie die Achsentick-Beschriftung (siehe `gui/theme.py::axis_tick_point_size`),
-    statt PyQtGraph's kleinerem Default fuer Achsentitel. MUSS vor
-    `axis.setPen()`/`style_plot_item()` gesetzt werden: `setLabel(**kwargs)`
-    ERSETZT `labelStyle` komplett, `setPen()` ergaenzt darin nur die Farbe
-    (`labelStyle['color']`) - bei umgekehrter Reihenfolge ginge die Farbe
-    wieder verloren."""
+    """CSS style kwargs for `AxisItem.setLabel()` - same point size as
+    the axis tick label (see `gui/theme.py::axis_tick_point_size`),
+    instead of PyQtGraph's smaller default for axis titles. MUST be set
+    before `axis.setPen()`/`style_plot_item()`: `setLabel(**kwargs)`
+    REPLACES `labelStyle` entirely, whereas `setPen()` only adds the
+    color to it (`labelStyle['color']`) - in the reverse order, the
+    color would be lost again."""
     return {"font-size": f"{axis_tick_point_size()}pt"}
 
 
 def _channel_axis_label(channel: Channel) -> str:
-    """Y-Achsen-Beschriftung eines Kanals: Anzeigename, plus Einheit in
-    eckigen Klammern falls vorhanden (siehe `axis_time`-Zeitachsen-Label
-    fuer dieselbe Klammer-Konvention) - dieselbe Kombination wie der
-    Plot-Titel (siehe `_rebuild_plots`/`ChannelPopoutWindow.__init__`),
-    hier zusaetzlich direkt an der Achse."""
+    """Y axis label of a channel: display name, plus unit in square
+    brackets if present (see the `axis_time` time axis label for the
+    same bracket convention) - the same combination as the plot title
+    (see `_rebuild_plots`/`ChannelPopoutWindow.__init__`), here
+    additionally shown directly on the axis."""
     unit_suffix = f" [{channel.unit}]" if channel.unit else ""
     return f"{channel.display_name}{unit_suffix}"
 
 
 def _channel_display_key(channel: Channel) -> tuple[str, str]:
-    """Eindeutiger Schlüssel für anzeige-bezogene Dicts/Caches (Dialog-
-    Zeilen, Popout-Fenster-Verwaltung, Y-Bereich-Cache) - NICHT einfach
-    `hardware_channel` allein.
+    """Unique key for display-related dicts/caches (dialog rows, popout
+    window tracking, Y range cache) - NOT just `hardware_channel` alone.
 
-    Die Live-Ansicht lässt sich bewusst auch OHNE angeschlossene Hardware
-    konfigurieren und vorschauen (siehe `LiveView.preview_channels`) -
-    mehrere noch nicht zugewiesene Kanäle hätten dann alle denselben
-    leeren `hardware_channel`-Wert und würden sich in jedem darüber
-    indizierten Dict gegenseitig überschreiben (z. B. mehrere "Eigenes
-    Fenster"-Häkchen, die sich am Ende dasselbe Fenster teilen). Der
-    zusätzliche `display_name` macht den Schlüssel auch in diesem Fall
-    eindeutig - neu angelegte Kanäle sind bereits automatisch
-    durchnummeriert ("Kanal 1", "Kanal 2", ...), siehe
+    The live view can deliberately also be configured and previewed
+    WITHOUT connected hardware (see `LiveView.preview_channels`) -
+    several not-yet-assigned channels would then all share the same
+    empty `hardware_channel` value and would overwrite each other in
+    every dict indexed by it (e.g. several "own window" checkboxes that
+    end up sharing the same window). The additional `display_name` makes
+    the key unique in this case too - newly created channels are
+    already automatically numbered ("Channel 1", "Channel 2", ...), see
     `gui/widgets/channel_table.py::_on_add_clicked`.
     """
     return (channel.hardware_channel, channel.display_name)
 
 
 def _space_width_px(font: QFont) -> float:
-    """Breite eines Leerzeichens in Pixeln fuer `font` - fester Abstand
-    zwischen Messwert und Einheit (siehe `ChannelPopoutWindow`/
-    `LiveView._make_value_box`), statt eines je nach Layout/Ausrichtung
-    unterschiedlich grossen, "zufaelligen" Zwischenraums."""
+    """Width of a space character in pixels for `font` - fixed gap
+    between the value and the unit (see `ChannelPopoutWindow`/
+    `LiveView._make_value_box`), instead of a "random" gap whose size
+    would otherwise vary with layout/alignment."""
     return QFontMetrics(font).horizontalAdvance(" ")
 
 
@@ -249,46 +242,44 @@ def _downsample_for_display(
     capacity: int,
     max_points: int = _MAX_DISPLAY_POINTS_PER_CURVE,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Reduziert `times`/`values` per Min/Max-Hüllkurve (wie PyQtGraphs
-    eigenes `downsampleMethod='peak'`) auf höchstens `2 * max_points`
-    Punkte, BEVOR sie an PyQtGraph übergeben werden.
+    """Reduces `times`/`values` to at most `2 * max_points` points via a
+    min/max envelope (like PyQtGraph's own `downsampleMethod='peak'`),
+    BEFORE they're handed to PyQtGraph.
 
-    Notwendig bei sehr hohen Abtastraten (z. B. NI9234 mit 51200 Hz über
-    mehrere Kanäle gleichzeitig): PyQtGraphs eigenes `autoDownsample`
-    reduziert zwar ebenfalls, berechnet dabei aber bei JEDEM
-    `setData()`-Aufruf (bis zu ~66x/s, siehe `_UI_UPDATE_INTERVAL_MS`) über
-    das komplette Sweep-Fenster (bis zu Abtastrate * Zeitspanne Punkte PRO
-    KANAL) neu - das hat den Live-Plot bei mehreren hochabtastenden
-    Kanälen spürbar ruckeln lassen. Diese einfache, feste Reduktion VOR
-    `setData()` ist deutlich billiger als PyQtGraphs generischere,
-    view-range-abhängige Variante und macht diese überflüssig (siehe
-    `curve.setDownsampling(auto=False)` bei der Kurven-Erzeugung).
+    Necessary at very high sample rates (e.g. NI9234 at 51200 Hz across
+    several channels at once): PyQtGraph's own `autoDownsample` also
+    reduces the data, but recomputes on EVERY `setData()` call (up to
+    ~66x/s, see `_UI_UPDATE_INTERVAL_MS`) over the entire sweep window
+    (up to sample rate * time span points PER CHANNEL) - that made the
+    live plot noticeably stutter with several high-rate channels. This
+    simple, fixed reduction BEFORE `setData()` is considerably cheaper
+    than PyQtGraph's more generic, view-range-dependent variant and
+    makes it unnecessary (see `curve.setDownsampling(auto=False)` when
+    the curve is created).
 
-    BEWUSST Min/Max-Hüllkurve statt Mittelwert: eine schnell abklingende
-    Schwingung (z. B. das typische Ausklingen nach einem Klopftest auf
-    einen Beschleunigungssensor) wird durch Mittelwertbildung bei starker
-    Kompression (hier oft >100x) fast komplett weggeglättet - die
-    Hüllkurve (min UND max pro Bin statt deren Mittelwert) zeigt die
-    Amplitude weiterhin sichtbar an, auch wenn einzelne Schwingungszyklen
-    nicht mehr aufgelöst werden.
+    DELIBERATELY a min/max envelope instead of an average: a fast-decaying
+    oscillation (e.g. the typical ringdown after tapping an accelerometer)
+    would be almost completely smoothed away by averaging under heavy
+    compression (often >100x here) - the envelope (min AND max per bin
+    instead of their average) keeps the amplitude visible, even though
+    individual oscillation cycles are no longer resolved.
 
-    `capacity` (siehe `LiveView._channel_display_capacity`) ist bewusst
-    NICHT `len(values)`: `values` wächst innerhalb eines Sweep-Durchlaufs
-    bei jedem Tick weiter, ein daraus abgeleiteter Faktor würde die
-    Bin-Zuordnung also JEDEN Tick leicht verschieben - ein einzelner
-    Spitzenwert würde dann mal isoliert in einem eigenen Bin, mal mit
-    Nachbarwerten vermittelt landen, sichtbar als "Wobbeln" der Spitze
-    zwischen niedriger und hoher Anzeige, obwohl sich die zugrunde
-    liegenden Rohdaten an dieser Stelle gar nicht mehr ändern. Mit einem
-    aus der (festen) Fensterkapazität abgeleiteten Faktor bleibt die
-    Bin-Zuordnung für den gesamten Durchlauf stabil - bereits vollständig
-    gefüllte Bins ändern sich nicht mehr, nur der aktuell noch befüllte
-    letzte Bin läuft (erwartungsgemäß) mit.
+    `capacity` (see `LiveView._channel_display_capacity`) is deliberately
+    NOT `len(values)`: `values` keeps growing within a sweep on every
+    tick, so a factor derived from it would shift the bin assignment
+    slightly on EVERY tick - a single peak value would then sometimes
+    land isolated in its own bin, sometimes averaged in with neighboring
+    values, visible as the peak "wobbling" between a low and a high
+    display value, even though the underlying raw data at that point
+    isn't changing anymore. With a factor derived from the (fixed)
+    window capacity, the bin assignment stays stable for the entire
+    sweep - bins that are already fully filled no longer change, only
+    the currently-filling last bin keeps moving (as expected).
 
-    Bewusst NUR für die ANZEIGE (Kurven-Rendering) gedacht - Autoskalierung
-    (`LiveView._apply_channel_y_range`) und die grosse Messwertanzeige
-    (`_format_channel_value`, `values[-1]`) nutzen weiterhin die volle
-    Auflösung aus `LiveView._get_channel_display_view`.
+    Deliberately intended ONLY for the DISPLAY (curve rendering) -
+    autoscaling (`LiveView._apply_channel_y_range`) and the large value
+    display (`_format_channel_value`, `values[-1]`) continue to use the
+    full resolution from `LiveView._get_channel_display_view`.
     """
     n = values.shape[0]
     if n <= 2 * max_points:
@@ -300,22 +291,22 @@ def _downsample_for_display(
     usable = bin_count * factor
     binned_values = values[:usable].reshape(bin_count, factor)
 
-    # Je Bin ZWEI Punkte (max, min) statt einem Mittelwert - siehe
-    # Docstring. `stx` zentriert den x-Wert des Bins etwas (statt immer
-    # dessen ersten Sample zu nehmen), wie in PyQtGraphs `peak`-Methode.
+    # TWO points per bin (max, min) instead of one average - see
+    # docstring. `stx` centers the bin's x value somewhat (instead of
+    # always taking its first sample), as in PyQtGraph's `peak` method.
     stx = factor // 2
     downsampled_times = np.repeat(times[stx:stx + usable:factor], 2)
     downsampled_values = np.empty(bin_count * 2, dtype=values.dtype)
     downsampled_values[0::2] = binned_values.max(axis=1)
     downsampled_values[1::2] = binned_values.min(axis=1)
 
-    # Restliche, noch nicht volle Bin NICHT verwerfen: sonst haengt die
-    # Kurvenspitze bis zu `factor` Samples hinter der tatsaechlichen
-    # Schreibposition hinterher und springt bei jedem neu vollstaendigen
-    # Bin ruckartig ein Stueck vor, statt mit jedem Tick sichtbar
-    # weiterzuwachsen (siehe Klassendoc "bewusst KEIN Reveal-Pacing" -
-    # das hier ist kein zusaetzliches Glaetten/Verzoegern, nur das
-    # Nicht-Wegwerfen bereits eingetroffener Daten).
+    # Do NOT discard the remaining, not-yet-full bin: otherwise the
+    # curve tip would lag up to `factor` samples behind the actual write
+    # position and jump forward abruptly each time a bin fills up,
+    # instead of visibly growing with every tick (see the class docstring
+    # "deliberately NO reveal pacing" - this here is not additional
+    # smoothing/delaying, just not discarding data that has already
+    # arrived).
     remainder = n - usable
     if remainder > 0:
         tail = values[usable:]
@@ -328,20 +319,20 @@ def _downsample_for_display(
 def _format_channel_value(
     value: float, integer_digits: int, decimals: int = _VALUE_DECIMALS
 ) -> str:
-    """Formatiert `value` nach einem festen Zahlen-Format mit
-    `integer_digits` Vorkomma- und `decimals` Nachkommastellen (siehe
+    """Formats `value` using a fixed number format with `integer_digits`
+    integer digits and `decimals` decimal digits (see
     `Channel.plot_value_integer_digits`).
 
-    IMMER exakt gleich lang - Vorzeichen-Platz reserviert (Leerzeichen bei
-    positiven Werten statt eines fehlenden Zeichens) und Vorkommastellen
-    mit Nullen aufgefuellt - sonst wuerde die Anzeige bei jedem neuen Wert
-    (Vorzeichenwechsel, wachsende Ziffernanzahl) sichtbar hin und her
-    springen (siehe `_rebuild_plots`/`ChannelPopoutWindow`).
+    ALWAYS exactly the same length - sign space reserved (a space for
+    positive values instead of a missing character) and integer digits
+    zero-padded - otherwise the display would visibly jitter on every
+    new value (sign change, growing digit count), see
+    `_rebuild_plots`/`ChannelPopoutWindow`.
 
-    Passt der Wert NICHT in das Format (mehr Vorkommastellen als
-    vorgesehen), wird statt einer irrefuehrend abgeschnittenen Zahl ein
-    Rauten-Platzhalter angezeigt - wie bei einer DIAdem/LabVIEW-
-    Digitalanzeige, deren Ziffernbreite ebenfalls fest konfiguriert ist.
+    If the value does NOT fit the format (more integer digits than
+    provided for), hash-mark placeholders are shown instead of a
+    misleadingly truncated number - like on a DIAdem/LabVIEW digital
+    readout, whose digit width is likewise fixed.
     """
     sign = "-" if value < 0 else " "
     text = f"{abs(value):.{decimals}f}"
@@ -357,10 +348,10 @@ def _format_channel_value(
 def _number_field_width_px(
     font: QFont, integer_digits: int, decimals: int = _VALUE_DECIMALS
 ) -> int:
-    """Pixelbreite, die `_format_channel_value` fuer `font`/`integer_digits`
-    maximal benoetigt (plus kleiner Sicherheitsabstand) - die feste
-    Feldbreite wird so direkt aus dem konfigurierten Zahlenformat
-    berechnet statt geraten (siehe Kommentar bei `_VALUE_DECIMALS`)."""
+    """Maximum pixel width `_format_channel_value` needs for
+    `font`/`integer_digits` (plus a small safety margin) - the fixed
+    field width is thus computed directly from the configured number
+    format instead of guessed (see the comment at `_VALUE_DECIMALS`)."""
     mask = "-" + ("0" * integer_digits) + ("." + "0" * decimals if decimals else "")
     return QFontMetrics(font).horizontalAdvance(mask) + 10
 
@@ -369,8 +360,8 @@ _VALUE_FORMAT_PATTERN = QRegularExpression(r"0{1,6}(\.0{0,6})?")
 
 
 def _value_format_text(integer_digits: int, decimal_digits: int) -> str:
-    """Baut das im Dialog editierbare Format-Muster (z. B. "000.0000") aus
-    Vorkomma-/Nachkommastellen - Kehrfunktion zu `_parse_value_format`."""
+    """Builds the format pattern editable in the dialog (e.g. "000.0000")
+    from integer/decimal digit counts - inverse of `_parse_value_format`."""
     text = "0" * integer_digits
     if decimal_digits:
         text += "." + "0" * decimal_digits
@@ -378,11 +369,11 @@ def _value_format_text(integer_digits: int, decimal_digits: int) -> str:
 
 
 def _parse_value_format(text: str) -> tuple[int, int]:
-    """Liest ein Format-Muster wie "000.0000" (siehe `_value_format_text`)
-    zurück in (Vorkommastellen, Nachkommastellen) - toleriert leere/nicht
-    exakt passende Eingaben (fällt auf mindestens 1 Vorkommastelle
-    zurück), der `QRegularExpressionValidator` am Eingabefeld verhindert
-    ohnehin die meisten Fehleingaben schon beim Tippen."""
+    """Parses a format pattern like "000.0000" (see `_value_format_text`)
+    back into (integer digits, decimal digits) - tolerates empty/not
+    exactly matching input (falls back to at least 1 integer digit); the
+    `QRegularExpressionValidator` on the input field already prevents
+    most invalid input while typing anyway."""
     int_part, _, dec_part = text.partition(".")
     integer_digits = max(1, min(6, len(int_part)))
     decimal_digits = max(0, min(6, len(dec_part)))
@@ -390,31 +381,31 @@ def _parse_value_format(text: str) -> tuple[int, int]:
 
 
 class ChannelDisplayDialog(QDialog):
-    """Dialog zur Live-View-Darstellung PRO KANAL: Sichtbarkeit, eigenes
-    Fenster, Plot an/aus, Messwertanzeige an/aus.
+    """Dialog for the PER-CHANNEL live view display: visibility, own
+    window, plot on/off, value display on/off.
 
-    Wird über Optionen -> "Live-View-Darstellung festlegen..." geöffnet
-    (siehe `gui/main_window.py::_build_menu`). Schon vor dem Messstart
-    nutzbar (Kanäle kommen dafür aus der Setup-Konfiguration, siehe
-    `gui/main_window.py::_on_open_channel_display_dialog`).
+    Opened via Options -> "Set live view display..." (see
+    `gui/main_window.py::_build_menu`). Already usable before a
+    measurement starts (channels come from the setup configuration in
+    that case, see `gui/main_window.py::_on_open_channel_display_dialog`).
 
-    Die eigentlichen Detaileinstellungen (Farben/Y-Bereich/Zeitspanne für
-    den Plot, Zahlenformat für den Messwert) stecken NICHT mehr direkt in
-    dieser Zeile - bei mittlerweile vielen Optionen wäre sie sonst unlesbar
-    lang. Stattdessen öffnen die Buttons "Plot"/"Zahlenwert" (Drei-Punkte-
-    Symbol wie bei den Auswahl-Buttons in `gui/widgets/channel_table.py`)
-    je einen eigenen Dialog (`ChannelPlotSettingsDialog`/
-    `ChannelValueSettingsDialog`) - die Zeile selbst bleibt kompakt: Aktiv,
-    Eigenes Fenster, Plot (Haken + Button), Zahlenwert (Haken + Button).
-    Dadurch ist z. B. auch "nur der Zahlenwert, kein Diagramm" möglich
-    (Plot-Haken aus, Zahlenwert-Haken an).
+    The actual detail settings (colors/Y range/time span for the plot,
+    number format for the value) no longer live directly in this row -
+    with the number of options by now, the row would otherwise be
+    unreadably long. Instead, the "Plot"/"Value" buttons (ellipsis icon,
+    like the selection buttons in `gui/widgets/channel_table.py`) each
+    open their own dialog (`ChannelPlotSettingsDialog`/
+    `ChannelValueSettingsDialog`) - the row itself stays compact: active,
+    own window, plot (checkbox + button), value (checkbox + button).
+    This also makes e.g. "value only, no chart" possible (plot checkbox
+    off, value checkbox on).
 
-    Die "Eigenes Fenster"-Checkbox (wie alle anderen Felder hier) wirkt
-    erst nach OK - anders als frühere Versionen dieses Dialogs öffnet ein
-    Klick auf die Checkbox NICHT sofort ein Fenster. Das eigentliche
-    Öffnen/Schließen übernimmt `LiveView._rebuild_plots()` anhand von
-    `Channel.plot_popout`, nachdem `results()` über `OK` angewendet wurde
-    (siehe `LiveView._apply_display_settings_to_live_channels`).
+    The "own window" checkbox (like every other field here) only takes
+    effect after OK - unlike earlier versions of this dialog, clicking
+    the checkbox does NOT immediately open a window. The actual
+    opening/closing is handled by `LiveView._rebuild_plots()` based on
+    `Channel.plot_popout`, once `results()` has been applied via OK (see
+    `LiveView._apply_display_settings_to_live_channels`).
     """
 
     def __init__(
@@ -428,28 +419,28 @@ class ChannelDisplayDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(t("channel_display_dialog_title"))
 
-        # Detaileinstellungen leben als reine Werte (nicht als dauerhaft
-        # sichtbare Widgets) - siehe Klassendoc. Vorbelegt aus dem Kanal,
-        # aktualisiert nur, wenn der jeweilige Unterdialog per OK
-        # geschlossen wird (siehe `_open_plot_settings`/`_open_value_settings`).
+        # Detail settings live as plain values (not as permanently
+        # visible widgets) - see class docstring. Pre-filled from the
+        # channel, updated only when the respective sub-dialog is closed
+        # via OK (see `_open_plot_settings`/`_open_value_settings`).
         self._plot_settings: dict[tuple[str, str], dict] = {}
         self._value_settings: dict[tuple[str, str], dict] = {}
         self._rows: dict[tuple[str, str], dict[str, QWidget]] = {}
 
         layout = QVBoxLayout(self)
-        # Dialog ist nicht in der Groesse veraenderbar - immer exakt so
-        # gross wie der Inhalt braucht (passt sich automatisch an, z. B.
-        # bei unterschiedlich vielen Kanaelen), kein Verzerren/Auseinander-
-        # Ziehen der Zeilen durch manuelles Vergroessern.
+        # Dialog is not resizable - always exactly as large as the
+        # content needs (adapts automatically, e.g. to a different
+        # number of channels), no stretching/distorting of the rows by
+        # manually resizing.
         layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
         form = QFormLayout()
         layout.addLayout(form)
 
         for index, channel in enumerate(channels):
             if index > 0:
-                # Dezente Trennlinie zwischen den Kanaelen - `addRow()` mit
-                # nur einem Widget spannt es ueber beide Formularspalten
-                # (Name + Zeile), nicht nur die zweite.
+                # Subtle separator line between channels - `addRow()`
+                # with only one widget spans it across both form columns
+                # (name + row), not just the second one.
                 separator = QFrame()
                 separator.setFrameShape(QFrame.Shape.HLine)
                 separator.setFrameShadow(QFrame.Shadow.Sunken)
@@ -474,31 +465,31 @@ class ChannelDisplayDialog(QDialog):
 
             row = QHBoxLayout()
 
-            # Betrifft NUR, ob der Kanal als Subplot im Hauptraster
-            # erscheint (siehe `LiveView._rebuild_plots`) - Erfassung/
-            # Speicherung laufen unabhängig davon unverändert weiter. Ganz
-            # links platziert (statt hinten bei den anderen Haken): ist der
-            # Kanal inaktiv, wird der gesamte Rest der Zeile ausgegraut
-            # (siehe `_on_visible_toggled` unten) - die Reihenfolge soll
-            # das widerspiegeln ("erst An/Aus, dann Details").
+            # Affects ONLY whether the channel appears as a subplot in
+            # the main grid (see `LiveView._rebuild_plots`) - acquisition/
+            # storage keep running unchanged regardless. Placed at the
+            # far left (instead of at the end with the other checkboxes):
+            # if the channel is inactive, the entire rest of the row is
+            # grayed out (see `_on_visible_toggled` below) - the ordering
+            # is meant to reflect that ("on/off first, then details").
             visible_check = QCheckBox(t("plot_visible_checkbox"))
             visible_check.setToolTip(t("plot_visible_checkbox_tooltip"))
             visible_check.setChecked(channel.plot_visible)
             row.addWidget(visible_check)
 
-            # Wirkt (wie "Aktiv") erst nach OK über `results()` - siehe
-            # Klassendoc oben. Direkt nach "Aktiv", VOR den Plot-/
-            # Zahlenwert-Optionen - betrifft WO der Kanal erscheint, nicht
-            # WAS davon sichtbar ist.
+            # Takes effect (like "active") only after OK via `results()`
+            # - see class docstring above. Right after "active", BEFORE
+            # the plot/value options - affects WHERE the channel appears,
+            # not WHAT of it is visible.
             popout_check = QCheckBox(t("popout_button"))
             popout_check.setToolTip(t("popout_button_tooltip"))
             popout_check.setChecked(channel.plot_visible and channel.plot_popout)
             row.addWidget(popout_check)
 
-            # Plot an/aus (Haken OHNE eigenen Text) + Button (Drei-Punkte-
-            # Symbol, oeffnet `ChannelPlotSettingsDialog`) - zusammen
-            # ersetzen sie die frueher hier direkt eingebetteten Farb-/
-            # Bereichs-/Zeitspannen-Felder.
+            # Plot on/off (checkbox WITHOUT its own text) + button
+            # (ellipsis icon, opens `ChannelPlotSettingsDialog`) -
+            # together they replace the color/range/time-span fields
+            # that used to be embedded directly here.
             graph_check = QCheckBox()
             graph_check.setToolTip(t("plot_show_graph_checkbox_tooltip"))
             graph_check.setChecked(channel.plot_show_graph)
@@ -512,12 +503,12 @@ class ChannelDisplayDialog(QDialog):
             graph_button.clicked.connect(
                 lambda _checked, k=key, name=channel.display_name: self._open_plot_settings(k, name)
             )
-            # Ausgegraut, solange der eigene Haken aus ist - unabhaengig
-            # vom "Aktiv"-Haken (siehe `_on_visible_toggled` unten).
+            # Grayed out while its own checkbox is off - independent of
+            # the "active" checkbox (see `_on_visible_toggled` below).
             graph_check.toggled.connect(graph_button.setEnabled)
             row.addWidget(graph_button)
 
-            # Zahlenwert an/aus + Button, analog zu Plot oben.
+            # Value on/off + button, analogous to plot above.
             value_check = QCheckBox()
             value_check.setToolTip(t("plot_show_value_checkbox_tooltip"))
             value_check.setChecked(channel.plot_show_value)
@@ -533,17 +524,17 @@ class ChannelDisplayDialog(QDialog):
             )
             value_check.toggled.connect(value_button.setEnabled)
             row.addWidget(value_button)
-            # OHNE diesen Stretch verteilt Qt beim Verbreitern des Dialogs
-            # den zusaetzlichen Platz auf ALLE Zwischenraeume der Zeile
-            # (auch zwischen Haken und zugehoerigem Button) - die Zeile
-            # bleibt so immer kompakt am linken Rand, unabhaengig von der
-            # Fensterbreite.
+            # WITHOUT this stretch, Qt would distribute the extra space
+            # from widening the dialog across ALL gaps in the row (even
+            # between a checkbox and its button) when the dialog is
+            # widened - this way the row always stays compact at the
+            # left edge, regardless of window width.
             row.addStretch(1)
 
-            # Ist der Kanal inaktiv, ergibt der ganze Rest der Zeile keinen
-            # Sinn (nichts davon wirkt sich sichtbar aus) - statt nur den
-            # Popout-Haken zu sperren (bisheriges Verhalten), jetzt die
-            # GESAMTE restliche Zeile ausgrauen.
+            # If the channel is inactive, the entire rest of the row is
+            # meaningless (none of it has any visible effect) - instead
+            # of only disabling the popout checkbox (previous behavior),
+            # now the ENTIRE remaining row is grayed out.
             row_widgets = [popout_check, graph_check, graph_button, value_check, value_button]
 
             def _on_visible_toggled(
@@ -560,9 +551,9 @@ class ChannelDisplayDialog(QDialog):
                 if not checked:
                     popout_checkbox.setChecked(False)
                 else:
-                    # Beim Wiedereinschalten sollen Plot-/Zahlenwert-Button
-                    # weiter ihrem EIGENEN Haken folgen, nicht pauschal vom
-                    # obigen Loop wieder aktiviert bleiben.
+                    # When switching back on, the plot/value buttons
+                    # should keep following their OWN checkbox, not
+                    # simply stay enabled from the loop above.
                     graph_settings_button.setEnabled(graph_checkbox.isChecked())
                     value_settings_button.setEnabled(value_checkbox.isChecked())
 
@@ -595,10 +586,10 @@ class ChannelDisplayDialog(QDialog):
             self._value_settings[key] = dialog.results()
 
     def results(self) -> dict[tuple[str, str], dict]:
-        """Gibt die eingestellten Werte pro Kanal zurück (nur bei OK gültig).
+        """Returns the values set per channel (only valid on OK).
 
-        Schlüssel ist `_channel_display_key(channel)` (siehe dort), NICHT
-        einfach `hardware_channel` - Format je Kanal passend zu
+        The key is `_channel_display_key(channel)` (see there), NOT just
+        `hardware_channel` - format per channel matches
         `Channel.plot_*`/`ChannelTableWidget.apply_display_settings`/
         `LiveView._apply_display_settings_to_live_channels`.
         """
@@ -616,10 +607,10 @@ class ChannelDisplayDialog(QDialog):
 
 
 class ChannelPlotSettingsDialog(QDialog):
-    """Feineinstellungen für die Plotfläche EINES Kanals (Kurven-/
-    Hintergrund-/Gitterlinienfarbe, Y-Bereich, Autoskalierung, Zeitspanne) -
-    geöffnet über den "Plot"-Button in `ChannelDisplayDialog`, um dessen
-    Zeile trotz der mittlerweile vielen Optionen kompakt zu halten."""
+    """Fine-grained settings for the plot area of ONE channel (curve/
+    background/grid line color, Y range, autoscaling, time span) -
+    opened via the "Plot" button in `ChannelDisplayDialog`, to keep its
+    row compact given the now-large number of options."""
 
     def __init__(
         self, channel_name: str, settings: dict, parent: QWidget | None = None
@@ -718,8 +709,8 @@ class ChannelPlotSettingsDialog(QDialog):
 
 
 class ChannelValueSettingsDialog(QDialog):
-    """Feineinstellung für die Messwertanzeige EINES Kanals (Zahlenformat) -
-    geöffnet über den "Zahlenwert"-Button in `ChannelDisplayDialog`."""
+    """Fine-grained setting for the value display of ONE channel (number
+    format) - opened via the "Value" button in `ChannelDisplayDialog`."""
 
     def __init__(
         self, channel_name: str, settings: dict, parent: QWidget | None = None
@@ -731,10 +722,10 @@ class ChannelValueSettingsDialog(QDialog):
         form = QFormLayout()
         layout.addLayout(form)
 
-        # Format-Muster statt reiner Vorkommastellen-Zahl (z. B.
-        # "000.0000") - Nullen vor dem Punkt = Vorkommastellen, Nullen
-        # danach = Nachkommastellen (optional, ganz weglassbar für eine
-        # reine Ganzzahl-Anzeige). Siehe `_parse_value_format`.
+        # Format pattern instead of a plain integer-digit count (e.g.
+        # "000.0000") - zeros before the dot = integer digits, zeros
+        # after = decimal digits (optional, can be omitted entirely for
+        # a pure integer display). See `_parse_value_format`.
         self._value_format_edit = QLineEdit(
             _value_format_text(
                 settings["plot_value_integer_digits"], settings["plot_value_decimal_digits"]
@@ -761,36 +752,34 @@ class ChannelValueSettingsDialog(QDialog):
 
 
 class ChannelPopoutWindow(QWidget):
-    """Eigenständiges Fenster mit dem Live-Plot EINES einzelnen Kanals.
+    """Standalone window with the live plot of a SINGLE channel.
 
-    Wird geöffnet, wenn die "Eigenes Fenster"-Checkbox im Kanal-
-    Darstellung-Dialog per OK übernommen wurde (siehe
-    `LiveView._rebuild_plots`/`_open_popout_window`). Hält bewusst KEINEN
-    eigenen Timer und fragt den Ring Buffer nicht selbst ab - Kurve und
-    Y-Bereich werden vom selben Timer-Tick wie die Haupt-Plots
-    mitaktualisiert (siehe `LiveView._on_timer_tick`), damit nicht doppelt
-    aus dem Ring Buffer gelesen wird.
+    Opened when the "own window" checkbox in the channel display dialog
+    was applied via OK (see `LiveView._rebuild_plots`/
+    `_open_popout_window`). Deliberately holds NO timer of its own and
+    doesn't poll the ring buffer itself - the curve and Y range are
+    updated by the same timer tick as the main plots (see
+    `LiveView._on_timer_tick`), so the ring buffer isn't read twice.
     """
 
     def __init__(self, channel: Channel, parent: QWidget | None = None) -> None:
         super().__init__(parent, Qt.WindowType.Window)
         self.hardware_channel = channel.hardware_channel
-        # Schlüssel für `LiveView._popout_windows` - NICHT `hardware_channel`
-        # allein (siehe `_channel_display_key`).
+        # Key for `LiveView._popout_windows` - NOT `hardware_channel`
+        # alone (see `_channel_display_key`).
         self.display_key = _channel_display_key(channel)
-        # Lebende Referenz auf dasselbe Channel-Objekt wie `LiveView`
-        # (siehe `LiveView._open_popout_window`) - NICHT kopiert, damit
-        # spaeter geaenderte Werte (z. B. `plot_background` ueber den
-        # Kanal-Darstellung-Dialog) hier ohne Extra-Zutun sichtbar sind
-        # (siehe `_style_value_labels`).
+        # Live reference to the same Channel object as `LiveView` (see
+        # `LiveView._open_popout_window`) - NOT copied, so that values
+        # changed later (e.g. `plot_background` via the channel display
+        # dialog) are visible here without extra effort (see
+        # `_style_value_labels`).
         self._channel = channel
-        # Schliesst der Nutzer das Fenster, soll das C++/Qt-Objekt
-        # tatsaechlich zerstoert werden (nicht nur versteckt) - darauf
-        # reagiert `LiveView._on_popout_window_closed` ueber das
-        # `destroyed`-Signal, um die eigene Nachverfolgung aufzuraeumen
-        # UND (falls der Nutzer das Fenster direkt schliesst, statt die
-        # Checkbox im Dialog zu nutzen) den Kanal wieder im Hauptraster
-        # erscheinen zu lassen.
+        # If the user closes the window, the C++/Qt object should
+        # actually be destroyed (not just hidden) - `LiveView.
+        # _on_popout_window_closed` reacts to this via the `destroyed`
+        # signal, to clean up its own tracking AND (if the user closes
+        # the window directly instead of using the checkbox in the
+        # dialog) make the channel reappear in the main grid.
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
         unit_suffix = f" [{channel.unit}]" if channel.unit else ""
@@ -801,31 +790,31 @@ class ChannelPopoutWindow(QWidget):
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(6, 6, 6, 6)
         row = QHBoxLayout()
-        # KEIN Standard-Abstand zwischen Messwertanzeige und Plot: die
-        # Luecke, die die QHBoxLayout-Default-Spacing sonst freilaesst,
-        # gehoert dem FENSTER-Hintergrund (self), nicht der Kanalfarbe -
-        # sichtbar als weiterer andersfarbiger Balken zwischen Einheit und
-        # Plot (siehe `_value_container` fuer denselben Effekt zwischen
-        # Zahl und Einheit).
+        # NO default spacing between the value display and the plot: the
+        # gap that QHBoxLayout's default spacing would otherwise leave
+        # belongs to the WINDOW background (self), not the channel
+        # color - visible as an extra, differently colored bar between
+        # the unit and the plot (see `_value_container` for the same
+        # effect between the number and the unit).
         row.setSpacing(0)
         outer_layout.addLayout(row)
 
-        # Grosse, aktuelle Messwertanzeige links neben dem Plot (siehe
-        # `Channel.plot_show_value`/`LiveView._on_timer_tick`) - Zahl und
-        # Einheit in ZWEI getrennten, fest breiten Labels (Breite direkt aus
-        # `Channel.plot_value_integer_digits` berechnet, siehe
-        # `_number_field_width_px`), sonst wuerde die Einheit bei jedem
-        # neuen Zahlenwert sichtbar mitwandern. `unit_label` wird hier
-        # einmalig gesetzt und danach NIE mehr pro Tick aktualisiert.
+        # Large, current value display to the left of the plot (see
+        # `Channel.plot_show_value`/`LiveView._on_timer_tick`) - number
+        # and unit in TWO separate, fixed-width labels (width computed
+        # directly from `Channel.plot_value_integer_digits`, see
+        # `_number_field_width_px`), otherwise the unit would visibly
+        # shift with every new value. `unit_label` is set once here and
+        # never updated per tick again.
         #
-        # BEIDE Labels stecken in einem GEMEINSAMEN Container-Widget
-        # (`self._value_container`), NICHT direkt im `row`-Layout: der
-        # Zwischenraum, den `QHBoxLayout.setSpacing()` zwischen ihnen
-        # freilaesst, gehoert sonst zum FENSTER-Hintergrund (nicht zur
-        # Kanalfarbe) und erscheint als sichtbarer, andersfarbiger Balken
-        # zwischen Zahl und Einheit - der Container selbst bekommt daher in
-        # `_style_value_labels()` dieselbe Hintergrundfarbe wie die beiden
-        # Labels, sodass die Luecke farblich mit einschliesst.
+        # BOTH labels sit inside a SHARED container widget
+        # (`self._value_container`), NOT directly in the `row` layout:
+        # the gap that `QHBoxLayout.setSpacing()` would otherwise leave
+        # between them belongs to the WINDOW background (not the channel
+        # color) and appears as a visible, differently colored bar
+        # between the number and the unit - the container itself
+        # therefore gets the same background color as the two labels in
+        # `_style_value_labels()`, so the gap is included in the color.
         self._value_container = QWidget()
         value_row = QHBoxLayout(self._value_container)
         value_row.setContentsMargins(0, 0, 0, 0)
@@ -840,11 +829,11 @@ class ChannelPopoutWindow(QWidget):
         self.value_label = QLabel("--")
         self.value_label.setFixedWidth(number_field_width)
         self.value_label.setContentsMargins(0, 0, 0, 0)
-        # RECHTS-ausgerichtet, nicht zentriert: der Abstand zur Einheit soll
-        # exakt einer Leerzeichenbreite entsprechen (siehe
-        # `value_row.setSpacing` unten) - zentriert waere der tatsaechliche
-        # Zwischenraum vom umgebenden Leerraum der (fest formatierten,
-        # siehe `_format_channel_value`) Zahl im Feld abhaengig.
+        # RIGHT-aligned, not centered: the gap to the unit should
+        # correspond exactly to one space width (see
+        # `value_row.setSpacing` below) - centered, the actual gap would
+        # depend on the surrounding whitespace of the (fixed-format, see
+        # `_format_channel_value`) number in the field.
         self.value_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -860,10 +849,10 @@ class ChannelPopoutWindow(QWidget):
 
         value_row.setSpacing(round(_space_width_px(number_font)))
 
-        # Sichtbarkeit steuert NUR der Container (siehe
-        # `LiveView._apply_channel_appearance`) - fuer die beiden Labels
-        # selbst bleibt die individuelle Sichtbarkeit auf dem Qt-Default
-        # (sichtbar), sie folgen ihrem Elternwidget ohnehin automatisch.
+        # Only the container controls visibility (see
+        # `LiveView._apply_channel_appearance`) - for the two labels
+        # themselves, individual visibility stays at the Qt default
+        # (visible), they follow their parent widget automatically anyway.
         self._value_container.setVisible(channel.plot_show_value)
         row.addWidget(self._value_container)
 
@@ -871,24 +860,25 @@ class ChannelPopoutWindow(QWidget):
         self.plot_item = self.plot_widget.getPlotItem()
         self.plot_item.setTitle(title)
         self.plot_item.showGrid(x=True, y=True, alpha=0.3)
-        # `units=` NICHT genutzt: PyQtGraph rendert das intern immer in
-        # runden Klammern - fest "[s]" im Text selbst statt dessen, damit
-        # die Zeiteinheit ueberall konsistent in eckigen Klammern steht.
+        # `units=` NOT used: PyQtGraph always renders that internally in
+        # round brackets - "[s]" is hardcoded in the text itself instead,
+        # so the time unit is consistently shown in square brackets
+        # everywhere.
         self.plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
         self.plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
 
         self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
-        # KEIN `autoDownsample`: die Daten kommen bereits über
-        # `_downsample_for_display()` vorverdichtet an - PyQtGraphs eigene,
-        # view-range-abhängige Variante würde bei jedem Tick unnötig
-        # nochmal über die (jetzt kleine) Punktmenge laufen (siehe dort).
+        # NO `autoDownsample`: the data already arrives pre-compressed
+        # via `_downsample_for_display()` - PyQtGraph's own,
+        # view-range-dependent variant would needlessly run over the
+        # (now small) point set again on every tick (see there).
         self.curve.setClipToView(True)
         self.plot_item.enableAutoRange(x=False)
-        # Siehe `Channel.plot_show_graph` - normales Qt-Widget (kein
-        # PyQtGraph-`GraphicsLayout`), `setVisible()` gibt den Platz daher
-        # sauber an die Messwertanzeige daneben zurueck.
+        # See `Channel.plot_show_graph` - a normal Qt widget (not a
+        # PyQtGraph `GraphicsLayout`), so `setVisible()` cleanly returns
+        # the space to the value display next to it.
         self.plot_widget.setVisible(channel.plot_show_graph)
 
         row.addWidget(self.plot_widget, stretch=1)
@@ -897,10 +887,10 @@ class ChannelPopoutWindow(QWidget):
         connect_theme_changed(self._retheme)
 
     def _apply_number_width(self) -> None:
-        """Passt die feste Breite von `value_label` an
-        `Channel.plot_value_integer_digits` an - separat von
-        `_style_value_labels`, da eine Aenderung der Vorkommastellen
-        (anders als Farbe/Theme) die Feldbreite selbst betrifft (siehe
+        """Adjusts the fixed width of `value_label` to
+        `Channel.plot_value_integer_digits` - separate from
+        `_style_value_labels`, since a change in integer digits (unlike
+        color/theme) affects the field width itself (see
         `LiveView._apply_display_settings_to_live_channels`)."""
         font = QFont()
         font.setPointSize(_VALUE_NUMBER_POINT_SIZE)
@@ -912,21 +902,22 @@ class ChannelPopoutWindow(QWidget):
         )
 
     def _style_value_labels(self) -> None:
-        """Faerbt Text- UND Hintergrundfarbe von Zahl/Einheit ein - gemeinsam
-        genutzt von `_retheme` (Theme-Wechsel) UND
-        `LiveView._apply_channel_appearance` (Kanal-Darstellung-Dialog live
-        geaendert).
+        """Colors both the text AND background of the number/unit -
+        shared by `_retheme` (theme change) AND
+        `LiveView._apply_channel_appearance` (channel display dialog
+        changed live).
 
-        Hintergrund ist bewusst IMMER die Fenster-Hintergrundfarbe
-        (`plot_container_background_color()`), NICHT die individuelle
-        Kanalfarbe (`_channel_background_color`) - letztere gilt nur fuer
-        die eigentliche Plotflaeche selbst (siehe `LiveView._rebuild_plots`).
+        The background is deliberately ALWAYS the window background
+        color (`plot_container_background_color()`), NOT the individual
+        channel color (`_channel_background_color`) - the latter only
+        applies to the actual plot area itself (see
+        `LiveView._rebuild_plots`).
 
-        Faerbt AUCH `self._value_container` (nicht nur die beiden Labels
-        selbst): der Zwischenraum, den `QHBoxLayout.setSpacing()` zwischen
-        Zahl und Einheit freilaesst, gehoert dem Container, nicht den
-        Labels - ohne dessen eigene Hintergrundfarbe bliebe dort ein
-        sichtbarer, andersfarbiger Balken."""
+        ALSO colors `self._value_container` (not just the two labels
+        themselves): the gap that `QHBoxLayout.setSpacing()` leaves
+        between the number and the unit belongs to the container, not
+        the labels - without its own background color, a visible,
+        differently colored bar would remain there."""
         foreground = plot_foreground_color()
         background = plot_container_background_color()
         self._value_container.setStyleSheet(f"background-color: {background};")
@@ -945,13 +936,12 @@ class ChannelPopoutWindow(QWidget):
         self._style_value_labels()
 
     def moveEvent(self, event) -> None:  # noqa: N802 - Qt-API
-        # Haelt `Channel.plot_popout_x/y` kontinuierlich mit der
-        # tatsaechlichen Fensterposition synchron (nicht nur beim
-        # Schliessen) - `self._channel` ist dieselbe lebende Referenz wie
-        # in `LiveView` (siehe Klassendoc), Aenderungen sind also sofort
-        # auch dort sichtbar. Wird spaeter (z. B. beim App-Beenden, siehe
-        # `gui/main_window.py`) in die Setup-Kanaltabelle uebernommen und
-        # so dauerhaft gespeichert.
+        # Keeps `Channel.plot_popout_x/y` continuously in sync with the
+        # actual window position (not just on close) - `self._channel`
+        # is the same live reference as in `LiveView` (see class
+        # docstring), so changes are immediately visible there too. Is
+        # later (e.g. on app exit, see `gui/main_window.py`) carried
+        # over into the setup channel table and thus persisted.
         super().moveEvent(event)
         self._channel.plot_popout_x = self.x()
         self._channel.plot_popout_y = self.y()
@@ -963,26 +953,26 @@ class ChannelPopoutWindow(QWidget):
 
 
 class LiveView(QWidget):
-    """Zeigt Messdaten einer laufenden Messung in Echtzeit an.
+    """Displays measurement data of a running measurement in real time.
 
     Signals:
-        start_requested: Der Nutzer hat auf Play (nur Live-Anzeige) oder
-            Aufnahme (mit Speicherung) geklickt - bool = `live_only`.
-            `gui/main_window.py` startet die Messung dann mit der aktuell
-            konfigurierten Setup-Konfiguration und passend gesetztem
-            `MeasurementConfig.save_to_disk`.
-        stop_requested: Der Nutzer hat auf Stop geklickt (nur klickbar,
-            waehrend tatsaechlich etwas laeuft, siehe `set_start_enabled`).
-            `gui/main_window.py` ist dafür zuständig, die Messung über
-            den `MeasurementController` tatsächlich zu stoppen.
-        trigger_fired: Ein scharf geschalteter Schwellwert-Trigger (siehe
-            `enter_armed_state`) hat ausgelöst - `gui/main_window.py`
-            erzeugt daraufhin den StorageWriter (ggf. rückwirkend, siehe
+        start_requested: The user clicked Play (live view only) or
+            Record (with storage) - bool = `live_only`.
+            `gui/main_window.py` then starts the measurement with the
+            currently configured setup configuration and
+            `MeasurementConfig.save_to_disk` set accordingly.
+        stop_requested: The user clicked Stop (only clickable while
+            something is actually running, see `set_start_enabled`).
+            `gui/main_window.py` is responsible for actually stopping
+            the measurement via the `MeasurementController`.
+        trigger_fired: An armed threshold trigger (see
+            `enter_armed_state`) has fired - `gui/main_window.py` then
+            creates the StorageWriter (possibly retroactively, see
             `_on_trigger_fired`).
-        trigger_arm_toggled: Nutzer hat den Scharf-Button geklickt (siehe
-            `gui/setup_view.py::trigger_arm_toggled` - identisches
-            Gegenstück hier in der Live-Ansicht, damit beide Buttons
-            gleichzeitig bedienbar sind).
+        trigger_arm_toggled: The user clicked the arm button (see
+            `gui/setup_view.py::trigger_arm_toggled` - identical
+            counterpart here in the live view, so both buttons can be
+            operated at the same time).
     """
 
     start_requested = pyqtSignal(bool)  # live_only
@@ -997,124 +987,144 @@ class LiveView(QWidget):
         self._reader_id: int | None = None
         self._channels: list[Channel] = []
         self._sample_rate_hz: float = 1.0
+        self._rate_groups: list[RateGroup] = []
+        # Native sample rate per channel index (Hz) - derived ONCE in
+        # `start_display` from `rate_groups` (not recomputed per tick).
+        # For most channels == `self._sample_rate_hz` (the same fast
+        # rate group); only a channel with a hardware-fixed, deviating
+        # rate (e.g. NI9210 @ 14 S/s) gets its own, smaller value here -
+        # drives the sweep buffer size/fill rate for exactly that
+        # channel (see
+        # `_channel_display_capacity`/`_write_to_display_buffer`).
+        self._channel_native_rates: dict[int, float] = {}
         self._display_window_seconds = _DEFAULT_DISPLAY_WINDOW_SECONDS
 
-        # Sweep-Anzeigepuffer für den AKTUELLEN Durchlauf (Oszilloskop-Art:
-        # die Kurve zeichnet von links nach rechts durch das Zeitfenster;
-        # am rechten Rand beginnt ein neuer Durchlauf bei x=0, die alte
-        # Kurve verschwindet komplett). `_channel_buffer_positions` ist
-        # zugleich die Anzahl gültiger Samples im aktuellen Durchlauf pro
-        # Kanal (siehe `_write_to_display_buffer`/`_get_channel_display_view`).
+        # Sweep display buffer for the CURRENT sweep (oscilloscope-style:
+        # the curve draws left to right through the time window; a new
+        # sweep starts at x=0 at the right edge, the old curve
+        # disappears entirely). `_channel_buffer_positions` is also the
+        # number of valid samples in the current sweep per channel (see
+        # `_write_to_display_buffer`/`_get_channel_display_view`).
         self._display_buffer: np.ndarray | None = None
         self._display_capacity_samples: int = 0
         self._buffer_write_pos: int = 0
         self._channel_buffer_positions: dict[int, int] = {}
-        # Absolute Messzeit (Sekunden seit Messstart), bei der der AKTUELLE
-        # Durchlauf des jeweiligen Kanals begonnen hat - die
-        # Achsenbeschriftung soll die echte Messzeit zeigen (z. B. "40-45s"
-        # statt immer "0-5s"), auch wenn der Sweep selbst weiterhin bei
-        # jedem Durchlauf zurücksetzt. Pro Kanal, da die Fensterlänge
-        # (`Channel.plot_time_window_seconds`) pro Kanal unterschiedlich
-        # sein kann und die Durchläufe damit unabhängig voneinander enden
-        # (siehe `_write_to_display_buffer`).
+        # Cumulative count of raw (tick-rate-clocked) rows seen in total
+        # for this channel since measurement start - NOT reset on every
+        # sweep wraparound (unlike `_channel_buffer_positions`), see
+        # `_write_to_display_buffer`: only needed for channels with
+        # their own, slower native rate, to independently replicate the
+        # same time-/tick-based due() counting as
+        # `core/rate_merge.py::RateMerger` (deliberately NOT value-based
+        # - a real but coincidentally unchanged 14-S/s sample, e.g. from
+        # a stable thermocouple reading, must not be mistaken for a ZOH
+        # repeat, otherwise the sweep time axis would drift apart from
+        # the real measurement time).
+        self._channel_total_ticks_seen: dict[int, int] = {}
+        # Absolute measurement time (seconds since measurement start) at
+        # which the CURRENT sweep of the respective channel started -
+        # the axis label should show the real measurement time (e.g.
+        # "40-45s" instead of always "0-5s"), even though the sweep
+        # itself keeps resetting on every cycle. Per channel, since the
+        # window length (`Channel.plot_time_window_seconds`) can differ
+        # per channel and the sweeps therefore end independently of each
+        # other (see `_write_to_display_buffer`).
         self._channel_cycle_starts: dict[int, float] = {}
-        # Zuletzt pro Kanal auf die Plots angewendeter
-        # `_channel_cycle_starts`-Wert (siehe `_on_timer_tick`) - der
-        # X-Bereich wird nur bei einem tatsächlichen Zyklus-Wechsel neu
-        # gesetzt, nicht bei jedem Tick.
+        # Last `_channel_cycle_starts` value applied to the plots per
+        # channel (see `_on_timer_tick`) - the X range is only reset on
+        # an actual cycle change, not on every tick.
         self._channel_x_range_applied: dict[int, float | None] = {}
 
-        # Darstellung pro Kanal (Kurvenfarbe, Hintergrund, Y-Bereich,
-        # Autoskalierungs-Verhalten) lebt direkt auf den `Channel`-Objekten
-        # selbst (`plot_color`/`plot_background`/`plot_y_min`/`plot_y_max`/
-        # `plot_autoscale`, siehe `data/models.py`) - dadurch nimmt jeder
-        # `Channel` seine Darstellung automatisch mit (auch beim
-        # Speichern/Laden der Konfiguration), ohne dass die Live View
-        # eigene, separat zu pflegende Zuordnungs-Dicts bräuchte. Siehe
-        # `open_channel_display_dialog`, Menüpunkt in
+        # Per-channel display (curve color, background, Y range,
+        # autoscaling behavior) lives directly on the `Channel` objects
+        # themselves (`plot_color`/`plot_background`/`plot_y_min`/
+        # `plot_y_max`/`plot_autoscale`, see `data/models.py`) - this way
+        # every `Channel` automatically carries its display along (also
+        # when saving/loading the configuration), without the live view
+        # needing its own, separately maintained mapping dicts. See
+        # `open_channel_display_dialog`, menu item in
         # `gui/main_window.py::_build_menu`.
 
-        # Pro Kanal, ob die Y-Achse GERADE (dieser Tick) im Autoscale-Modus
-        # ist oder den festen Bereich nutzt - nur zur Vermeidung
-        # unnötiger `setYRange`/`enableAutoRange`-Aufrufe, wenn sich am
-        # effektiven Modus nichts geändert hat (siehe
-        # `_apply_channel_y_range`).
+        # Per channel, whether the Y axis is CURRENTLY (this tick) in
+        # autoscale mode or using the fixed range - only to avoid
+        # unnecessary `setYRange`/`enableAutoRange` calls when the
+        # effective mode hasn't changed (see `_apply_channel_y_range`).
         self._channel_y_auto_active: dict[tuple[str, str], bool] = {}
 
         self._plot_widget = pg.GraphicsLayoutWidget()
         self._plot_items: list = []
         self._curves: list = []
         # `self._curves[i]`/`self._plot_items[i]`/`self._value_labels[i]`
-        # gehören zum Kanal `self._channels[self._curve_channel_indices[i]]`
-        # - NICHT mehr zwangsläufig `self._channels[i]`, seit unsichtbare
-        # Kanäle (`Channel.plot_visible=False`) keinen Subplot mehr
-        # bekommen (siehe `_rebuild_plots`).
+        # belong to channel `self._channels[self._curve_channel_indices[i]]`
+        # - NO LONGER necessarily `self._channels[i]`, since invisible
+        # channels (`Channel.plot_visible=False`) no longer get a
+        # subplot (see `_rebuild_plots`).
         self._curve_channel_indices: list[int] = []
-        # Grosse, aktuelle Messwertanzeige neben jedem Subplot im
-        # Hauptraster (siehe `_make_value_box`/`_rebuild_plots`/
-        # `_on_timer_tick`) - eigene Fenster (`ChannelPopoutWindow`) haben
-        # ihre eigenen, gleichnamigen Attribute auf der Fenster-Instanz
-        # selbst. `_value_boxes[i]`/`_value_unit_boxes[i]` sind die
-        # `ViewBox`en (Hintergrundfarbe/Sichtbarkeit), `_value_labels[i]`/
-        # `_value_unit_labels[i]` die darin zentrierten `TextItem`s
-        # (Textinhalt) - `_value_unit_labels[i]` wird NUR beim Aufbau
-        # gesetzt und nie pro Tick neu geschrieben (siehe `_VALUE_UNIT_WIDTH`).
+        # Large, current value display next to each subplot in the main
+        # grid (see `_make_value_box`/`_rebuild_plots`/`_on_timer_tick`)
+        # - own windows (`ChannelPopoutWindow`) have their own,
+        # identically named attributes on the window instance itself.
+        # `_value_boxes[i]`/`_value_unit_boxes[i]` are the `ViewBox`es
+        # (background color/visibility), `_value_labels[i]`/
+        # `_value_unit_labels[i]` are the `TextItem`s centered inside
+        # them (text content) - `_value_unit_labels[i]` is set ONLY at
+        # build time and never rewritten per tick (see
+        # `_VALUE_UNIT_WIDTH`).
         self._value_boxes: list = []
         self._value_labels: list = []
         self._value_unit_boxes: list = []
         self._value_unit_labels: list = []
 
-        # Eigene Fenster einzelner Kanäle (siehe `ChannelPopoutWindow`,
-        # `_on_popout_requested`), nach `_channel_display_key()` (NICHT
-        # `hardware_channel` allein - siehe dort) - unabhängig von
-        # `plot_visible`: ein Kanal kann im Hauptraster ausgeblendet UND
-        # trotzdem in einem eigenen Fenster sichtbar sein. Eigener
-        # Autoscale-Zustands-Cache (siehe `_apply_channel_y_range`), damit
-        # sich Popout und Hauptraster-Subplot eines Kanals nicht
-        # gegenseitig die Skalierung "wegcachen".
+        # Own windows of individual channels (see `ChannelPopoutWindow`,
+        # `_on_popout_requested`), keyed by `_channel_display_key()`
+        # (NOT `hardware_channel` alone - see there) - independent of
+        # `plot_visible`: a channel can be hidden in the main grid AND
+        # still visible in its own window. Its own autoscale state cache
+        # (see `_apply_channel_y_range`), so that a channel's popout and
+        # its main-grid subplot don't "cache away" each other's scaling.
         self._popout_windows: dict[tuple[str, str], ChannelPopoutWindow] = {}
         self._popout_y_auto_active: dict[tuple[str, str], bool] = {}
 
-        # StorageWriter der laufenden Messung (None bei "Nur Live anzeigen"
-        # UND waehrend der Scharf-Phase eines Schwellwert-/seriellen
-        # Triggers, bevor er ausgeloest hat - siehe `attach_storage_writer`).
+        # StorageWriter of the running measurement (None for "live view
+        # only" AND during the armed phase of a threshold/serial
+        # trigger, before it has fired - see `attach_storage_writer`).
         self._storage_writer: StorageWriter | None = None
 
-        # Zustand fuer automatische Mess-Trigger (siehe
-        # `data/models.py::TriggerConfig`, `enter_armed_state`). Hardware-
-        # Erfassung + Anzeige laufen waehrend der Scharf-Phase bereits, nur
-        # der StorageWriter fehlt noch (siehe
-        # `gui/main_window.py::_on_start_measurement`). Start UND Stopp
-        # sind unabhaengig konfigurierbar (siehe `TriggerConfig`) - daher
-        # getrennte Kanal-Indizes/Flankendetektoren fuer beide Seiten.
+        # State for automatic measurement triggers (see
+        # `data/models.py::TriggerConfig`, `enter_armed_state`). Hardware
+        # acquisition + display are already running during the armed
+        # phase, only the StorageWriter is still missing (see
+        # `gui/main_window.py::_on_start_measurement`). Start AND stop
+        # are independently configurable (see `TriggerConfig`) - hence
+        # separate channel indices/edge detectors for both sides.
         self._trigger_config: TriggerConfig | None = None
         self._armed: bool = False
         self._start_trigger_channel_index: int | None = None
         self._stop_trigger_channel_index: int | None = None
-        # None = noch kein Tick seit dem jeweiligen Reset-Punkt beobachtet -
-        # verhindert ein sofortiges Ausloesen, falls der Kanal zu diesem
-        # Zeitpunkt bereits jenseits der Schwelle liegt (siehe
+        # None = no tick observed yet since the respective reset point -
+        # prevents an immediate fire if the channel is already beyond
+        # the threshold at that point in time (see
         # `_check_threshold_trigger`/`_check_stop_threshold_trigger`).
-        # Start-Seite wird in `start_display()` zurueckgesetzt, Stopp-Seite
-        # zusaetzlich in `mark_recording_started()` (die Aufzeichnung kann
-        # bei Serien-/manuellem Start erst SPAETER als `start_display()`
-        # tatsaechlich beginnen).
+        # The start side is reset in `start_display()`, the stop side
+        # additionally in `mark_recording_started()` (recording can
+        # actually start LATER than `start_display()` for a
+        # series/manual start).
         self._start_trigger_last_condition: bool | None = None
         self._stop_trigger_last_condition: bool | None = None
-        # Nullpunkt fuer das Aufnahme-Limit (siehe
-        # `data/models.py::MeasurementConfig.is_recording_limit_reached`) -
-        # bei getriggerten Messungen NICHT der Beginn der Hardware-
-        # Erfassung (das waere der Scharf-Zeitpunkt), sondern der
-        # tatsaechliche Trigger-Zeitpunkt (siehe `mark_recording_started`).
-        # Bleibt bei manuellem Start 0, also unveraendertes Verhalten.
+        # Zero point for the recording limit (see
+        # `data/models.py::MeasurementConfig.is_recording_limit_reached`)
+        # - for triggered measurements NOT the start of hardware
+        # acquisition (that would be the arm time), but the actual
+        # trigger time (see `mark_recording_started`). Stays 0 for a
+        # manual start, i.e. unchanged behavior.
         self._recording_baseline_samples: int = 0
 
         self._timer = QTimer(self)
-        # PreciseTimer statt des Qt-Default (CoarseTimer, an Windows'
-        # ~15,6ms-Systemtick ausgerichtet, +-Abweichung moeglich) - bei
-        # einem so kurzen Intervall (siehe `_UI_UPDATE_INTERVAL_MS`) macht
-        # sich die grobe Standardaufloesung sonst als zusaetzliches Timing-
-        # Jitter bemerkbar.
+        # PreciseTimer instead of Qt's default (CoarseTimer, aligned to
+        # Windows' ~15.6ms system tick, +- deviation possible) - at such
+        # a short interval (see `_UI_UPDATE_INTERVAL_MS`) the coarse
+        # default resolution would otherwise show up as additional
+        # timing jitter.
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.setInterval(_UI_UPDATE_INTERVAL_MS)
         self._timer.timeout.connect(self._on_timer_tick)
@@ -1138,12 +1148,12 @@ class LiveView(QWidget):
         self._duration_label = QLabel(t("duration_value", value="-"))
         self._sample_rate_label = QLabel(t("sample_rate_value", value="-"))
 
-        # Scharf-Button: identisches Gegenstück zu
-        # `gui/setup_view.py::_trigger_arm_button` (gleicher Stil, gleiche
-        # Bedeutung) - links vom Start-Button, damit beide Buttons von
-        # hier aus bedienbar sind, ohne in die Setup-Ansicht wechseln zu
-        # müssen. Nur sichtbar, wenn tatsächlich ein Trigger konfiguriert
-        # ist (siehe `set_trigger_arm_available`).
+        # Arm button: identical counterpart to
+        # `gui/setup_view.py::_trigger_arm_button` (same style, same
+        # meaning) - to the left of the start button, so both buttons
+        # can be operated from here without switching to the setup view.
+        # Only visible if a trigger is actually configured (see
+        # `set_trigger_arm_available`).
         self._trigger_arm_button = QPushButton()
         self._trigger_arm_button.setCheckable(True)
         self._trigger_arm_button.setIconSize(QSize(24, 24))
@@ -1151,16 +1161,16 @@ class LiveView(QWidget):
         self._trigger_arm_button.setVisible(False)
         self._trigger_arm_button.toggled.connect(self._on_trigger_arm_button_toggled)
 
-        # Play (gruenes Icon, nur Live-Anzeige)/Aufnahme (rotes Kreis-Icon,
-        # mit Speicherung)/Stop - identisches Gegenstück zu
-        # `gui/setup_view.py` (siehe dort fuer die Begruendung des
-        # Drei-Button-Designs statt frueher einem Start-Button + "Nur
-        # Live-Ansicht"-Haken). `ACTION_BUTTON_STYLE` setzt bewusst KEINEN
-        # `background-color` im Normalzustand (anders als
-        # `_trigger_arm_button`) - folgen normal der QPalette/dem
-        # aktuellen Theme, nur die Play-/Aufnahme-Icon-Farbe ist fest
-        # (siehe `_retheme_action_button_icons`); nur Hover/Press bekommen
-        # einen dezenten Palette-basierten Effekt.
+        # Play (green icon, live view only)/Record (red circle icon,
+        # with storage)/Stop - identical counterpart to
+        # `gui/setup_view.py` (see there for the rationale behind the
+        # three-button design instead of the former single start button
+        # + "live view only" checkbox). `ACTION_BUTTON_STYLE`
+        # deliberately sets NO `background-color` in the normal state
+        # (unlike `_trigger_arm_button`) - they normally follow the
+        # QPalette/current theme, only the play/record icon color is
+        # fixed (see `_retheme_action_button_icons`); only hover/press
+        # get a subtle palette-based effect.
         self._play_button = QPushButton()
         self._play_button.setIconSize(QSize(24, 24))
         self._play_button.setStyleSheet(action_button_style())
@@ -1179,15 +1189,16 @@ class LiveView(QWidget):
 
         self._retheme_action_button_icons()
         self._update_action_button_labels()
-        # ERST NACH Icon/Stylesheet setzen: `_set_trigger_arm_button_text()`
-        # fixiert ueber `fix_toggle_button_width()` die Buttonbreite anhand
-        # von `sizeHint()`, der Icon UND Stylesheet-Padding braucht, um
-        # korrekt zu messen.
+        # ONLY AFTER setting icon/stylesheet: `_set_trigger_arm_button_text()`
+        # fixes the button width via `fix_toggle_button_width()` based on
+        # `sizeHint()`, which needs the icon AND stylesheet padding to
+        # measure correctly.
         self._set_trigger_arm_button_text()
 
-        # Play/Aufnahme/Stop (+ Scharf-Button) links, die laufenden
-        # Messwerte (Dauer/Abtastrate) direkt daneben - vorher rechts vom
-        # Stretch, jetzt zusammen mit den Buttons links gruppiert.
+        # Play/Record/Stop (+ arm button) on the left, the running
+        # readouts (duration/sample rate) right next to them - previously
+        # to the right of the stretch, now grouped with the buttons on
+        # the left.
         info_row.addWidget(self._trigger_arm_button, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addWidget(self._play_button, 0, Qt.AlignmentFlag.AlignVCenter)
         info_row.addWidget(self._record_button, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -1197,10 +1208,10 @@ class LiveView(QWidget):
         info_row.addStretch(1)
         layout.addLayout(info_row)
 
-        # "Scharf, wartet auf Trigger"-Banner (siehe `enter_armed_state`) -
-        # deutlich hervorgehoben, standardmaessig unsichtbar. Der bestehende
-        # Stop-Button dient waehrenddessen unveraendert als Abbrechen-Funktion
-        # (siehe `gui/main_window.py::_on_stop_measurement`).
+        # "Armed, waiting for trigger" banner (see `enter_armed_state`) -
+        # clearly highlighted, hidden by default. The existing stop
+        # button continues to serve unchanged as the cancel function
+        # during this time (see `gui/main_window.py::_on_stop_measurement`).
         self._armed_banner = QLabel()
         self._armed_banner.setWordWrap(True)
         self._armed_banner.setStyleSheet(
@@ -1212,7 +1223,7 @@ class LiveView(QWidget):
 
         layout.addWidget(self._plot_widget, stretch=1)
 
-        # Pufferauslastung des Storage Writers (Schreib-Rückstand ggü. DAQ-Thread).
+        # Buffer utilization of the storage writer (write backlog vs. the DAQ thread).
         self._storage_group = QGroupBox(t("storage_buffer_group"))
         storage_layout = QHBoxLayout(self._storage_group)
         self._storage_progress = QProgressBar()
@@ -1226,24 +1237,25 @@ class LiveView(QWidget):
         self._storage_group.setVisible(False)
 
     # ------------------------------------------------------------------ #
-    # Öffentliche API (von main_window.py aufgerufen)
+    # Public API (called from main_window.py)
     # ------------------------------------------------------------------ #
 
     def preview_channels(self, channels: list[Channel]) -> None:
-        """Baut die Plot-Anordnung schon anhand der im Setup konfigurierten
-        Kanäle auf, BEVOR eine Messung gestartet wird - die Live View muss
-        so nicht leer bleiben, bis tatsächlich gestartet wird.
+        """Builds the plot layout from the channels configured in setup
+        already, BEFORE a measurement is started - this way the live
+        view doesn't have to stay empty until a measurement is actually
+        started.
 
-        Wirkt nur, solange keine Messung läuft (`self._reader_id is None`);
-        eine laufende Messung darf ihre eigenen, tatsächlich erfassten
-        Plots nicht durch eine Vorschau der (evtl. seitdem geänderten)
-        Setup-Konfiguration ersetzt bekommen.
+        Only takes effect while no measurement is running
+        (`self._reader_id is None`); a running measurement must not have
+        its own, actually acquired plots replaced by a preview of the
+        (possibly since-changed) setup configuration.
 
-        Baut NUR neu auf, wenn sich die Kanalkonfiguration gegenüber der
-        zuletzt angezeigten tatsächlich geändert hat (`Channel` ist ein
-        `@dataclass`, Listenvergleich also elementweise nach Inhalt) -
-        sonst würde jeder Klick auf die Live-View-Kachel die Plots
-        unnötig neu aufbauen, selbst wenn sich im Setup nichts geändert hat.
+        Only rebuilds if the channel configuration has actually changed
+        compared to the last one displayed (`Channel` is a `@dataclass`,
+        so list comparison is element-wise by content) - otherwise every
+        click on the live view tile would needlessly rebuild the plots,
+        even if nothing changed in the setup.
         """
         if self._reader_id is not None or channels == self._channels:
             return
@@ -1256,30 +1268,70 @@ class LiveView(QWidget):
         sample_rate_hz: float,
         storage_writer: StorageWriter | None = None,
         trigger_config: TriggerConfig | None = None,
+        rate_groups: list[RateGroup] | None = None,
     ) -> None:
-        """Beginnt die Live-Anzeige für eine neu gestartete Messung.
+        """Starts the live display for a newly started measurement.
 
-        Registriert einen eigenen, unabhängigen Ring-Buffer-Reader (siehe
-        `MeasurementController.register_reader`) - die Live View darf
-        Samples verlieren/überspringen, ohne den Storage Writer zu
-        beeinträchtigen (siehe `core/ringbuffer.py`).
+        Registers its own, independent ring buffer reader (see
+        `MeasurementController.register_reader`) - the live view is
+        allowed to lose/skip samples without affecting the storage
+        writer (see `core/ringbuffer.py`).
 
-        IMMER aufgerufen, auch bei manuellem Start (nicht nur bei einem
-        Schwellwert-/seriellen Start-Trigger) - der Stopp-Trigger (siehe
-        `TriggerConfig.stop`) muss unabhaengig von der Art des Starts
-        ueberwacht werden koennen. Loest hier BEIDE Kanal-Indizes auf
-        (Start- und Stopp-Seite) und setzt beide Flankendetektoren zurueck.
+        ALWAYS called, even on a manual start (not just for a
+        threshold/serial start trigger) - the stop trigger (see
+        `TriggerConfig.stop`) must be monitorable independent of how the
+        measurement was started. Resolves BOTH channel indices here
+        (start and stop side) and resets both edge detectors.
 
         Args:
-            storage_writer: Der `StorageWriter` der laufenden Messung, falls
-                gespeichert wird. `None` bei "Nur Live anzeigen" - dann
-                bleibt die Speicherpuffer-Anzeige ausgeblendet.
-            trigger_config: Aktuelle Start-/Stopp-Trigger-Konfiguration
-                (siehe `data/models.py::TriggerConfig`). `None` entspricht
-                einer leeren Konfiguration (kein Trigger).
+            sample_rate_hz: The ACTUAL tick rate of the ring buffer
+                (= fastest rate group, see
+                `data/models.py::resolve_rate_groups`) - NOT necessarily
+                the target rate configured by the user. Drives the
+                entire display buffer/X axis math below.
+            storage_writer: The `StorageWriter` of the running
+                measurement, if storing. `None` for "live view only" -
+                in that case the storage buffer display stays hidden.
+            trigger_config: Current start/stop trigger configuration
+                (see `data/models.py::TriggerConfig`). `None`
+                corresponds to an empty configuration (no trigger).
+            rate_groups: Resolved rate groups of this measurement (see
+                `resolve_rate_groups`). Drives two independent things:
+                (1) still the textual display in the rate label
+                (`_sample_rate_label`, see
+                `_format_sample_rate_label_value`) and (2) the native
+                rate per channel (see `_channel_native_rates`, built
+                directly below) - a channel with a fixed rate that
+                deviates from the tick rate (e.g. NI9210 @ 14 S/s) gets
+                its sweep display buffer sized/filled according to ITS
+                OWN, real data rate instead of the much faster ZOH tick
+                rate `sample_rate_hz` (see `_write_to_display_buffer` -
+                otherwise the downsampling would cost a multiple per
+                tick). `None`/a single group -> all channels get
+                `sample_rate_hz` as their native rate, unchanged
+                behavior as before.
         """
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
+        self._rate_groups = rate_groups or []
+        # Native rate per channel index, derived ONCE here (not
+        # recomputed per tick, see `_write_to_display_buffer`) - exactly
+        # the same construction as
+        # `data/metadata.py::build_measurement_metadata`'s
+        # `rate_by_hw_channel` (key deliberately `hardware_channel`, NOT
+        # object identity/`==` on `Channel` - it's a mutable dataclass
+        # whose fields get changed live elsewhere). Fallback
+        # `sample_rate_hz`: channels without their own fixed rate (the
+        # normal case) run at the tick rate itself.
+        rate_by_hw_channel = {
+            channel.hardware_channel: group.resolved_sample_rate_hz
+            for group in self._rate_groups
+            for channel in group.channels
+        }
+        self._channel_native_rates = {
+            index: rate_by_hw_channel.get(channel.hardware_channel, sample_rate_hz)
+            for index, channel in enumerate(channels)
+        }
         self._reader_id = self._controller.register_reader()
 
         self._trigger_config = trigger_config or TriggerConfig()
@@ -1295,15 +1347,16 @@ class LiveView(QWidget):
 
         self._rebuild_plots()
         self._ensure_display_buffer(len(channels))
-        # Explizit zuruecksetzen (nicht nur in `_ensure_display_buffer`
-        # implizit ueber einen Formwechsel): sonst wuerde bei gleicher
-        # Kanalzahl/Abtastrate wie in der vorherigen Messung die alte
-        # Schreibposition (und damit ein Rest alter Messdaten) sichtbar
-        # in den neuen Sweep-Durchlauf hineinragen.
+        # Explicitly reset (not just implicitly via a shape change in
+        # `_ensure_display_buffer`): otherwise, with the same channel
+        # count/sample rate as the previous measurement, the old write
+        # position (and thus a remnant of old measurement data) would
+        # visibly carry over into the new sweep.
         self._buffer_write_pos = 0
         self._channel_buffer_positions = {index: 0 for index in range(len(channels))}
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
+        self._channel_total_ticks_seen = {index: 0 for index in range(len(channels))}
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -1312,16 +1365,37 @@ class LiveView(QWidget):
             "Live View gestartet für %d Kanäle bei %.1f Hz", len(channels), sample_rate_hz
         )
 
-    def attach_storage_writer(self, storage_writer: StorageWriter | None) -> None:
-        """Setzt (oder entfernt) den StorageWriter der laufenden Messung.
+    def _format_sample_rate_label_value(self) -> str:
+        """Builds the display text for `_sample_rate_label`.
 
-        Bei manuellem Start ruft `start_display()` dies direkt mit dem
-        bereits fertigen StorageWriter auf (bzw. `None` bei "Nur Live
-        anzeigen"). Bei einem automatischen Trigger (siehe
-        `enter_armed_state`) existiert waehrend der Scharf-Phase noch KEIN
-        StorageWriter - `gui/main_window.py::_on_trigger_fired` ruft diese
-        Methode dann NACHTRAEGLICH auf, sobald der Trigger tatsaechlich
-        ausgeloest hat.
+        Normal case (`self._rate_groups` empty or exactly one group):
+        just the plain rate, as before. With multiple groups (a current
+        rate conflict, e.g. NI9210 + a faster module), also shows the
+        rate(s) the slower group(s) are actually running at - unlike
+        DIAdem/NI-MAX, the deviation from the target rate stays visible
+        here instead of being silently clipped.
+        """
+        if len(self._rate_groups) <= 1:
+            return f"{self._sample_rate_hz:.1f} Hz"
+
+        fast_group = max(self._rate_groups, key=lambda g: g.resolved_sample_rate_hz)
+        extra_parts = []
+        for group in self._rate_groups:
+            if group is fast_group:
+                continue
+            module_names = "/".join(sorted({ch.module_type.value for ch in group.channels}))
+            extra_parts.append(f"{module_names} @ {group.resolved_sample_rate_hz:.1f} Hz")
+        return f"{fast_group.resolved_sample_rate_hz:.1f} Hz (+ {', '.join(extra_parts)})"
+
+    def attach_storage_writer(self, storage_writer: StorageWriter | None) -> None:
+        """Sets (or removes) the StorageWriter of the running measurement.
+
+        On a manual start, `start_display()` calls this directly with the
+        already-ready StorageWriter (or `None` for "live view only").
+        With an automatic trigger (see `enter_armed_state`), NO
+        StorageWriter exists yet during the armed phase -
+        `gui/main_window.py::_on_trigger_fired` calls this method
+        AFTERWARDS, once the trigger has actually fired.
         """
         self._storage_writer = storage_writer
         self._storage_group.setVisible(storage_writer is not None)
@@ -1332,44 +1406,43 @@ class LiveView(QWidget):
             self._storage_timer.stop()
 
     def mark_recording_started(self, baseline_samples: int) -> None:
-        """Setzt den Nullpunkt fuer das Aufnahme-Limit auf den
-        tatsaechlichen Aufzeichnungs-Beginn (siehe
-        `_recording_baseline_samples`, `_on_timer_tick`) und ist der
-        universelle Reset-Punkt fuer den Stopp-Trigger-Flankendetektor
-        (siehe `_check_stop_threshold_trigger`) - eine bereits beim
-        tatsaechlichen Aufzeichnungsbeginn erfuellte Stopp-Bedingung darf
-        nicht sofort (faelschlich) ausloesen.
+        """Sets the zero point for the recording limit to the actual
+        start of recording (see `_recording_baseline_samples`,
+        `_on_timer_tick`) and is the universal reset point for the
+        stop-trigger edge detector (see `_check_stop_threshold_trigger`)
+        - a stop condition that's already satisfied right at the actual
+        start of recording must not fire immediately (incorrectly).
 
-        Bei manuellem Start mit `0` aufgerufen (Nullpunkt = Erfassungsstart,
-        unveraendertes Verhalten) - MUSS auch dort aufgerufen werden, da der
-        Stopp-Flankendetektor sonst nie zurueckgesetzt wird. Bei einem
-        Start-Trigger ruft `gui/main_window.py::_on_trigger_fired` dies mit
-        der Samplezahl auf, bei der der Trigger tatsaechlich ausgeloest hat.
+        Called with `0` on a manual start (zero point = start of
+        acquisition, unchanged behavior) - MUST also be called there,
+        otherwise the stop edge detector would never get reset. On a
+        start trigger, `gui/main_window.py::_on_trigger_fired` calls this
+        with the sample count at which the trigger actually fired.
         """
         self._recording_baseline_samples = baseline_samples
         self._stop_trigger_last_condition = None
 
     def enter_armed_state(self) -> None:
-        """Versetzt die Live View in den "scharf, wartet auf Trigger"-Zustand.
+        """Puts the live view into the "armed, waiting for trigger" state.
 
-        Kanal-Aufloesung und Flankendetektor-Reset sind bereits durch
-        `start_display()` erledigt (IMMER aufgerufen, auch bei manuellem
-        Start) - hier nur noch Zustand + Banner. Hardware-Erfassung und
-        Anzeige laufen zu diesem Zeitpunkt bereits (siehe
-        `gui/main_window.py::_on_start_measurement`) - nur der
-        StorageWriter fehlt noch. Bei einem Schwellwert-Trigger prueft
-        `_on_timer_tick`/`_check_threshold_trigger` ab jetzt jeden Tick den
-        konfigurierten Kanal; bei einem seriellen Trigger geschieht die
-        eigentliche Ueberwachung extern (siehe
-        `gui/serial_trigger.py::SerialTriggerListener`), dieser Zustand
-        steuert hier nur die Banner-Anzeige.
+        Channel resolution and edge-detector reset are already done by
+        `start_display()` (ALWAYS called, even on a manual start) - only
+        state + banner remain here. Hardware acquisition and display are
+        already running at this point (see
+        `gui/main_window.py::_on_start_measurement`) - only the
+        StorageWriter is still missing. With a threshold trigger,
+        `_on_timer_tick`/`_check_threshold_trigger` checks the configured
+        channel on every tick from now on; with a serial trigger, the
+        actual monitoring happens externally (see
+        `gui/serial_trigger.py::SerialTriggerListener`), this state only
+        controls the banner display here.
         """
         self._armed = True
         self._update_armed_banner()
 
     def exit_armed_state(self) -> None:
-        """Beendet den "scharf, wartet auf Trigger"-Zustand (Trigger
-        ausgeloest ODER Messung waehrenddessen abgebrochen). Idempotent."""
+        """Ends the "armed, waiting for trigger" state (trigger fired OR
+        measurement canceled in the meantime). Idempotent."""
         self._armed = False
         self._armed_banner.setVisible(False)
 
@@ -1395,9 +1468,8 @@ class LiveView(QWidget):
 
     @staticmethod
     def _evaluate_threshold_condition(latest: float, condition) -> bool:
-        """Wertet eine `TriggerCondition` (Schwellwert-Art) fuer einen
-        einzelnen Messwert aus - gemeinsam genutzt von Start- und
-        Stopp-Pruefung."""
+        """Evaluates a `TriggerCondition` (threshold kind) for a single
+        reading - shared by the start and stop checks."""
         threshold = condition.threshold_value
         direction = condition.threshold_direction
         if direction == TriggerDirection.RISES_ABOVE:
@@ -1407,21 +1479,20 @@ class LiveView(QWidget):
         return abs(latest) > threshold  # ABS_EXCEEDS
 
     def _check_threshold_trigger(self, scaled: np.ndarray) -> None:
-        """Prueft den konfigurierten Start-Kanal jeden Tick gegen den
-        Schwellwert (siehe `enter_armed_state`) und emittiert
-        `trigger_fired`, sobald die Bedingung FLANKENARTIG eintritt (also
-        beim Wechsel von "nicht erfuellt" auf "erfuellt", nicht bei jedem
-        Tick waehrend sie weiter erfuellt bleibt). `_start_trigger_last_condition`
-        startet bei jedem Scharfschalten bewusst bei `None`, damit ein
-        Kanal, der beim Scharfschalten bereits jenseits der Schwelle liegt,
-        NICHT sofort ausloest - der Nutzer muss eine tatsaechliche
-        Ueberschreitung sehen, wie bei einem Oszilloskop-Trigger.
+        """Checks the configured start channel against the threshold on
+        every tick (see `enter_armed_state`) and emits `trigger_fired` as
+        soon as the condition occurs EDGE-LIKE (i.e. on the transition
+        from "not met" to "met", not on every tick while it remains met).
+        `_start_trigger_last_condition` deliberately starts at `None` on
+        every arming, so a channel that's already past the threshold at
+        the moment of arming does NOT fire immediately - the user must
+        see an actual crossing, like with an oscilloscope trigger.
 
-        Bewusste Vereinfachung: geprueft wird nur der letzte Sample-Wert
-        des jeweiligen Ticks (~15ms-Granularitaet), nicht der gesamte
-        Datenblock - bei der geforderten "ca. 5s"-Vorlauftoleranz ist das
-        unerheblich, gleiches Praezisionsniveau wie das bestehende
-        Aufnahme-Limit (siehe `_on_timer_tick`).
+        Deliberate simplification: only the last sample value of each
+        tick is checked (~15ms granularity), not the whole data block -
+        given the required "~5s" pre-roll tolerance, that's immaterial,
+        the same precision level as the existing recording limit (see
+        `_on_timer_tick`).
         """
         if (
             not self._armed
@@ -1444,15 +1515,15 @@ class LiveView(QWidget):
             self.trigger_fired.emit()
 
     def _check_stop_threshold_trigger(self, scaled: np.ndarray) -> None:
-        """Prueft den konfigurierten Stopp-Kanal jeden Tick gegen den
-        Schwellwert, solange tatsaechlich aufgezeichnet wird (`not
-        self._armed`) - gleiche Flankenlogik wie `_check_threshold_trigger`,
-        loest aber ueber `stop_requested` aus (denselben Pfad wie
-        Aufnahme-Limit und manueller Stopp-Button), statt ueber
-        `trigger_fired`. `_stop_trigger_last_condition` wird von
-        `mark_recording_started()` zurueckgesetzt - dem Zeitpunkt, ab dem
-        die Aufzeichnung tatsaechlich beginnt (nicht notwendigerweise
-        `start_display()`, z. B. bei einem Start-Trigger).
+        """Checks the configured stop channel against the threshold on
+        every tick, as long as recording is actually happening (`not
+        self._armed`) - same edge logic as `_check_threshold_trigger`,
+        but fires via `stop_requested` (the same path as the recording
+        limit and the manual stop button), instead of via
+        `trigger_fired`. `_stop_trigger_last_condition` is reset by
+        `mark_recording_started()` - the point at which recording
+        actually begins (not necessarily `start_display()`, e.g. with a
+        start trigger).
         """
         if (
             self._armed
@@ -1473,39 +1544,41 @@ class LiveView(QWidget):
             self.stop_requested.emit()
 
     def stop_display(self) -> None:
-        """Beendet die Live-Anzeige (nach Messungsende)."""
+        """Ends the live display (after the measurement ends)."""
         self._timer.stop()
         self._storage_timer.stop()
         self.exit_armed_state()
         if self._reader_id is not None:
             self._controller.unregister_reader(self._reader_id)
             self._reader_id = None
+        self._rate_groups = []
+        self._channel_native_rates = {}
         logger.info("Live View gestoppt")
 
     def retranslate_ui(self) -> None:
-        """Aktualisiert alle statischen Texte nach einem Sprachwechsel."""
+        """Updates all static texts after a language change."""
         self._update_action_button_labels()
         self._set_trigger_arm_button_text()
         self._storage_group.setTitle(t("storage_buffer_group"))
 
         for plot_item in self._plot_items:
-            # `units=` NICHT genutzt (siehe `ChannelPopoutWindow.__init__`)
-            # - Zeiteinheit ueberall einheitlich in eckigen Klammern.
+            # `units=` NOT used (see `ChannelPopoutWindow.__init__`) - time
+            # unit consistently in square brackets everywhere.
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
 
-        # Laufende Dauer/Abtastrate korrigieren sich beim nächsten Timer-
-        # Tick von selbst - nur der Leerlauf-Platzhalter würde sonst
-        # dauerhaft in der alten Sprache hängen bleiben.
+        # Running duration/sample rate correct themselves on the next
+        # timer tick - only the idle placeholder would otherwise stay
+        # stuck in the old language permanently.
         if self._reader_id is None:
             self._duration_label.setText(t("duration_value", value="-"))
             self._sample_rate_label.setText(t("sample_rate_value", value="-"))
 
     def retheme_plots(self) -> None:
-        """Färbt Plot-Hintergrund/-Achsen/-Kurven nach einem Theme-Wechsel um.
+        """Recolors plot background/axes/curves after a theme change.
 
-        PyQtGraph-Widgets folgen der `QApplication`-Palette nicht
-        automatisch (siehe `gui/theme.py`) - bereits vorhandene Plots
-        müssen daher explizit nachgefärbt werden.
+        PyQtGraph widgets don't automatically follow the `QApplication`
+        palette (see `gui/theme.py`) - already-existing plots therefore
+        have to be explicitly recolored.
         """
         style_plot_container(self._plot_widget)
         self._retheme_action_button_icons()
@@ -1513,13 +1586,13 @@ class LiveView(QWidget):
             style_plot_item(plot_item)
             channel = self._channels[self._curve_channel_indices[pos]]
             plot_item.getViewBox().setBackgroundColor(_channel_background_color(channel))
-            # Boxen/Labels existieren nur, wenn `channel.plot_show_value`
-            # gesetzt ist (siehe `_rebuild_plots`) - sonst gibt der Plot
-            # deren Spaltenplatz zurueck, statt nur unsichtbar leeren Raum
-            # zu belegen. Bewusst IMMER Fenster-Hintergrund, NICHT die
-            # individuelle Kanalfarbe (siehe `_rebuild_plots` fuer die
-            # Begruendung) - die eigene Farbe gilt nur fuer die Plotflaeche
-            # selbst.
+            # Boxes/labels only exist if `channel.plot_show_value` is set
+            # (see `_rebuild_plots`) - otherwise the plot reclaims their
+            # column space instead of just occupying invisible empty
+            # space. Deliberately ALWAYS the window background, NOT the
+            # individual channel color (see `_rebuild_plots` for the
+            # reasoning) - the channel's own color only applies to the
+            # plot area itself.
             if self._value_boxes[pos] is not None:
                 self._value_boxes[pos].setBackgroundColor(plot_container_background_color())
             if self._value_unit_boxes[pos] is not None:
@@ -1528,32 +1601,31 @@ class LiveView(QWidget):
                 self._value_labels[pos].setColor(plot_foreground_color())
             if self._value_unit_labels[pos] is not None:
                 self._value_unit_labels[pos].setColor(plot_foreground_color())
-        # Kurvenfarbe/Hintergrund NICHT pauschal auf den Theme-Default
-        # zurücksetzen - individuell konfigurierte Kanalfarben (siehe
-        # `open_channel_display_dialog`) sollen einen Theme-Wechsel
-        # überstehen; `_apply_channel_appearance()` wendet für Kanäle OHNE
-        # eigene Farbe ohnehin den (jetzt neuen) Theme-Default an.
+        # Do NOT unconditionally reset curve color/background to the
+        # theme default - individually configured channel colors (see
+        # `open_channel_display_dialog`) should survive a theme change;
+        # `_apply_channel_appearance()` already applies the (now new)
+        # theme default for channels WITHOUT their own color anyway.
         self._apply_channel_appearance()
 
     def _retheme_action_button_icons(self) -> None:
-        # Play/Aufnahme haben feste, theme-unabhaengige Symbolfarben (siehe
-        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop UND
-        # der Scharf-Button haben KEINEN fest codierten Hintergrund mehr
-        # (siehe `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE`) und
-        # bleiben daher bei der normalen theme-abhaengigen
-        # `nav_icon_color()` (kein `color=` uebergeben).
+        # Play/record have fixed, theme-independent icon colors (see
+        # `gui/theme.py::PLAY_ICON_COLOR`/`RECORD_ICON_COLOR`). Stop AND
+        # the arm button no longer have a hardcoded background (see
+        # `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE`) and therefore
+        # stay with the normal theme-dependent `nav_icon_color()` (no
+        # `color=` passed).
         self._play_button.setIcon(QIcon(draw_play_icon(24, y_offset=0.6, color=PLAY_ICON_COLOR)))
         self._record_button.setIcon(
             QIcon(draw_record_icon(24, y_offset=0.6, color=RECORD_ICON_COLOR))
         )
         self._stop_button.setIcon(QIcon(draw_stop_icon(24, y_offset=0.6)))
         self._trigger_arm_button.setIcon(QIcon(draw_trigger_icon(24, y_offset=0.6)))
-        # `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE` referenzieren
-        # `palette(...)` - ohne manuelles unpolish()/polish() bleiben
-        # Rahmen/Hintergrund nach einem Live-Theme-Wechsel optisch im
-        # alten Theme haengen (gleicher Befund wie bei den
-        # Navigationskacheln, siehe
-        # `gui/main_window.py::_retheme_nav_icons`).
+        # `ACTION_BUTTON_STYLE`/`TRIGGER_ARM_BUTTON_STYLE` reference
+        # `palette(...)` - without a manual unpolish()/polish(),
+        # border/background visibly stay stuck in the old theme after a
+        # live theme change (same finding as with the navigation tiles,
+        # see `gui/main_window.py::_retheme_nav_icons`).
         for button in (
             self._play_button,
             self._record_button,
@@ -1563,9 +1635,9 @@ class LiveView(QWidget):
             repolish(button)
 
     def _update_action_button_labels(self) -> None:
-        # Kurzer Button-Text (siehe `play_button_label`/`record_button_label`/
-        # `stop_button_label`) UND ausfuehrlicherer Tooltip (bestehende
-        # `live_only`/`start_measurement`/`stop_measurement`-Keys).
+        # Short button text (see `play_button_label`/`record_button_label`/
+        # `stop_button_label`) AND a more detailed tooltip (existing
+        # `live_only`/`start_measurement`/`stop_measurement` keys).
         self._play_button.setText(f"  {t('play_button_label')}")
         self._play_button.setToolTip(t("live_only"))
         self._record_button.setText(f"  {t('record_button_label')}")
@@ -1587,60 +1659,61 @@ class LiveView(QWidget):
         self.trigger_arm_toggled.emit(checked)
 
     def set_trigger_arm_available(self, available: bool) -> None:
-        """Siehe `gui/setup_view.py::SetupView.set_trigger_arm_available`
-        - identisches Gegenstück hier in der Live-Ansicht."""
+        """See `gui/setup_view.py::SetupView.set_trigger_arm_available`
+        - identical counterpart here in the live view."""
         self._trigger_arm_button.setVisible(available)
         if not available and self._trigger_arm_button.isChecked():
             self.set_trigger_armed(False)
 
     def set_trigger_armed(self, armed: bool) -> None:
-        """Siehe `gui/setup_view.py::SetupView.set_trigger_armed` -
-        identisches Gegenstück hier in der Live-Ansicht."""
+        """See `gui/setup_view.py::SetupView.set_trigger_armed` -
+        identical counterpart here in the live view."""
         self._trigger_arm_button.blockSignals(True)
         self._trigger_arm_button.setChecked(armed)
         self._trigger_arm_button.blockSignals(False)
         self._set_trigger_arm_button_text()
 
     def set_start_enabled(self, enabled: bool) -> None:
-        """Siehe `gui/setup_view.py::SetupView.set_start_enabled` -
-        identisches Gegenstück hier: Stop folgt IMMER dem umgekehrten
-        Zustand."""
+        """See `gui/setup_view.py::SetupView.set_start_enabled` -
+        identical counterpart here: stop ALWAYS follows the inverse
+        state."""
         self._play_button.setEnabled(enabled)
         self._record_button.setEnabled(enabled)
         self._stop_button.setEnabled(not enabled)
-        # Siehe `gui/setup_view.py::SetupView.set_start_enabled` - gleiche
-        # Ausnahme: waehrend eines eigenen aktiven Zyklus bleibt der
-        # Scharf-Button immer klickbar (damit "entschärfen" jederzeit geht).
+        # See `gui/setup_view.py::SetupView.set_start_enabled` - same
+        # exception: while its own active cycle is running, the arm
+        # button always stays clickable (so "disarming" is possible at
+        # any time).
         if not self._trigger_arm_button.isChecked():
             self._trigger_arm_button.setEnabled(enabled)
 
     def open_channel_display_dialog(
         self, channels: list[Channel] | None = None
     ) -> dict[tuple[str, str], dict] | None:
-        """Öffnet den Dialog für Kurvenfarbe/Hintergrund/Y-Bereich/
-        Autoskalierung pro Kanal.
+        """Opens the dialog for curve color/background/Y range/
+        autoscaling per channel.
 
-        Aufgerufen vom Menüpunkt Optionen -> "Kanal-Darstellung
-        festlegen..." (siehe `gui/main_window.py::_build_menu`).
+        Called from the Options menu item -> "Configure Channel
+        Display..." (see `gui/main_window.py::_build_menu`).
 
         Args:
-            channels: Kanäle, die im Dialog angeboten werden (ihre
-                aktuellen `plot_*`-Felder sind die Vorbelegung, siehe
-                `data/models.py::Channel`). `None` (Default) verwendet die
-                aktuell live angezeigten Kanäle (`self._channels`, nur
-                während einer laufenden Messung gefüllt).
-                `gui/main_window.py` übergibt stattdessen die Kanäle aus
-                der Setup-Konfiguration, damit sich die Darstellung schon
-                VOR dem Messstart einstellen lässt.
+            channels: Channels offered in the dialog (their current
+                `plot_*` fields are the initial values, see
+                `data/models.py::Channel`). `None` (default) uses the
+                currently live-displayed channels (`self._channels`,
+                only populated during a running measurement).
+                `gui/main_window.py` instead passes the channels from the
+                setup configuration, so the display can already be
+                configured BEFORE the measurement starts.
 
         Returns:
-            Die im Dialog gesetzten Werte pro Kanal (siehe
-            `ChannelDisplayDialog.results()`), oder `None` bei Abbruch/
-            fehlenden Kanälen. `gui/main_window.py` reicht das Ergebnis an
-            `SetupView.apply_channel_display_settings()` weiter, damit die
-            Werte beim Speichern der Konfiguration erhalten bleiben - die
-            Live View selbst kennt nur ihre eigenen `self._channels`
-            (siehe `_apply_display_settings_to_live_channels`).
+            The values set in the dialog per channel (see
+            `ChannelDisplayDialog.results()`), or `None` on cancel/no
+            channels. `gui/main_window.py` passes the result on to
+            `SetupView.apply_channel_display_settings()` so the values
+            are preserved when the configuration is saved - the live
+            view itself only knows its own `self._channels` (see
+            `_apply_display_settings_to_live_channels`).
         """
         channels = channels if channels is not None else self._channels
         if not channels:
@@ -1660,13 +1733,13 @@ class LiveView(QWidget):
     def _apply_display_settings_to_live_channels(
         self, settings: dict[tuple[str, str], dict]
     ) -> None:
-        """Überträgt vom Dialog gesetzte Werte auf die AKTUELL live
-        angezeigten Kanäle (`self._channels`).
+        """Applies values set in the dialog to the CURRENTLY live-
+        displayed channels (`self._channels`).
 
-        Relevant, falls der Dialog mit einer anderen Kanalliste (z. B. aus
-        dem Setup, siehe `open_channel_display_dialog`) geöffnet wurde,
-        während gerade eine Messung läuft: die laufende Anzeige soll sich
-        sofort aktualisieren, nicht erst beim nächsten Messstart.
+        Relevant if the dialog was opened with a different channel list
+        (e.g. from the setup, see `open_channel_display_dialog`) while a
+        measurement is currently running: the running display should
+        update immediately, not only at the next measurement start.
         """
         if not self._channels:
             return
@@ -1691,17 +1764,18 @@ class LiveView(QWidget):
             if new_time_window != channel.plot_time_window_seconds:
                 time_window_changed = True
             channel.plot_time_window_seconds = new_time_window
-            # Braucht einen Rebuild (siehe unten), keine reine
-            # `_apply_channel_appearance()`-Aktualisierung: die Zahlenspalte
-            # im Hauptraster hat im `GraphicsLayoutWidget` eine FESTE Breite
-            # (`setColumnFixedWidth`, siehe `_rebuild_plots()`) - nur
-            # `.setVisible()` auf der Box selbst laesst den Plot die Spalte
-            # NICHT zurueckgewinnen, die Spaltenbreite muss dafuer neu
-            # berechnet werden.
-            # `plot_show_graph` braucht - anders als `plot_show_value`
-            # oben - KEINEN vollen Rebuild: reines Ein-/Ausblenden ueber
-            # `_apply_channel_curve_style()`, das `_apply_channel_appearance()`
-            # unten (bzw. am Ende dieser Methode) ohnehin immer aufruft.
+            # Needs a rebuild (see below), not just a plain
+            # `_apply_channel_appearance()` update: the number column in
+            # the main grid has a FIXED width in the `GraphicsLayoutWidget`
+            # (`setColumnFixedWidth`, see `_rebuild_plots()`) - just
+            # `.setVisible()` on the box itself does NOT let the plot
+            # reclaim the column, the column width has to be recomputed
+            # for that.
+            # Unlike `plot_show_value` above, `plot_show_graph` does NOT
+            # need a full rebuild: a plain show/hide via
+            # `_apply_channel_curve_style()`, which
+            # `_apply_channel_appearance()` below (or at the end of this
+            # method) always calls anyway.
             channel.plot_show_graph = values.get("plot_show_graph", True)
             new_show_value = values.get("plot_show_value", False)
             if new_show_value != channel.plot_show_value:
@@ -1729,21 +1803,21 @@ class LiveView(QWidget):
             changed = True
         if visibility_changed or time_window_changed or integer_digits_changed or show_value_changed:
             if time_window_changed:
-                # Puffer ist auf das breiteste Zeitfenster ueber alle
-                # Kanaele dimensioniert (siehe `_ensure_display_buffer`) -
-                # bei einer waehrend der Messung vergroesserten Zeitspanne
-                # muss er neu allokiert werden, sonst wuerde `cap` in
-                # `_write_to_display_buffer` weiterhin auf die alte,
-                # kleinere Kapazitaet gedeckelt.
+                # The buffer is sized to the widest time window across
+                # all channels (see `_ensure_display_buffer`) - if the
+                # span is enlarged while a measurement is running, it
+                # must be reallocated, otherwise `cap` in
+                # `_write_to_display_buffer` would keep being capped to
+                # the old, smaller capacity.
                 self._ensure_display_buffer(len(self._channels))
-            # Welche Kanäle überhaupt einen Subplot bekommen, hat sich
-            # geändert - Farb-/Bereichs-Anwendung fürs Hauptraster ist Teil
-            # von `_rebuild_plots()` und muss daher nicht separat erfolgen.
-            # Offene eigene Fenster (siehe `ChannelPopoutWindow`) werden von
-            # `_rebuild_plots()` NUR bei einem tatsächlichen
-            # Sichtbarkeits-/Popout-Wechsel angefasst - `integer_digits_changed`
-            # allein (Fenster bleibt offen) braeuchte sonst KEINE
-            # Aktualisierung der Feldbreite, daher hier explizit nachziehen.
+            # Which channels get a subplot at all has changed - color/
+            # range application for the main grid is part of
+            # `_rebuild_plots()` and therefore doesn't need to happen
+            # separately. Open own windows (see `ChannelPopoutWindow`) are
+            # only touched by `_rebuild_plots()` on an actual visibility/
+            # popout change - `integer_digits_changed` alone (window stays
+            # open) would otherwise need NO field-width update, so it's
+            # applied explicitly here.
             self._rebuild_plots()
             self._apply_channel_appearance()
         elif changed:
@@ -1751,14 +1825,14 @@ class LiveView(QWidget):
             self._apply_y_range_mode()
 
     def _find_channel_by_key(self, key: tuple[str, str]) -> Channel | None:
-        """Findet einen Kanal über `_channel_display_key()` - für
-        Popout-bezogene Nachschlagevorgänge (siehe dort)."""
+        """Finds a channel via `_channel_display_key()` - for popout-
+        related lookups (see there)."""
         return next((c for c in self._channels if _channel_display_key(c) == key), None)
 
     def _open_popout_window(self, channel: Channel) -> None:
-        """Öffnet ein eigenständiges Fenster mit dem Live-Plot eines
-        einzelnen Kanals (siehe `ChannelPopoutWindow`), oder aktiviert ein
-        dafür bereits offenes Fenster, statt ein zweites zu öffnen."""
+        """Opens a standalone window with the live plot of a single
+        channel (see `ChannelPopoutWindow`), or activates an already-open
+        window for it instead of opening a second one."""
         key = _channel_display_key(channel)
         existing = self._popout_windows.get(key)
         if existing is not None:
@@ -1776,19 +1850,18 @@ class LiveView(QWidget):
         )
         self._apply_channel_curve_style(window.plot_item, window.curve, channel)
         self._apply_channel_y_range(window.plot_item, channel, None, self._popout_y_auto_active)
-        # WICHTIG: Die Closure haelt `self` (LiveView) NUR als `weakref`,
-        # nicht direkt - sonst entsteht ein echter Referenzzyklus
-        # (LiveView -> self._popout_windows[hw] -> window -> Qt/sip-
-        # Verbindungsregister -> diese Closure -> self). Ein solcher
-        # Zyklus wird nur vom zyklischen GC aufgeloest, nicht durch
-        # normales Refcounting - und weil dieser dabei die beteiligten
-        # Objekte ueber `tp_clear` "leerraeumt", kann `destroyed` mitten
-        # in diesem Aufraeumvorgang feuern und `self` als bereits
-        # geleerte Closure-Zelle vorfinden
-        # (`NameError: cannot access free variable 'self'`) - reproduzierbar
-        # ueber `profile_live_tick.py` (mehrere LiveView-Instanzen kurz
-        # hintereinander anlegen/verwerfen). Mit `weakref` entsteht gar
-        # kein Zyklus, Refcounting allein reicht zum Aufraeumen.
+        # IMPORTANT: the closure holds `self` (LiveView) ONLY as a
+        # `weakref`, not directly - otherwise a real reference cycle
+        # forms (LiveView -> self._popout_windows[hw] -> window -> Qt/sip
+        # connection registry -> this closure -> self). Such a cycle is
+        # only resolved by the cyclic GC, not by normal refcounting - and
+        # because that GC pass "clears out" the involved objects via
+        # `tp_clear`, `destroyed` can fire in the middle of that cleanup
+        # and find `self` as an already-cleared closure cell
+        # (`NameError: cannot access free variable 'self'`) - reproducible
+        # via `profile_live_tick.py` (creating/discarding several LiveView
+        # instances in quick succession). With `weakref`, no cycle forms
+        # at all, plain refcounting is enough to clean up.
         view_ref = weakref.ref(self)
 
         def _on_window_destroyed(_obj=None, key=key, view_ref=view_ref) -> None:
@@ -1798,11 +1871,10 @@ class LiveView(QWidget):
 
         window.destroyed.connect(_on_window_destroyed)
 
-        # Zuletzt bekannte Position/Groesse wiederverwenden (siehe
-        # `Channel.plot_popout_x` usw.), sofern vorhanden UND noch auf
-        # einem aktuell angeschlossenen Bildschirm liegt (z. B. NICHT auf
-        # einem inzwischen abgesteckten zweiten Monitor) - sonst wie
-        # bisher kaskadiert relativ zum Hauptfenster platzieren.
+        # Reuse the last known position/size (see `Channel.plot_popout_x`
+        # etc.), if present AND still on a currently connected screen
+        # (e.g. NOT on a second monitor that has since been unplugged) -
+        # otherwise cascade-place relative to the main window as before.
         has_saved_geometry = (
             channel.plot_popout_x is not None
             and channel.plot_popout_y is not None
@@ -1820,16 +1892,16 @@ class LiveView(QWidget):
                 channel.plot_popout_height,
             )
         else:
-            # Kaskadierte Position statt Qt's Default-Platzierung: werden
-            # mehrere Kanäle auf einmal per Dialog auf "Eigenes Fenster"
-            # gesetzt (ein OK-Klick löst mehrere `_open_popout_window()`-
-            # Aufrufe direkt hintereinander aus, siehe Aufrufer), platziert
-            # Qt ohne das hier neue Fenster sonst exakt übereinander -
-            # sichtbar wird dann nur das zuletzt geöffnete, die anderen
-            # liegen unsichtbar dahinter und "erscheinen" erst beim
-            # Schließen des jeweils obersten. Versatz relativ zur Position
-            # des Hauptfensters, damit die Fenster in dessen Naehe
-            # auftauchen (nicht z. B. auf einem anderen Bildschirm).
+            # Cascaded position instead of Qt's default placement: if
+            # several channels are set to "own window" at once via the
+            # dialog (one OK click triggers several `_open_popout_window()`
+            # calls right after each other, see caller), Qt would
+            # otherwise place the new windows exactly on top of each
+            # other - only the most recently opened one would be visible,
+            # the others sitting invisibly behind it and only "appearing"
+            # once the topmost one is closed. Offset relative to the main
+            # window's position, so the windows appear near it (not e.g.
+            # on a different screen).
             main_window = self.window()
             base = main_window.pos() if main_window is not None else QPoint(80, 80)
             cascade_offset = 32 * len(self._popout_windows)
@@ -1838,33 +1910,33 @@ class LiveView(QWidget):
         window.show()
 
     def get_open_popout_geometries(self) -> dict[tuple[str, str], tuple[int, int, int, int]]:
-        """Liefert Position/Groesse (x, y, width, height) aller aktuell
-        offenen eigenen Fenster - fuer `gui/main_window.py`, um sie beim
-        Schliessen/expliziten Speichern der App in die Setup-Kanaltabelle
-        zu uebernehmen (siehe `Channel.plot_popout_x` usw.). Eigentlich
-        redundant zu den kontinuierlich synchronisierten `Channel`-Feldern
-        (siehe `ChannelPopoutWindow.moveEvent`/`resizeEvent`), liest aber
-        bewusst direkt vom Fenster statt vom Kanal-Objekt - unabhaengig
-        davon, ob dieser Kanal gerade ueberhaupt Teil der live angezeigten
-        `self._channels` ist."""
+        """Returns position/size (x, y, width, height) of all currently
+        open own windows - for `gui/main_window.py`, to adopt them into
+        the setup channel table when the app closes/explicitly saves
+        (see `Channel.plot_popout_x` etc.). Actually redundant with the
+        continuously synchronized `Channel` fields (see
+        `ChannelPopoutWindow.moveEvent`/`resizeEvent`), but deliberately
+        reads directly from the window instead of the channel object -
+        regardless of whether this channel is currently even part of the
+        live-displayed `self._channels`."""
         return {
             key: (window.x(), window.y(), window.width(), window.height())
             for key, window in self._popout_windows.items()
         }
 
     def _on_popout_window_closed(self, key: tuple[str, str]) -> None:
-        """Räumt die Nachverfolgung eines geschlossenen eigenen Fensters
-        auf (`self._popout_windows`). Wurde das Fenster vom Nutzer direkt
-        geschlossen (z. B. über das X, statt über die Checkbox im
-        Dialog), soll der Kanal nicht spurlos verschwinden, sondern
-        wieder im Hauptraster erscheinen - daher `plot_popout` hier
-        ebenfalls zurücksetzen und neu aufbauen.
+        """Cleans up tracking of a closed own window
+        (`self._popout_windows`). If the window was closed directly by
+        the user (e.g. via the X, instead of the checkbox in the
+        dialog), the channel shouldn't vanish without a trace but
+        reappear in the main grid - hence `plot_popout` is also reset and
+        rebuilt here.
 
-        `destroyed` ist eine QUEUED Verbindung und kann daher auch noch
-        feuern, NACHDEM die Live View selbst (z. B. beim Beenden der
-        Anwendung mit offenem eigenem Fenster) bereits zerstört wird -
-        `sip.isdeleted` verhindert in diesem Fall einen Zugriff auf ein
-        bereits abgebautes `self._plot_widget` in `_rebuild_plots()`.
+        `destroyed` is a QUEUED connection and can therefore still fire
+        AFTER the live view itself has already been destroyed (e.g. when
+        closing the application with an own window still open) -
+        `sip.isdeleted` prevents accessing an already torn-down
+        `self._plot_widget` in `_rebuild_plots()` in that case.
         """
         self._popout_windows.pop(key, None)
         self._popout_y_auto_active.pop(key, None)
@@ -1876,7 +1948,7 @@ class LiveView(QWidget):
             self._rebuild_plots()
 
     # ------------------------------------------------------------------ #
-    # Interna
+    # Internals
     # ------------------------------------------------------------------ #
 
     def _make_value_box(
@@ -1890,18 +1962,18 @@ class LiveView(QWidget):
         align: str = "center",
         margin_px: float = 0.0,
     ) -> tuple[pg.ViewBox, pg.TextItem]:
-        """Erzeugt eine achsen-/interaktionslose `ViewBox` mit `TextItem`
-        fuer eine Zelle der Messwertanzeige (siehe `_rebuild_plots`) -
-        bewusst KEIN `LabelItem` (siehe Kommentar dort).
+        """Creates an axis-/interaction-free `ViewBox` with a `TextItem`
+        for one cell of the value readout (see `_rebuild_plots`) -
+        deliberately NOT a `LabelItem` (see comment there).
 
-        `align="right"`/`"left"` mit `margin_px`: positioniert den Text
-        nicht zentriert, sondern buendig an einer Kante mit `margin_px`
-        Abstand dazu (in Pixel, umgerechnet auf die `ViewBox`-eigenen
-        Koordinaten ueber `box_width_px`) - genutzt fuer Zahl (rechts,
-        `margin_px=0`) und Einheit (links, `margin_px`=Leerzeichenbreite),
-        damit der Zwischenraum zwischen beiden IMMER exakt einer
-        Leerzeichenbreite entspricht (siehe `_rebuild_plots`), statt vom
-        (unterschiedlich breiten) Text selbst abzuhaengen.
+        `align="right"`/`"left"` with `margin_px`: positions the text not
+        centered, but flush against one edge with `margin_px` spacing
+        from it (in pixels, converted to the `ViewBox`'s own coordinates
+        via `box_width_px`) - used for the number (right, `margin_px=0`)
+        and the unit (left, `margin_px`=space-character width), so the
+        gap between the two ALWAYS equals exactly one space-character
+        width (see `_rebuild_plots`), instead of depending on the
+        (variously wide) text itself.
         """
         box = self._plot_widget.addViewBox(row=row, col=col, lockAspect=False)
         box.setMouseEnabled(x=False, y=False)
@@ -1927,20 +1999,21 @@ class LiveView(QWidget):
         return box, text_item
 
     def _rebuild_plots(self) -> None:
-        """Erzeugt für jeden im Hauptraster sichtbaren Kanal einen eigenen
-        Subplot (mit unabhängiger X-Achse, siehe `Channel.plot_time_window_seconds`).
+        """Creates a separate subplot for each channel visible in the main
+        grid (with an independent X axis, see
+        `Channel.plot_time_window_seconds`).
 
-        Ein Kanal erscheint hier NICHT, wenn er entweder komplett
-        deaktiviert ist (`Channel.plot_visible=False`) ODER stattdessen in
-        einem eigenen Fenster angezeigt wird (`Channel.plot_popout=True`,
-        siehe `ChannelPopoutWindow`/`_open_popout_window`) - so landet
-        jeder sichtbare Kanal an GENAU einer Stelle, nie doppelt.
+        A channel does NOT appear here if it is either completely
+        disabled (`Channel.plot_visible=False`) OR is instead shown in
+        its own window (`Channel.plot_popout=True`, see
+        `ChannelPopoutWindow`/`_open_popout_window`) - so every visible
+        channel ends up in EXACTLY one place, never twice.
 
-        `self._curve_channel_indices[i]` hält fest, auf welchen Index in
-        `self._channels` sich `self._curves[i]`/`self._plot_items[i]`
-        bezieht - ausgeblendete/ausgelagerte Kanäle werden übersprungen,
-        Kurven-Position und Kanal-Index in `self._channels` sind daher
-        NICHT mehr zwangsläufig identisch (siehe `_on_timer_tick`).
+        `self._curve_channel_indices[i]` records which index into
+        `self._channels` `self._curves[i]`/`self._plot_items[i]` refers
+        to - hidden/popped-out channels are skipped, so curve position
+        and channel index in `self._channels` are NO LONGER necessarily
+        identical (see `_on_timer_tick`).
         """
         self._plot_widget.clear()
         self._plot_items = []
@@ -1955,13 +2028,13 @@ class LiveView(QWidget):
         self._channel_x_range_applied = {index: None for index in range(len(self._channels))}
         self._channel_y_auto_active = {}
 
-        # Breite der Zahlenspalte richtet sich nach dem Kanal mit den
-        # MEISTEN konfigurierten Vorkommastellen (siehe
-        # `Channel.plot_value_integer_digits`/`_number_field_width_px`), da
-        # die Spaltenbreite im `GraphicsLayoutWidget` fuer alle Zeilen
-        # gemeinsam gilt. Muss VOR der Schleife feststehen, da sie fuer die
-        # rechtsbuendige Positionierung jeder einzelnen Zahl gebraucht wird
-        # (siehe `_make_value_box`).
+        # Width of the number column is based on the channel with the
+        # MOST configured integer digits (see
+        # `Channel.plot_value_integer_digits`/`_number_field_width_px`),
+        # since the column width in the `GraphicsLayoutWidget` applies to
+        # all rows together. Must be settled BEFORE the loop, since it's
+        # needed for the right-aligned positioning of every individual
+        # number (see `_make_value_box`).
         number_font = QFont()
         number_font.setPointSize(_VALUE_NUMBER_POINT_SIZE)
         number_font.setBold(True)
@@ -1978,42 +2051,42 @@ class LiveView(QWidget):
                 continue
             background = _channel_background_color(channel)
 
-            # Grosse Messwertanzeige LINKS neben dem Subplot (siehe
-            # `Channel.plot_show_value`/`_on_timer_tick`) - Zahl (Spalte 0,
-            # rechtsbuendig) und Einheit (Spalte 1, linksbuendig mit
-            # `value_unit_gap` Abstand) in ZWEI getrennten, fest breiten
-            # `ViewBox`en (siehe `setColumnFixedWidth` unten UND
-            # `_make_value_box`) - der Zwischenraum zwischen beiden
-            # entspricht so IMMER exakt einer Leerzeichenbreite, unabhaengig
-            # vom (fest formatierten, siehe `_format_channel_value`)
-            # Textinhalt. BEWUSST `ViewBox`+`TextItem` statt eines simplen
-            # `LabelItem`: `LabelItem.setText()` setzt intern seine eigene
-            # `minimumWidth` auf die Breite des GERADE gerenderten Texts
-            # (`updateMin()`) - das hat die feste Spaltenbreite bei jedem
-            # neuen Zahlenwert wieder aufgebrochen und den Plot sichtbar
-            # mitwandern lassen. Eine `ViewBox` hat dagegen keine
-            # inhaltsabhaengige Mindestbreite.
+            # Large value readout LEFT of the subplot (see
+            # `Channel.plot_show_value`/`_on_timer_tick`) - number (column
+            # 0, right-aligned) and unit (column 1, left-aligned with
+            # `value_unit_gap` spacing) in TWO separate, fixed-width
+            # `ViewBox`es (see `setColumnFixedWidth` below AND
+            # `_make_value_box`) - the gap between the two therefore
+            # ALWAYS equals exactly one space-character width, regardless
+            # of the (fixed-format, see `_format_channel_value`) text
+            # content. DELIBERATELY `ViewBox`+`TextItem` instead of a
+            # plain `LabelItem`: `LabelItem.setText()` internally sets its
+            # own `minimumWidth` to the width of the JUST-rendered text
+            # (`updateMin()`) - that kept breaking the fixed column width
+            # on every new number value and made the plot visibly shift
+            # along with it. A `ViewBox`, on the other hand, has no
+            # content-dependent minimum width.
             #
-            # Hintergrundfarbe der Messwertanzeige-Boxen ist IMMER die
-            # Fenster-Hintergrundfarbe (`plot_container_background_color()`),
-            # NICHT die individuelle Kanalfarbe (`background` oben, nur fuer
-            # die Plot-ViewBox selbst) - die eigene Farbe soll ausschliesslich
-            # innerhalb der eigentlichen Plotflaeche gelten, alles
-            # drumherum (inkl. dieser Anzeige) folgt dem Fenster-Hintergrund.
+            # Background color of the value-readout boxes is ALWAYS the
+            # window background color (`plot_container_background_color()`),
+            # NOT the individual channel color (`background` above, only
+            # for the plot ViewBox itself) - the channel's own color
+            # should apply exclusively within the actual plot area,
+            # everything around it (including this readout) follows the
+            # window background.
             #
-            # Boxen werden NUR angelegt, wenn `plot_show_value` gesetzt ist
-            # (sonst `None`) - der Plot bekommt in diesem Fall stattdessen
-            # `colspan=3` und beansprucht die frei werdende Spaltenbreite
-            # selbst. Ein reines `.setVisible(False)` auf einer trotzdem
-            # angelegten Box wuerde deren FESTE Grid-Spaltenbreite
-            # (`setColumnFixedWidth` unten) nicht zurueckgeben - der Plot
-            # bliebe auf Spalte 2 eingeengt, mit sichtbarem Leerraum links
-            # davon. Als Folge davon braucht ein Wechsel von
-            # `plot_show_value` jetzt einen vollen `_rebuild_plots()` statt
-            # nur `_apply_channel_appearance()` (siehe
-            # `_apply_display_settings_to_live_channels`) - die Einheit
-            # wird hier EINMALIG gesetzt und danach nie mehr pro Tick
-            # aktualisiert.
+            # Boxes are ONLY created if `plot_show_value` is set
+            # (otherwise `None`) - in that case the plot instead gets
+            # `colspan=3` and claims the freed-up column width itself. A
+            # plain `.setVisible(False)` on a box that's created anyway
+            # would NOT give back its FIXED grid column width
+            # (`setColumnFixedWidth` below) - the plot would stay confined
+            # to column 2, with visible empty space to its left. As a
+            # consequence, changing `plot_show_value` now needs a full
+            # `_rebuild_plots()` instead of just
+            # `_apply_channel_appearance()` (see
+            # `_apply_display_settings_to_live_channels`) - the unit is
+            # set ONCE here and never updated again per tick afterward.
             if channel.plot_show_value:
                 value_box, value_text = self._make_value_box(
                     row,
@@ -2050,36 +2123,35 @@ class LiveView(QWidget):
                 title=f"{channel.display_name}{unit_suffix}",
             )
             plot_item.showGrid(x=True, y=True, alpha=0.3)
-            # `units=` NICHT genutzt (siehe `ChannelPopoutWindow.__init__`)
-            # - Zeiteinheit ueberall einheitlich in eckigen Klammern.
+            # `units=` NOT used (see `ChannelPopoutWindow.__init__`) -
+            # time unit consistently in square brackets everywhere.
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
             plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
             style_plot_item(plot_item)
-            # KEIN `setXLink` zwischen den Subplots: jeder Kanal hat sein
-            # eigenes, unabhaengig konfigurierbares Zeitfenster
-            # (`Channel.plot_time_window_seconds`) - eine verlinkte X-Achse
-            # wuerde den zuletzt gesetzten Bereich auf alle anderen Subplots
-            # erzwingen und die Einstellung pro Kanal wirkungslos machen.
+            # NO `setXLink` between the subplots: each channel has its
+            # own, independently configurable time window
+            # (`Channel.plot_time_window_seconds`) - a linked X axis
+            # would force the most recently set range onto all other
+            # subplots and make the per-channel setting pointless.
             curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
-            # KEIN `autoDownsample` - siehe Kommentar in `ChannelPopoutWindow.__init__`.
+            # NO `autoDownsample` - see comment in `ChannelPopoutWindow.__init__`.
             curve.setClipToView(True)
             plot_item.getViewBox().setBackgroundColor(background)
-            # Kein `plot_show_graph` -> Diagramm ausgeblendet, nur der
-            # Zahlenwert (falls aktiv) bleibt sichtbar. BEWUSST weiterhin
-            # angelegt und mit Daten versorgt (siehe `_on_timer_tick`),
-            # nicht `None` wie bei `plot_show_value=False` fuer die
-            # Werte-Box: die feste Spaltenbreite/-position im
-            # `GraphicsLayoutWidget` haengt nicht an diesem Item, anders
-            # als bei der Werte-Box (siehe Kommentar oben) - ein reines
-            # `setVisible()` reicht hier aus. Reserviert dadurch weiterhin
-            # die Spaltenbreite (kein automatisches Zusammenziehen der
-            # Zahlenanzeige auf die volle Zeilenbreite).
+            # No `plot_show_graph` -> chart hidden, only the numeric value
+            # (if active) stays visible. DELIBERATELY still created and
+            # fed with data (see `_on_timer_tick`), not `None` as with
+            # `plot_show_value=False` for the value box: the fixed column
+            # width/position in the `GraphicsLayoutWidget` doesn't depend
+            # on this item, unlike the value box (see comment above) - a
+            # plain `setVisible()` is sufficient here. This keeps
+            # reserving the column width (no automatic collapsing of the
+            # number readout onto the full row width).
             plot_item.setVisible(channel.plot_show_graph)
 
-            # Sweep-Anzeige (Oszilloskop-Art, siehe Klassendoc weiter oben):
-            # das Zeitfenster steht fest bei [0, Fensterlaenge] - es scrollt
-            # NICHT mit, die Kurve selbst laeuft innerhalb dieses festen
-            # Fensters von links nach rechts durch.
+            # Sweep display (oscilloscope-style, see class doc further
+            # up): the time window is fixed at [0, window length] - it
+            # does NOT scroll along, the curve itself runs from left to
+            # right within this fixed window.
             plot_item.enableAutoRange(x=False)
             plot_item.setXRange(0.0, channel.plot_time_window_seconds, padding=0)
 
@@ -2093,35 +2165,35 @@ class LiveView(QWidget):
             row += 1
 
         if self._plot_items:
-            # Zahl-/Einheitsspalte fest breit - siehe Kommentar oben
-            # (`number_field_width` bereits vor der Schleife berechnet, da
-            # dort fuer die rechtsbuendige Positionierung gebraucht). Der
-            # Plot bekommt den gesamten restlichen Platz.
+            # Number/unit column fixed width - see comment above
+            # (`number_field_width` already computed before the loop,
+            # since it's needed there for right-aligned positioning). The
+            # plot gets all of the remaining space.
             self._plot_widget.ci.layout.setColumnFixedWidth(0, number_field_width)
             self._plot_widget.ci.layout.setColumnFixedWidth(1, _VALUE_UNIT_WIDTH)
             self._plot_widget.ci.layout.setColumnStretchFactor(2, 1)
 
-        # Eigene Fenster (siehe `ChannelPopoutWindow`) für Kanäle
-        # schliessen, die es nach dieser Kanalkonfiguration nicht mehr
-        # gibt, die inzwischen komplett deaktiviert wurden
-        # (`plot_visible=False`) ODER deren "Eigenes Fenster"-Haken im
-        # Dialog wieder entfernt wurde (`plot_popout=False`) - Letzteres
-        # ist seit "erst mit OK aktiv werden" der EINZIGE Weg, ein Fenster
-        # wieder zu schliessen, wenn der Nutzer es nicht direkt selbst
-        # zumacht (siehe `_on_popout_window_closed`). Verhindert außerdem
-        # verwaiste Fenster mit eingefrorenen Altdaten. Wird über
-        # `window.destroyed` automatisch aus `self._popout_windows`
-        # entfernt (siehe `_on_popout_window_closed`).
+        # Close own windows (see `ChannelPopoutWindow`) for channels that
+        # no longer exist under this channel configuration, that have
+        # since been completely disabled (`plot_visible=False`), OR whose
+        # "own window" checkbox was unchecked again in the dialog
+        # (`plot_popout=False`) - the latter is, since "only takes effect
+        # on OK", the ONLY way to close a window again if the user
+        # doesn't close it directly themselves (see
+        # `_on_popout_window_closed`). Also prevents orphaned windows with
+        # frozen stale data. Automatically removed from
+        # `self._popout_windows` via `window.destroyed` (see
+        # `_on_popout_window_closed`).
         for key in list(self._popout_windows.keys()):
             channel = self._find_channel_by_key(key)
             if channel is None or not channel.plot_visible or not channel.plot_popout:
                 self._popout_windows[key].close()
 
-        # Kanäle, die als "eigenes Fenster" konfiguriert sind
-        # (`plot_popout=True`, z. B. aus einer geladenen Konfiguration
-        # oder nach einem Messstart), aber noch kein offenes Fenster
-        # haben, automatisch öffnen - sonst würde ein solcher Kanal sonst
-        # spurlos verschwinden (weder Hauptraster noch Fenster sichtbar).
+        # Automatically open channels that are configured as "own window"
+        # (`plot_popout=True`, e.g. from a loaded configuration or after a
+        # measurement start) but don't have an open window yet -
+        # otherwise such a channel would vanish without a trace (neither
+        # main grid nor window visible).
         for channel in self._channels:
             if (
                 channel.plot_visible
@@ -2135,11 +2207,11 @@ class LiveView(QWidget):
 
     @staticmethod
     def _apply_channel_curve_style(plot_item, curve, channel: Channel) -> None:
-        """Wendet Kurvenfarbe, Hintergrundfarbe und Gitterlinienfarbe EINES
-        Kanals auf sein Plot/Kurven-Paar an - Theme-Default, falls keine
-        eigene Farbe konfiguriert ist. Gemeinsam genutzt von
-        Hauptraster-Subplots (`_apply_channel_appearance`) und eigenen
-        Fenstern (`_open_popout_window`)."""
+        """Applies curve color, background color, and gridline color of a
+        SINGLE channel to its plot/curve pair - theme default if no own
+        color is configured. Shared by main-grid subplots
+        (`_apply_channel_appearance`) and own windows
+        (`_open_popout_window`)."""
         color = channel.plot_color or curve_color()
         curve.setPen(pg.mkPen(color=color, width=1.5))
         plot_item.getViewBox().setBackgroundColor(_channel_background_color(channel))
@@ -2151,23 +2223,23 @@ class LiveView(QWidget):
         plot_item.setVisible(channel.plot_show_graph)
 
     def _apply_channel_appearance(self) -> None:
-        """Wendet Kurvenfarbe, Hintergrundfarbe und Plot-Sichtbarkeit pro
-        Kanal an (siehe `open_channel_display_dialog`), für Hauptraster-
-        Subplots UND offene eigene Fenster.
+        """Applies curve color, background color, and plot visibility per
+        channel (see `open_channel_display_dialog`), for main-grid
+        subplots AND open own windows.
 
-        `plot_show_value` selbst wird HIER NICHT mehr behandelt - ein
-        Wechsel braucht einen vollen `_rebuild_plots()` (siehe
-        `_apply_display_settings_to_live_channels`/`_rebuild_plots`), die
-        Boxen existieren für Hauptraster-Kanäle ohne Messwertanzeige gar
-        nicht mehr (`None`, siehe dort). `plot_show_graph` dagegen reicht
-        hier ein reines Ein-/Ausblenden (siehe `_apply_channel_curve_style`
-        fuer den Hauptraster-Teil davon).
+        `plot_show_value` itself is NO LONGER handled HERE - a change
+        needs a full `_rebuild_plots()` (see
+        `_apply_display_settings_to_live_channels`/`_rebuild_plots`), the
+        boxes no longer even exist for main-grid channels without a value
+        readout (`None`, see there). `plot_show_graph`, on the other
+        hand, only needs a plain show/hide here (see
+        `_apply_channel_curve_style` for the main-grid part of that).
         """
         for pos, (plot_item, curve) in enumerate(zip(self._plot_items, self._curves)):
             channel = self._channels[self._curve_channel_indices[pos]]
             self._apply_channel_curve_style(plot_item, curve, channel)
-            # Fenster-Hintergrundfarbe, nicht die individuelle Kanalfarbe -
-            # siehe `_rebuild_plots` fuer die Begruendung.
+            # Window background color, not the individual channel color -
+            # see `_rebuild_plots` for the reasoning.
             if self._value_boxes[pos] is not None:
                 self._value_boxes[pos].setBackgroundColor(plot_container_background_color())
             if self._value_unit_boxes[pos] is not None:
@@ -2176,22 +2248,22 @@ class LiveView(QWidget):
             channel = self._find_channel_by_key(key)
             if channel is not None:
                 self._apply_channel_curve_style(window.plot_item, window.curve, channel)
-                # Eigenes Fenster ist ein normales Qt-Layout (kein
-                # PyQtGraph-`GraphicsLayout` mit fester Spaltenbreite wie
-                # im Hauptraster) - hier reicht `setVisible()` auf dem
-                # `PlotWidget` selbst, gibt den Platz sauber an die
-                # Messwertanzeige daneben zurueck.
+                # Own window is a normal Qt layout (not a PyQtGraph
+                # `GraphicsLayout` with a fixed column width like in the
+                # main grid) - `setVisible()` on the `PlotWidget` itself
+                # is enough here, cleanly returns the space to the value
+                # readout next to it.
                 window.plot_widget.setVisible(channel.plot_show_graph)
                 window._apply_number_width()
                 window._style_value_labels()
                 window._value_container.setVisible(channel.plot_show_value)
 
     def _apply_y_range_mode(self) -> None:
-        """Wendet den Y-Bereich (fest, Autoscale oder Hybrid) auf alle
-        Subplots UND offenen eigenen Fenster an - ohne aktuelle Messwerte
-        (siehe `_apply_channel_y_range`), z. B. direkt nach
-        `_rebuild_plots()` oder nach Ändern der Einstellungen im Dialog,
-        bevor der nächste Tick neue Daten liefert.
+        """Applies the Y range (fixed, autoscale, or hybrid) to all
+        subplots AND open own windows - without current readings (see
+        `_apply_channel_y_range`), e.g. directly after `_rebuild_plots()`
+        or after changing the settings in the dialog, before the next
+        tick delivers new data.
         """
         for pos, plot_item in enumerate(self._plot_items):
             channel = self._channels[self._curve_channel_indices[pos]]
@@ -2210,25 +2282,25 @@ class LiveView(QWidget):
         data: np.ndarray | None,
         auto_active_cache: dict[tuple[str, str], bool] | None = None,
     ) -> None:
-        """Setzt die Y-Achse eines einzelnen Subplots gemäß der pro Kanal
-        konfigurierten Autoskalierung (siehe `ChannelDisplayDialog`).
+        """Sets the Y axis of a single subplot according to the
+        autoscaling configured per channel (see `ChannelDisplayDialog`).
 
-        Kein reines An/Aus: Ist Autoskalierung für den Kanal aktiviert
-        (Default), wird der konfigurierte feste Bereich verwendet, SOLANGE
-        `data` (die aktuell angezeigten Messwerte, `None` = noch keine)
-        innerhalb davon liegt - über-/unterschreitet auch nur ein Wert
-        diesen Bereich, übernimmt PyQtGraphs Autoscale für den Rest des
-        aktuellen Durchlaufs. Ist Autoskalierung deaktiviert, bleibt der
-        feste Bereich immer aktiv, unabhängig von `data`.
+        Not a plain on/off: if autoscaling is enabled for the channel
+        (default), the configured fixed range is used AS LONG AS `data`
+        (the currently displayed readings, `None` = none yet) lies within
+        it - as soon as even one value exceeds/undershoots that range,
+        PyQtGraph's autoscale takes over for the rest of the current
+        sweep. If autoscaling is disabled, the fixed range always stays
+        active, regardless of `data`.
 
-        `auto_active_cache` (Default `self._channel_y_auto_active`)
-        verhindert unnötige `setYRange`/`enableAutoRange`-Aufrufe, wenn
-        sich der effektive Modus gegenüber dem letzten Aufruf nicht
-        geändert hat. Hauptraster-Subplot und eigenes Fenster (siehe
-        `ChannelPopoutWindow`) desselben Kanals nutzen bewusst
-        UNTERSCHIEDLICHE Caches (`self._popout_y_auto_active`) - sie
-        haben getrennte `plot_item`-Instanzen und dürfen sich beim
-        Umschalten auf Autoscale nicht gegenseitig überspringen.
+        `auto_active_cache` (default `self._channel_y_auto_active`)
+        prevents unnecessary `setYRange`/`enableAutoRange` calls when the
+        effective mode hasn't changed since the last call. The main-grid
+        subplot and own window (see `ChannelPopoutWindow`) of the same
+        channel deliberately use DIFFERENT caches
+        (`self._popout_y_auto_active`) - they have separate `plot_item`
+        instances and must not skip each other when switching to
+        autoscale.
         """
         if auto_active_cache is None:
             auto_active_cache = self._channel_y_auto_active
@@ -2259,19 +2331,19 @@ class LiveView(QWidget):
             plot_item.setYRange(y_min, y_max, padding=0)
 
     def _on_storage_timer_tick(self) -> None:
-        """Aktualisiert die Speicherpuffer-Anzeige des Storage Writers.
+        """Updates the storage writer's storage-buffer display.
 
-        Bezugsgröße ("Maximum") ist die konfigurierte Ring-Buffer-Kapazität
-        (`RingBuffer.capacity`, siehe `setup_view._calculate_dynamic_buffer_size`)
-        - nicht der freie Festplattenplatz. Angezeigt wird, wie viele bereits
-        vom DAQ-Thread geschriebene Samples der Storage Writer noch NICHT auf
-        die Festplatte übertragen hat (`StorageWriter.pending_samples`).
-        Kommt die Festplatte nicht hinterher (z. B. weil sie zu langsam oder
-        voll ist), wächst dieser Rückstand; erreicht er die Kapazität, werden
-        ungeschriebene Samples im Ring Buffer überschrieben - ein
-        unwiederbringlicher Datenverlust (Overrun, siehe `core/ringbuffer.py`).
-        Das ist damit ein direkterer Risikoindikator als der reine freie
-        Festplattenplatz.
+        The reference quantity ("Maximum") is the configured ring buffer
+        capacity (`RingBuffer.capacity`, see
+        `setup_view._calculate_dynamic_buffer_size`) - not the free disk
+        space. Shows how many samples already written by the DAQ thread
+        the storage writer has NOT yet transferred to disk
+        (`StorageWriter.pending_samples`). If the disk can't keep up
+        (e.g. because it's too slow or full), this backlog grows; once it
+        reaches the capacity, unwritten samples in the ring buffer get
+        overwritten - an unrecoverable data loss (overrun, see
+        `core/ringbuffer.py`). This makes it a more direct risk indicator
+        than plain free disk space.
         """
         if self._storage_writer is None:
             return
@@ -2299,17 +2371,17 @@ class LiveView(QWidget):
             percent=f"{percent:.1f}",
         )
         if get_language() == "de":
-            # Deutsches Zahlenformat: Tausenderpunkt statt -komma
-            # (nur die :,-formatierten Ganzzahlen betroffen, nicht die
-            # bereits mit Punkt formatierten Kommazahlen).
+            # German number format: thousands dot instead of comma (only
+            # affects the :,-formatted integers, not the decimal numbers
+            # already formatted with a dot).
             detail_text = detail_text.replace(",", ".")
         self._storage_detail_label.setText(detail_text)
         if percent >= _STORAGE_CRITICAL_PERCENT:
-            color = "#dc3545"  # rot
+            color = "#dc3545"  # red
         elif percent >= _STORAGE_WARN_PERCENT:
             color = "#fd7e14"  # orange
         else:
-            color = "#28a745"  # gruen
+            color = "#28a745"  # green
         self._storage_progress.setStyleSheet(f"QProgressBar::chunk {{ background-color: {color}; }}")
 
     def _on_timer_tick(self) -> None:
@@ -2321,24 +2393,24 @@ class LiveView(QWidget):
             self._duration_label.setText(
                 t("duration_value", value=f"{session.duration_seconds:.1f} s")
             )
-            # Konfiguriertes Aufnahme-Limit (siehe
+            # Configured recording limit (see
             # `data/models.py::MeasurementConfig.is_recording_limit_reached`)
-            # - geprueft anhand der tatsaechlich erfassten Samplezahl, NICHT
-            # der Wanduhrzeit: Samples werden vom Hardware-Sample-Clock des
-            # DAQ-Moduls getaktet, das macht den Grenzwert unabhaengig von
-            # GUI-/Thread-Verzoegerungen zuverlaessig. Stoppt ueber denselben
-            # Pfad wie der manuelle "Messung stoppen"-Button
+            # - checked against the actually acquired sample count, NOT
+            # wall-clock time: samples are clocked by the DAQ module's
+            # hardware sample clock, which makes the limit reliable
+            # regardless of GUI/thread delays. Stops via the same path as
+            # the manual "Stop Measurement" button
             # (`self._stop_button.clicked.connect(self.stop_requested.emit)`),
-            # damit Metadaten/Storage-Writer identisch abgeschlossen werden.
+            # so metadata/storage writer are finalized identically.
             #
-            # WICHTIG bei getriggerten Messungen: waehrend der Scharf-Phase
-            # (`self._armed`) noch KEINE Pruefung - es wird ja noch nichts
-            # aufgezeichnet. Danach wird gegen `total_samples_acquired -
-            # _recording_baseline_samples` geprueft statt gegen den rohen
-            # Zaehler, da dieser bereits ab Erfassungsstart (= Scharf-
-            # Zeitpunkt) laeuft, nicht erst ab dem tatsaechlichen Trigger
-            # (siehe `mark_recording_started`). Bei manuellem Start bleibt
-            # die Baseline 0, also unveraendertes Verhalten.
+            # IMPORTANT for triggered measurements: during the armed phase
+            # (`self._armed`) there's NO check yet - nothing is being
+            # recorded yet after all. Afterward, checked against
+            # `total_samples_acquired - _recording_baseline_samples`
+            # instead of the raw counter, since that already runs from
+            # the start of acquisition (= arming instant), not only from
+            # the actual trigger (see `mark_recording_started`). On a
+            # manual start, the baseline stays 0, i.e. unchanged behavior.
             if (
                 not self._armed
                 and not session.config.recording_unlimited
@@ -2350,7 +2422,7 @@ class LiveView(QWidget):
                 self.stop_requested.emit()
                 return
         self._sample_rate_label.setText(
-            t("sample_rate_value", value=f"{self._sample_rate_hz:.1f} Hz")
+            t("sample_rate_value", value=self._format_sample_rate_label_value())
         )
 
         max_display_samples = int(self._sample_rate_hz * self._display_window_seconds)
@@ -2385,19 +2457,19 @@ class LiveView(QWidget):
                     )
                 )
 
-        # Hybrid-Autoskalierung pro Kanal (fester Bereich, bis Messwerte
-        # ihn über-/unterschreiten - siehe `_apply_channel_y_range`) mit
-        # den JETZT tatsächlich angezeigten Werten neu bewerten.
+        # Re-evaluate per-channel hybrid autoscaling (fixed range, until
+        # readings exceed/undershoot it - see `_apply_channel_y_range`)
+        # with the values ACTUALLY displayed NOW.
         for pos, plot_item in enumerate(self._plot_items):
             channel_index = self._curve_channel_indices[pos]
             self._apply_channel_y_range(
                 plot_item, self._channels[channel_index], channel_views[channel_index][1]
             )
 
-        # Eigene Fenster (siehe `ChannelPopoutWindow`) unabhängig vom
-        # Hauptraster mit denselben Werten aktualisieren - `channel_views`
-        # ist immer nach `self._channels` indiziert (siehe `apply_scaling`),
-        # unabhängig von `plot_visible`, daher hier per Index statt Position.
+        # Update own windows (see `ChannelPopoutWindow`) with the same
+        # values, independent of the main grid - `channel_views` is always
+        # indexed by `self._channels` (see `apply_scaling`), regardless of
+        # `plot_visible`, hence by index rather than position here.
         if self._popout_windows:
             for index, channel in enumerate(self._channels):
                 window = self._popout_windows.get(_channel_display_key(channel))
@@ -2418,13 +2490,13 @@ class LiveView(QWidget):
                     window.plot_item, channel, values, self._popout_y_auto_active
                 )
 
-        # X-Bereich selbst bleibt fensterbreit fest (Sweep scrollt nicht) -
-        # nur bei einem tatsächlichen Zyklus-Wechsel (neuer Durchlauf
-        # begonnen) auf die neue absolute Zeitspanne verschieben, damit die
-        # Achsenbeschriftung die echte Messzeit zeigt (siehe
-        # `_channel_cycle_starts`). Bewusst nicht bei jedem Tick gesetzt -
-        # pro Kanal, da die Fensterlänge (und damit der Zyklus-Rhythmus)
-        # pro Kanal unterschiedlich sein kann.
+        # The X range itself stays fixed at window width (sweep doesn't
+        # scroll) - only shifted to the new absolute time span on an
+        # actual cycle change (new sweep started), so the axis label
+        # shows the real measurement time (see `_channel_cycle_starts`).
+        # Deliberately not set on every tick - per channel, since the
+        # window length (and thus the cycle rhythm) can differ per
+        # channel.
         for pos, plot_item in enumerate(self._plot_items):
             channel_index = self._curve_channel_indices[pos]
             x_min = self._channel_cycle_starts.get(channel_index, 0.0)
@@ -2446,63 +2518,148 @@ class LiveView(QWidget):
                 x_min, x_min + channel.plot_time_window_seconds, padding=0
             )
 
+    @staticmethod
+    def _capacity_for_rate(rate_hz: float, window_seconds: float) -> int:
+        """Sample count for ONE sweep window at a given rate - shared
+        rounding logic for `_ensure_display_buffer` and
+        `_channel_display_capacity`."""
+        return max(1, int(rate_hz * window_seconds))
+
     def _ensure_display_buffer(self, num_channels: int) -> None:
-        """Initialisiert oder passt den internen Sweep-Anzeigepuffer an."""
-        max_window = max(
-            [channel.plot_time_window_seconds for channel in self._channels],
-            default=self._display_window_seconds,
+        """Initializes or resizes the internal sweep display buffer.
+
+        ONE shared array for all channels - the column count is the
+        LARGEST capacity needed by any single channel (its own native
+        rate * `plot_time_window_seconds`, see `_channel_native_rates`),
+        NO LONGER a blanket `self._sample_rate_hz * largest window` - a
+        channel with its own, slower native rate (e.g. NI9210 @ 14 S/s)
+        needs significantly fewer columns for that than before (see
+        `_write_to_display_buffer`, whose cost scales with the buffer
+        fill position, not just with the capacity).
+        """
+        capacity = max(
+            (
+                self._capacity_for_rate(
+                    self._channel_native_rates.get(index, self._sample_rate_hz),
+                    channel.plot_time_window_seconds,
+                )
+                for index, channel in enumerate(self._channels)
+            ),
+            default=self._capacity_for_rate(self._sample_rate_hz, self._display_window_seconds),
         )
-        capacity = max(1, int(self._sample_rate_hz * max_window))
         if self._display_buffer is None or self._display_buffer.shape != (num_channels, capacity):
             self._display_capacity_samples = capacity
             self._display_buffer = np.zeros((num_channels, capacity), dtype=np.float64)
             self._buffer_write_pos = 0
 
     def _channel_display_capacity(self, channel_index: int) -> int:
-        """Maximale Sample-Anzahl EINES Sweep-Durchlaufs für `channel_index`
-        (Abtastrate * konfigurierte Zeitspanne, gedeckelt auf die
-        tatsächlich allokierte Puffergröße) - gemeinsam genutzt von
-        `_write_to_display_buffer` (Umbruchpunkt des Ringpuffers) UND
-        `_downsample_for_display` (siehe dort, wieso das für einen
-        stabilen Downsampling-Faktor wichtig ist)."""
+        """Maximum sample count of ONE sweep cycle for `channel_index`
+        (OWN native rate * configured time span, capped to the actually
+        allocated buffer size) - shared by `_write_to_display_buffer`
+        (ring-buffer wraparound point) AND `_downsample_for_display` (see
+        there for why that matters for a stable downsampling factor - ONE
+        fixed value per cycle; `_channel_native_rates` doesn't change
+        while a measurement is running, so the return value stays stable
+        too). Uses the rate from `_channel_native_rates` instead of the
+        global tick rate `self._sample_rate_hz` - for a channel with its
+        own, slower native rate, the capacity would otherwise be too
+        large by a factor of tick rate/native rate."""
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
         return max(
             1,
             min(
                 self._display_capacity_samples,
-                int(
-                    self._sample_rate_hz
-                    * self._channels[channel_index].plot_time_window_seconds
+                self._capacity_for_rate(
+                    native_rate, self._channels[channel_index].plot_time_window_seconds
                 ),
             ),
         )
 
-    def _write_to_display_buffer(self, scaled_block: np.ndarray) -> None:
-        """Schreibt neue Samples in den Sweep-Puffer (siehe Klassendoc oben).
+    def _extract_native_rate_samples(self, channel_index: int, row: np.ndarray) -> np.ndarray:
+        """Reduces `row` (ZOH-forward-filled at tick rate, see
+        `core/rate_merge.py`) to exactly the values that are actually
+        newly DUE according to this channel's native rate within this
+        block - the same `due(t) = floor(t * native_rate / tick_rate)`
+        counting as `core/rate_merge.py::RateMerger`, reproduced here
+        independently based on the cumulative tick count
+        (`_channel_total_ticks_seen`).
 
-        Füllt den aktuellen Durchlauf ab der Schreibposition auf. Reicht
-        der neue Block über das Fensterende hinaus, beginnt der
-        überschüssige Rest einen NEUEN Durchlauf ab Index 0 - die alte
-        Kurve verschwindet dabei komplett, statt (wie bei einem
-        klassischen Ringpuffer) langsam am linken Rand herauszuscrollen.
-        Eine Schleife statt Rekursion, falls ein einzelner Block (nach
-        einer GUI-Verzögerung) sogar mehr als ein volles Fenster enthält.
+        DELIBERATELY purely tick-/time-based, NOT value-based (an earlier
+        attempt compared consecutive values for equality) - a real, but
+        coincidentally unchanged sample of a slow channel (e.g. a stable
+        thermocouple reading) would have looked like a ZOH repeat in that
+        case and been incorrectly discarded. That made the sweep buffer
+        position grow more slowly than real measurement time was passing
+        - the sweep display visibly lagged behind real time as a result.
+        """
+        ticks_before = self._channel_total_ticks_seen.get(channel_index, 0)
+        n = row.shape[0]
+        ticks_after = ticks_before + n
+        self._channel_total_ticks_seen[channel_index] = ticks_after
+
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
+        due_before = int(ticks_before * native_rate / self._sample_rate_hz)
+        due_after = int(ticks_after * native_rate / self._sample_rate_hz)
+        num_new = due_after - due_before
+        if num_new <= 0:
+            return row[:0]
+
+        # For each newly due "slot", find the tick index WITHIN this
+        # block at which it is first reached (row is ZOH-held, so the
+        # value there is the one valid for that slot) - `due_at_tick` is
+        # monotonically non-decreasing, `searchsorted` delivers that
+        # directly, vectorized, without a Python loop.
+        local_ticks = ticks_before + np.arange(1, n + 1)
+        due_at_tick = (local_ticks * native_rate / self._sample_rate_hz).astype(np.int64)
+        target_due = due_before + np.arange(1, num_new + 1)
+        indices = np.searchsorted(due_at_tick, target_due)
+        return row[indices]
+
+    def _write_to_display_buffer(self, scaled_block: np.ndarray) -> None:
+        """Writes new samples into the sweep buffer (see class doc above).
+
+        Fills up the current sweep from the write position onward. If the
+        new block extends past the end of the window, the excess
+        remainder starts a NEW sweep at index 0 - the old curve
+        disappears completely at that point, instead of (as with a
+        classic ring buffer) slowly scrolling out at the left edge. A
+        loop instead of recursion, in case a single block (after a GUI
+        delay) contains even more than one full window.
+
+        Channels with a native rate slower than the tick rate (see
+        `_channel_native_rates`, e.g. NI9210 @ 14 S/s) arrive in
+        `scaled_block` ZOH-forward-filled (see `core/rate_merge.py`) -
+        each row repeats the same value until the next real hardware
+        sample. Only the slots that are actually newly due according to
+        the native rate are written (see `_extract_native_rate_samples` -
+        purely tick-/time-based, NOT based on value equality, otherwise a
+        real, but coincidentally unchanged sample of a slow channel would
+        be incorrectly discarded as a repeat). A channel at the tick rate
+        itself (the normal case) does NOT go through this reduction.
         """
         if self._display_buffer is None:
             return
         for channel_index in range(scaled_block.shape[0]):
+            native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
+            row = scaled_block[channel_index]
+            if native_rate < self._sample_rate_hz:
+                new_data = self._extract_native_rate_samples(channel_index, row)
+            else:
+                new_data = row
+
             cap = self._channel_display_capacity(channel_index)
             pos = self._channel_buffer_positions.get(channel_index, 0)
             start = 0
-            while start < scaled_block.shape[1]:
+            while start < new_data.shape[0]:
                 if pos >= cap:
                     pos = 0
                     self._channel_cycle_starts[channel_index] = (
                         self._channel_cycle_starts.get(channel_index, 0.0)
-                        + cap / self._sample_rate_hz
+                        + cap / native_rate
                     )
-                take = min(cap - pos, scaled_block.shape[1] - start)
-                self._display_buffer[channel_index, pos:pos + take] = scaled_block[
-                    channel_index, start:start + take
+                take = min(cap - pos, new_data.shape[0] - start)
+                self._display_buffer[channel_index, pos:pos + take] = new_data[
+                    start:start + take
                 ]
                 pos += take
                 start += take
@@ -2510,30 +2667,36 @@ class LiveView(QWidget):
         self._buffer_write_pos = max(self._channel_buffer_positions.values(), default=0)
 
     def _get_channel_display_view(self, channel_index: int) -> tuple[np.ndarray, np.ndarray]:
-        """Gibt den aktuellen Durchlauf für einen einzelnen Kanal zurück.
+        """Returns the current sweep for a single channel.
 
-        Die Zeitwerte sind um `_channel_cycle_starts[channel_index]`
-        verschoben, zeigen also die tatsächliche Messzeit (z. B. "40-45s"
-        im 9. Durchlauf eines 5s-Fensters) statt immer bei 0 zu beginnen -
-        der Sweep selbst (Kurve läuft im festen, pro Kanal konfigurierbaren
-        Fenster durch, setzt zurück) bleibt davon unverändert.
+        The time values are shifted by `_channel_cycle_starts[channel_index]`,
+        so they show the actual measurement time (e.g. "40-45s" in the
+        9th cycle of a 5s window) instead of always starting at 0 - the
+        sweep itself (curve runs through a fixed, per-channel
+        configurable window, then resets) is unaffected by this.
 
-        Rückgabe wächst mit der Sweep-Position (statt einer konstanten,
-        NaN-gepolsterten Fensterlänge - das wurde ausprobiert, machte die
-        Darstellung aber schlechter statt besser: jede Kurve hätte dann
-        JEDEN Tick auf volle Fensterlänge verarbeitet werden müssen, auch
-        wenn erst wenige Punkte echte Daten sind).
+        The return value grows with the sweep position (instead of a
+        constant, NaN-padded window length - this was tried, but made
+        the display worse rather than better: every curve would then
+        have had to be processed at full window length on EVERY tick,
+        even when only a few points are real data).
 
-        Zeigt IMMER den vollen aktuell eingetroffenen Stand
-        (`_channel_buffer_positions`) - bewusst OHNE künstliches
-        Nachzieh-Tempo: ein frueherer Versuch, neu eingetroffene ~25ms-
-        Bloecke (siehe `gui/setup_view.py::_calculate_samples_per_read`)
-        ueber mehrere Ticks zu "verschmieren", hat zwar das sichtbare
-        Blockweise-Wachstum der Kurve geglaettet, dabei aber spuerbare
-        zusaetzliche Latenz eingefuehrt - bei einem direkten
-        Reiz-Reaktions-Test (Klopftest auf einen Beschleunigungssensor)
-        war das inakzeptabel: Latenz ist fuer ein Live-Messinstrument
-        wichtiger als Anzeige-Glaette.
+        ALWAYS shows the full currently-arrived state
+        (`_channel_buffer_positions`) - deliberately WITHOUT artificial
+        catch-up pacing: an earlier attempt to "smear" newly arrived
+        ~25ms blocks (see `gui/setup_view.py::_calculate_samples_per_read`)
+        across several ticks did smooth out the curve's visible
+        block-wise growth, but introduced noticeable extra latency in the
+        process - for a direct stimulus-response test (tap test on an
+        accelerometer) that was unacceptable: latency matters more than
+        display smoothness for a live measurement instrument.
+
+        The time axis uses the channel's native rate
+        (`_channel_native_rates`) instead of the global tick rate
+        `self._sample_rate_hz` - for a channel with its own, slower
+        native rate, `position` (see `_write_to_display_buffer`) doesn't
+        grow at the tick-rate pace, so a slot would correspond to the
+        wrong (too short) time span at the global rate.
         """
         if self._display_buffer is None:
             return np.array([]), np.empty((0,))
@@ -2541,7 +2704,8 @@ class LiveView(QWidget):
         if position == 0:
             return np.array([]), np.empty((0,))
         values = self._display_buffer[channel_index, :position]
+        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
         times = self._channel_cycle_starts.get(channel_index, 0.0) + (
-            np.arange(position) / self._sample_rate_hz
+            np.arange(position) / native_rate
         )
         return times, values

@@ -1,19 +1,18 @@
 """
 data/metadata.py
 
-Aufbau und Persistierung von Metadaten:
-    * Metadaten einer einzelnen Messung (measurement_info.json)
-    * Bookkeeping eines gesamten Messprojekts (project.json)
+Building and persisting metadata:
+    * Metadata for a single measurement (measurement_info.json)
+    * Bookkeeping for an entire measurement project (project.json)
 
-Architektur-Hinweis:
-    Die ursprüngliche Modul-Skizze sah `metadata.py` nur für
-    Mess-Metadaten vor. Projekt-Bookkeeping (Liste der Messungen,
-    Projektname, Erstellungsdatum) ist inhaltlich eng verwandt (auch hier
-    geht es nur um reine JSON-Persistierung von Metainformationen) und
-    wurde daher hier mit untergebracht, statt eine zusätzliche Datei für
-    eine sehr kleine Verantwortlichkeit anzulegen. Falls das Projekt
-    wächst (z. B. mehrere gleichzeitig geöffnete Projekte), sollte
-    `MeasurementProject` in eine eigene Datei ausgelagert werden.
+Architecture note:
+    The original module sketch envisioned `metadata.py` for measurement
+    metadata only. Project bookkeeping (list of measurements, project
+    name, creation date) is closely related in content (here too it's
+    just plain JSON persistence of meta information), so it was housed
+    here instead of creating an additional file for a very small
+    responsibility. If the project grows (e.g. multiple projects open at
+    once), `MeasurementProject` should be moved into its own file.
 """
 
 from __future__ import annotations
@@ -25,7 +24,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from data.models import Channel, DeviceInfo, MeasurementSession, StorageFormat
+from data.models import Channel, DeviceInfo, MeasurementSession, StorageFormat, resolve_rate_groups
 
 logger = logging.getLogger(__name__)
 
@@ -38,23 +37,65 @@ def build_measurement_metadata(
     session: MeasurementSession,
     device_infos: list[DeviceInfo],
 ) -> dict[str, Any]:
-    """Baut das Metadaten-Dictionary für eine Messung.
+    """Builds the metadata dictionary for a measurement.
 
-    Enthält gemäß Vorgabe: Startzeit, Abtastrate, Hardwareinformationen
-    sowie Kanalinformationen inklusive Skalierungen und Einheiten.
+    Contains, per spec: start time, sample rate, hardware information,
+    and channel information including scalings and units.
 
     Args:
-        session: Die (laufende oder abgeschlossene) Messsitzung.
-        device_infos: Geräteinformationen der verwendeten Hardware
-            (z. B. `controller.active_device_infos`).
+        session: The (running or completed) measurement session.
+        device_infos: Device information for the hardware used
+            (e.g. `controller.active_device_infos`).
     """
     config = session.config
+    # Derive rate groups from the configuration (see
+    # `data/models.py::resolve_rate_groups`) - purely informational for
+    # the metadata, no longer affects the measurement itself (that
+    # already happened at start time in
+    # `core/controller.py::start_measurement`). "sample_rate_hz" keeps
+    # its previous meaning: the ACTUAL tick rate of the saved file (=
+    # fastest group), NOT necessarily the target rate set by the user -
+    # this is the rate `data/exporter.py::StorageWriter` used to compute
+    # the `time_s` column, i.e. exactly what
+    # `gui/analysis_view.py::_resolve_sample_rate()` needs as a fallback.
+    rate_groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+    tick_rate_hz = max(
+        (g.resolved_sample_rate_hz for g in rate_groups), default=config.sample_rate_hz
+    )
+    rate_by_hw_channel = {
+        ch.hardware_channel: group.resolved_sample_rate_hz
+        for group in rate_groups
+        for ch in group.channels
+    }
+
+    channels_meta = []
+    for ch in config.active_channels():
+        channel_dict = ch.to_dict()
+        # Native rate per channel (can differ from "sample_rate_hz", e.g.
+        # for the NI9210: its own 14 S/s rate despite a faster file tick
+        # rate) - basis for rate-aware FFT/filtering in
+        # `analysis/basic_analysis.py`, which would otherwise mistakenly
+        # treat repeated values from a forward-filled channel as genuine
+        # new samples.
+        channel_dict["native_sample_rate_hz"] = rate_by_hw_channel.get(
+            ch.hardware_channel, tick_rate_hz
+        )
+        channels_meta.append(channel_dict)
+
     return {
         "measurement_name": config.name,
         "start_time": session.start_time.isoformat() if session.start_time else None,
         "end_time": session.end_time.isoformat() if session.end_time else None,
         "duration_seconds": session.duration_seconds,
-        "sample_rate_hz": config.sample_rate_hz,
+        "sample_rate_hz": tick_rate_hz,
+        "target_sample_rate_hz": config.sample_rate_hz,
+        "rate_groups": [
+            {
+                "resolved_sample_rate_hz": group.resolved_sample_rate_hz,
+                "channel_hardware_ids": [ch.hardware_channel for ch in group.channels],
+            }
+            for group in rate_groups
+        ],
         "samples_per_read": config.samples_per_read,
         "storage_format": config.storage_format.value,
         "hardware": [
@@ -66,17 +107,17 @@ def build_measurement_metadata(
             }
             for d in device_infos
         ],
-        "channels": [ch.to_dict() for ch in config.active_channels()],
+        "channels": channels_meta,
     }
 
 
 def save_measurement_metadata(path: Path, metadata: dict[str, Any]) -> None:
-    """Speichert Mess-Metadaten als JSON-Datei.
+    """Saves measurement metadata as a JSON file.
 
-    Legt fehlende übergeordnete Verzeichnisse automatisch an.
+    Creates any missing parent directories automatically.
 
     Raises:
-        OSError: falls die Datei nicht geschrieben werden kann.
+        OSError: if the file cannot be written.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as f:
@@ -85,26 +126,26 @@ def save_measurement_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def load_measurement_metadata(path: Path) -> dict[str, Any]:
-    """Lädt Mess-Metadaten aus einer JSON-Datei.
+    """Loads measurement metadata from a JSON file.
 
     Raises:
-        FileNotFoundError: falls die Datei nicht existiert.
-        json.JSONDecodeError: falls die Datei kein gültiges JSON enthält.
+        FileNotFoundError: if the file does not exist.
+        json.JSONDecodeError: if the file does not contain valid JSON.
     """
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def channels_from_metadata(metadata: dict[str, Any]) -> list[Channel]:
-    """Rekonstruiert die Kanalliste aus einem Mess-Metadaten-Dictionary."""
+    """Reconstructs the channel list from a measurement metadata dictionary."""
     return [Channel.from_dict(d) for d in metadata.get("channels", [])]
 
 
 @dataclass
 class MeasurementProject:
-    """Repräsentiert ein Messprojekt gemäß der vorgegebenen Struktur::
+    """Represents a measurement project according to the prescribed structure::
 
-        Projektname/
+        ProjectName/
         |-- project.json
         |-- measurements/
         |     `-- measurement_001.parquet
@@ -112,11 +153,11 @@ class MeasurementProject:
               `-- measurement_001_info.json
 
     Attributes:
-        project_path: Wurzelverzeichnis des Projekts.
-        name: Anzeigename des Projekts.
-        created_at: Erstellungszeitpunkt.
-        measurement_names: Namen der im Projekt enthaltenen Messungen
-            (ohne Dateiendung), in der Reihenfolge ihrer Erstellung.
+        project_path: Root directory of the project.
+        name: Display name of the project.
+        created_at: Creation timestamp.
+        measurement_names: Names of the measurements contained in the
+            project (without file extension), in the order they were created.
     """
 
     project_path: Path
@@ -126,26 +167,26 @@ class MeasurementProject:
 
     @property
     def measurements_dir(self) -> Path:
-        """Verzeichnis, in dem die eigentlichen Messdatendateien liegen."""
+        """Directory holding the actual measurement data files."""
         return self.project_path / MEASUREMENTS_DIR_NAME
 
     @property
     def metadata_dir(self) -> Path:
-        """Verzeichnis, in dem die Metadaten-JSON-Dateien liegen."""
+        """Directory holding the metadata JSON files."""
         return self.project_path / METADATA_DIR_NAME
 
     @property
     def project_file(self) -> Path:
-        """Pfad zur project.json dieses Projekts."""
+        """Path to this project's project.json."""
         return self.project_path / PROJECT_FILE_NAME
 
     @classmethod
     def create(cls, project_path: Path, name: str) -> "MeasurementProject":
-        """Legt ein neues, leeres Messprojekt auf der Festplatte an.
+        """Creates a new, empty measurement project on disk.
 
         Raises:
-            FileExistsError: falls unter `project_path` bereits ein
-                Projekt (project.json) existiert.
+            FileExistsError: if a project (project.json) already exists
+                under `project_path`.
         """
         project_path.mkdir(parents=True, exist_ok=True)
         project_file = project_path / PROJECT_FILE_NAME
@@ -164,10 +205,10 @@ class MeasurementProject:
 
     @classmethod
     def open(cls, project_path: Path) -> "MeasurementProject":
-        """Öffnet ein bestehendes Messprojekt.
+        """Opens an existing measurement project.
 
         Raises:
-            FileNotFoundError: falls keine project.json existiert.
+            FileNotFoundError: if no project.json exists.
         """
         project_file = project_path / PROJECT_FILE_NAME
         if not project_file.exists():
@@ -189,7 +230,7 @@ class MeasurementProject:
         )
 
     def save(self) -> None:
-        """Speichert `project.json` auf die Festplatte."""
+        """Saves `project.json` to disk."""
         data = {
             "name": self.name,
             "created_at": self.created_at.isoformat(),
@@ -200,20 +241,20 @@ class MeasurementProject:
         logger.debug("Projektdatei gespeichert: %s", self.project_file)
 
     def register_measurement(self, measurement_name: str) -> None:
-        """Fügt eine neue Messung zum Projekt hinzu und speichert sofort.
+        """Adds a new measurement to the project and saves immediately.
 
-        Idempotent: mehrfaches Registrieren derselben Messung fügt sie
-        nicht doppelt hinzu.
+        Idempotent: registering the same measurement multiple times does
+        not add it twice.
         """
         if measurement_name not in self.measurement_names:
             self.measurement_names.append(measurement_name)
             self.save()
 
     def measurement_data_path(self, measurement_name: str, storage_format: StorageFormat) -> Path:
-        """Pfad zur Messdatendatei (.parquet oder .csv) für eine Messung."""
+        """Path to the measurement data file (.parquet or .csv) for a measurement."""
         suffix = ".parquet" if storage_format == StorageFormat.PARQUET else ".csv"
         return self.measurements_dir / f"{measurement_name}{suffix}"
 
     def measurement_metadata_path(self, measurement_name: str) -> Path:
-        """Pfad zur Metadaten-JSON-Datei für eine Messung."""
+        """Path to the metadata JSON file for a measurement."""
         return self.metadata_dir / f"{measurement_name}_info.json"

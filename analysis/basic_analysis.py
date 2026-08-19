@@ -1,21 +1,24 @@
 """
 analysis/basic_analysis.py
 
-Analysefunktionen für die Analyse-Ansicht (siehe `gui/analysis_view.py`).
+Analysis functions for the analysis view (see `gui/analysis_view.py`).
 
-Alle Funktionen erhalten ein `pandas.DataFrame` mit Spalte "time_s" und
-einer Spalte je Kanal (siehe `data/loader.py::LoadedMeasurement`) und
-geben Rohdaten (numpy-Arrays) zurück - das Verpacken als neuer
-Ergebniskanal (inkl. `Channel`-Metadaten, x-Achse etc.) übernimmt
-`gui/analysis_view.py`, damit dieses Modul unabhängig von der GUI bleibt
-und einzeln testbar ist.
+All functions receive a `pandas.DataFrame` with a "time_s" column and
+one column per channel (see `data/loader.py::LoadedMeasurement`) and
+return raw data (numpy arrays) - wrapping the result as a new result
+channel (including `Channel` metadata, x-axis, etc.) is handled by
+`gui/analysis_view.py`, so this module stays independent of the GUI
+and individually testable.
 
-Aktuell implementiert:
-    * compute_fft(...): Amplitudenspektrum eines Kanals (numpy.fft.rfft).
-    * apply_filter(...): Butterworth-Tief-/Hochpass (scipy.signal).
-    * apply_smoothing(...): Gleitender Mittelwert.
+Currently implemented:
+    * compute_fft(...): amplitude spectrum of a channel (numpy.fft.rfft).
+    * apply_filter(...): Butterworth low-/high-pass (scipy.signal).
+    * apply_smoothing(...): moving average.
+    * native_samples(...): de-duplicates a forward-filled (zero-order
+      hold) channel down to its actual new samples - see
+      `gui/analysis_view.py::_prepare_channel_for_rate_aware_analysis`.
 
-Noch nicht implementiert (spätere Version):
+Not yet implemented (future version):
     * compute_rms(...), compute_statistics(...), generate_report(...).
 """
 
@@ -28,10 +31,10 @@ import pandas as pd
 def compute_fft(
     data: pd.DataFrame, channel_name: str, sample_rate_hz: float
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Berechnet das (einseitige) Amplitudenspektrum eines Kanals.
+    """Computes the (one-sided) amplitude spectrum of a channel.
 
     Returns:
-        Tupel `(frequenz_hz, amplitude)` gleicher Länge.
+        Tuple `(freq_hz, amplitude)` of equal length.
     """
     values = data[channel_name].to_numpy(dtype=float)
     n = len(values)
@@ -44,7 +47,7 @@ def compute_fft(
 
     amplitude = np.abs(spectrum) / n * 2.0
     if len(amplitude) > 0:
-        amplitude[0] /= 2.0  # DC-Anteil wird durch die *2-Normierung nicht verdoppelt
+        amplitude[0] /= 2.0  # DC component is not doubled by the *2 normalization
 
     return freq_hz, amplitude
 
@@ -56,10 +59,10 @@ def apply_filter(
     cutoff_hz: float,
     kind: str = "lowpass",
 ) -> np.ndarray:
-    """Wendet einen Butterworth-Tief-/Hochpassfilter auf einen Kanal an.
+    """Applies a Butterworth low-/high-pass filter to a channel.
 
-    Nullphasige Filterung via `scipy.signal.filtfilt`, damit das Ergebnis
-    zeitlich nicht gegenüber dem Originalsignal verschoben ist.
+    Zero-phase filtering via `scipy.signal.filtfilt`, so the result is
+    not shifted in time relative to the original signal.
     """
     from scipy.signal import butter, filtfilt
 
@@ -78,8 +81,37 @@ def apply_filter(
     return filtfilt(b, a, values)
 
 
+def native_samples(data: pd.DataFrame, channel_name: str) -> pd.DataFrame:
+    """Reduces a zero-order-held (forward-filled) channel down to only
+    the rows where the value actually changes (= a genuine new sample).
+
+    A channel merged by `core/rate_merge.py::RateMerger` into a faster
+    rate group (e.g. an NI9210 alongside a faster module, see
+    `data/models.py::resolve_rate_groups`) repeats its last real
+    measurement value until a new sample is due - FFT/filters must not
+    treat these repetitions as genuine new samples at the file tick
+    rate (otherwise the zero-order-hold staircase would fake a false,
+    sinc-shaped spectrum artifact).
+
+    Detects repetitions purely from consecutive identical values -
+    robust against the non-integer tick ratio produced by `RateMerger`
+    (e.g. ~118 fast ticks per genuine 14 S/s sample), without needing
+    to know the exact ratio.
+
+    ONLY call this for channels whose native rate (see
+    `data/metadata.py::build_measurement_metadata`, key
+    `native_sample_rate_hz`) is below the file tick rate - otherwise
+    legitimate repeated values in genuine, non-forward-filled signals
+    would be incorrectly removed.
+    """
+    values = data[channel_name].to_numpy()
+    keep = np.ones(len(values), dtype=bool)
+    keep[1:] = values[1:] != values[:-1]
+    return data.loc[keep]
+
+
 def apply_smoothing(data: pd.DataFrame, channel_name: str, window_size: int) -> np.ndarray:
-    """Glättet einen Kanal mittels gleitendem Mittelwert (zentriertes Fenster)."""
+    """Smooths a channel using a moving average (centered window)."""
     if window_size < 2:
         raise ValueError("Die Fenstergröße muss mindestens 2 betragen.")
 
@@ -88,22 +120,22 @@ def apply_smoothing(data: pd.DataFrame, channel_name: str, window_size: int) -> 
 
 
 def compute_rms(data: pd.DataFrame, channel_name: str) -> float:
-    """Berechnet den Effektivwert (RMS) eines Kanals (NICHT IMPLEMENTIERT)."""
+    """Computes the RMS value of a channel (NOT IMPLEMENTED)."""
     raise NotImplementedError(
         "RMS-Berechnung ist für eine spätere Version vorgesehen, aber noch nicht implementiert."
     )
 
 
 def compute_statistics(data: pd.DataFrame, channel_name: str) -> dict:
-    """Berechnet Basisstatistiken (Min/Max/Mittelwert/Std) eines Kanals
-    (NICHT IMPLEMENTIERT)."""
+    """Computes basic statistics (min/max/mean/std) of a channel
+    (NOT IMPLEMENTED)."""
     raise NotImplementedError(
         "Statistik-Berechnung ist für eine spätere Version vorgesehen, aber noch nicht implementiert."
     )
 
 
 def generate_report(measurement_path: str, output_path: str) -> None:
-    """Erzeugt einen automatisierten Report für eine Messung (NICHT IMPLEMENTIERT)."""
+    """Generates an automated report for a measurement (NOT IMPLEMENTED)."""
     raise NotImplementedError(
         "Automatische Reports sind für eine spätere Version vorgesehen, aber noch nicht implementiert."
     )

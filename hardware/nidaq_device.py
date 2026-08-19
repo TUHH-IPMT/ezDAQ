@@ -1,28 +1,27 @@
 """
 hardware/nidaq_device.py
 
-Gemeinsame nidaqmx-Task-Verwaltung für NI-cDAQ-Module.
+Shared nidaqmx task management for NI cDAQ modules.
 
-Dieses Modul (zusammen mit `ni9215.py`/`ni9234.py`) ist die EINZIGE Stelle
-der Anwendung, die `nidaqmx` direkt importiert und verwendet. GUI,
-Messcontroller und Ring Buffer kennen ausschließlich `BaseDevice` aus
+This module (together with `ni9215.py`/`ni9234.py`) is the ONLY place
+in the application that imports and uses `nidaqmx` directly. The GUI,
+measurement controller, and ring buffer know only `BaseDevice` from
 `hardware/base_device.py`.
 
-Enthält außerdem `discover_devices()` zur Erkennung angeschlossener
-NI-cDAQ-Module für die Setup-Ansicht.
+Also contains `discover_devices()` for detecting connected
+NI cDAQ modules for the setup view.
 
-Hinweis zur Entwicklungsumgebung:
-    `nidaqmx` (das Python-Paket) kann auch ohne installierten NI-DAQmx-
-    Treiber und ohne angeschlossene Hardware importiert werden - Methoden-
-    signaturen wurden gegen die installierte Paketversion geprüft. Ein
-    tatsächlicher Task-Aufruf (`nidaqmx.Task()`, `System.local()`, ...)
-    schlägt jedoch ohne Treiber/Hardware mit einer Exception aus
-    `nidaqmx.errors` fehl (z. B. `DaqNotFoundError` ohne Treiber,
-    `DaqError` mit Treiber aber ohne Hardware). Diese Datei wurde daher
-    NICHT gegen echte NI-9215/NI-9234-
-    Hardware getestet - das war in dieser Umgebung nicht möglich. Ein
-    Test mit echter Hardware wird dringend empfohlen, bevor produktiv
-    gemessen wird.
+Note on the development environment:
+    `nidaqmx` (the Python package) can be imported even without an
+    installed NI-DAQmx driver and without connected hardware - method
+    signatures have been checked against the installed package version.
+    An actual task call (`nidaqmx.Task()`, `System.local()`, ...),
+    however, fails without a driver/hardware with an exception from
+    `nidaqmx.errors` (e.g. `DaqNotFoundError` without a driver,
+    `DaqError` with a driver but without hardware). This file has
+    therefore NOT been tested against real NI 9215/NI 9234
+    hardware - that was not possible in this environment. Testing with
+    real hardware is strongly recommended before measuring in production.
 """
 
 from __future__ import annotations
@@ -40,8 +39,8 @@ from hardware.base_device import AcquisitionError, BaseDevice
 
 logger = logging.getLogger(__name__)
 
-# Registry-Pfad, den der NI-Installer selbst für NI-MAX (Measurement &
-# Automation Explorer) hinterlegt - siehe `find_ni_max_executable()`.
+# Registry path that the NI installer itself sets up for NI-MAX
+# (Measurement & Automation Explorer) - see `find_ni_max_executable()`.
 _NI_MAX_REGISTRY_KEY = r"SOFTWARE\WOW6432Node\National Instruments\Measurement & Automation Explorer"
 _NI_MAX_FALLBACK_PATHS = (
     Path(r"C:\Program Files (x86)\National Instruments\MAX\NIMax.exe"),
@@ -51,22 +50,22 @@ _NI_MAX_FALLBACK_PATHS = (
 try:
     import nidaqmx
     from nidaqmx.constants import AcquisitionType
-    # nidaqmx.errors.Error ist die GEMEINSAME Basisklasse aller nidaqmx-
-    # Fehler. Wichtig: DaqNotFoundError (fehlender NI-DAQmx-Treiber) und
-    # DaqNotSupportedError erben NICHT von DaqError, sondern nur (wie
-    # DaqError selbst) von Error. Ein `except DaqError` wuerde daher z.B.
-    # den Fall "kein Treiber installiert" NICHT abfangen. Deshalb wird
-    # hier durchgehend gegen die gemeinsame Basisklasse `Error` gefangen.
+    # nidaqmx.errors.Error is the COMMON base class of all nidaqmx
+    # errors. Important: DaqNotFoundError (missing NI-DAQmx driver) and
+    # DaqNotSupportedError do NOT inherit from DaqError, but only (like
+    # DaqError itself) from Error. An `except DaqError` would therefore
+    # NOT catch, e.g., the "no driver installed" case. Hence, errors are
+    # caught here consistently against the common base class `Error`.
     from nidaqmx.errors import Error as DaqmxError
     from nidaqmx.stream_readers import AnalogMultiChannelReader
     from nidaqmx.system import System
 
     NIDAQMX_AVAILABLE = True
-except ImportError:  # pragma: no cover - nur relevant ohne installiertes nidaqmx
+except ImportError:  # pragma: no cover - only relevant without nidaqmx installed
     NIDAQMX_AVAILABLE = False
 
     class DaqmxError(Exception):
-        """Fallback, falls `nidaqmx` nicht installiert ist."""
+        """Fallback in case `nidaqmx` is not installed."""
 
     AcquisitionType = None  # type: ignore[assignment]
     AnalogMultiChannelReader = None  # type: ignore[assignment]
@@ -75,31 +74,31 @@ except ImportError:  # pragma: no cover - nur relevant ohne installiertes nidaqm
 
 
 def discover_devices() -> list[DeviceInfo]:
-    """Erkennt angeschlossene NI-cDAQ-Module über das lokale NI-DAQmx-System.
+    """Detects connected NI cDAQ modules via the local NI-DAQmx system.
 
-    Wird von der Setup-Ansicht aufgerufen, um dem Nutzer eine Liste
-    verfügbarer Geräte/Module zur Auswahl anzuzeigen.
+    Called by the setup view to show the user a list of
+    available devices/modules to choose from.
 
     Returns:
-        Liste erkannter Geräte. Leer, falls der Treiber einwandfrei
-        arbeitet, aber schlicht keine Hardware angeschlossen ist - das
-        ist ein normales, kein fehlerhaftes Ergebnis.
+        List of detected devices. Empty if the driver works fine but
+        simply no hardware is connected - that is a normal, not an
+        erroneous, result.
 
     Raises:
-        RuntimeError: falls `nidaqmx`/der NI-DAQmx-Treiber auf diesem
-            Rechner NICHT verfügbar ist, oder die Geräteerkennung selbst
-            fehlschlägt (z. B. Treiber-/Systemfehler). Wird bewusst NICHT
-            mehr stillschweigend zu einer leeren Liste - `gui/main_window.py`
-            fängt dies über den `BackgroundWorker` ab und zeigt die Ursache
-            direkt im Gerätebrowser der Setup-Ansicht an (siehe
-            `SetupView.show_discovery_error`), statt sie nur zu loggen.
+        RuntimeError: if `nidaqmx`/the NI-DAQmx driver is NOT available
+            on this machine, or if device discovery itself fails
+            (e.g. driver/system error). Deliberately no longer silently
+            reduced to an empty list - `gui/main_window.py` catches this
+            via the `BackgroundWorker` and shows the cause directly in
+            the setup view's device browser (see
+            `SetupView.show_discovery_error`) instead of just logging it.
     """
     if not NIDAQMX_AVAILABLE:
         message = (
             "NI-DAQmx-Treiber (oder das Python-Paket 'nidaqmx') ist auf "
             "diesem Rechner nicht installiert."
         )
-        # Nur DEBUG, siehe Begründung im DaqmxError-Zweig unten.
+        # DEBUG only, see the rationale in the DaqmxError branch below.
         logger.debug(message)
         raise RuntimeError(message)
 
@@ -120,17 +119,17 @@ def discover_devices() -> list[DeviceInfo]:
                     product_type=device.product_type,
                     module_type=module_type,
                     num_channels=num_channels,
+                    has_any_channels=_has_any_channels(device),
                     physical_channels=phys_chs,
                 )
             )
     except DaqmxError as exc:
-        # Bewusst nur DEBUG statt ERROR: die Meldung wird unverändert in der
-        # RuntimeError weitergereicht und dort protokolliert UND angezeigt,
-        # wo der Fehler tatsächlich behandelt wird (`gui/main_window.py`:
-        # `_on_discover_hardware_failed` bzw. `_on_start_measurement`). Ein
-        # zusätzliches ERROR hier hätte dieselbe Ursache doppelt in der
-        # Konsole erscheinen lassen und wie zwei getrennte Fehlschläge
-        # ausgesehen.
+        # Deliberately DEBUG rather than ERROR: the message is passed on
+        # unchanged in the RuntimeError and logged AND displayed there,
+        # where the error is actually handled (`gui/main_window.py`:
+        # `_on_discover_hardware_failed` resp. `_on_start_measurement`). An
+        # additional ERROR here would have made the same cause appear
+        # twice in the console and look like two separate failures.
         logger.debug("Geräteerkennung fehlgeschlagen: %s", exc)
         raise RuntimeError(str(exc)) from exc
 
@@ -138,22 +137,22 @@ def discover_devices() -> list[DeviceInfo]:
 
 
 def find_ni_max_executable() -> Optional[Path]:
-    """Sucht den Installationspfad von NI-MAX (Measurement & Automation
-    Explorer) auf diesem Rechner.
+    """Looks up the installation path of NI-MAX (Measurement & Automation
+    Explorer) on this machine.
 
-    Bevorzugt den `Command`-Registry-Wert, den der NI-Installer selbst
-    unter `_NI_MAX_REGISTRY_KEY` hinterlegt - robuster als ein fest
-    codierter Pfad, da er auch bei abweichendem Installationsort oder
-    künftigen NI-MAX-Versionen stimmt. Fällt bei fehlendem
-    Registry-Eintrag auf die beiden üblichen Standardpfade zurück.
+    Prefers the `Command` registry value that the NI installer itself
+    sets up under `_NI_MAX_REGISTRY_KEY` - more robust than a hardcoded
+    path, since it also holds true for a different install location or
+    future NI-MAX versions. Falls back to the two usual default paths
+    if the registry entry is missing.
 
     Returns:
-        Pfad zu `NIMax.exe`, oder None falls NI-MAX auf diesem Rechner
-        nicht gefunden wurde (z. B. NI-DAQmx/NI-MAX nicht installiert).
+        Path to `NIMax.exe`, or None if NI-MAX was not found on this
+        machine (e.g. NI-DAQmx/NI-MAX not installed).
     """
     try:
         import winreg
-    except ImportError:  # pragma: no cover - nur auf Nicht-Windows relevant
+    except ImportError:  # pragma: no cover - only relevant on non-Windows
         return None
 
     try:
@@ -173,13 +172,13 @@ def find_ni_max_executable() -> Optional[Path]:
 
 
 def open_ni_max() -> None:
-    """Startet NI-MAX (Measurement & Automation Explorer) als separaten
-    Prozess - Schnellzugriff z. B. zum Prüfen/Umbenennen von Geräten,
-    ohne die eigentliche Anwendung zu verlassen.
+    """Starts NI-MAX (Measurement & Automation Explorer) as a separate
+    process - quick access e.g. for checking/renaming devices,
+    without leaving the actual application.
 
     Raises:
-        RuntimeError: falls NI-MAX auf diesem Rechner nicht gefunden
-            wurde, oder der Startversuch selbst fehlschlägt.
+        RuntimeError: if NI-MAX was not found on this machine,
+            or the start attempt itself fails.
     """
     path = find_ni_max_executable()
     if path is None:
@@ -194,11 +193,11 @@ def open_ni_max() -> None:
 
 
 def _map_product_type(product_type: str) -> Optional[ModuleType]:
-    """Ordnet eine NI-Produktbezeichnung (z. B. "NI 9215") einem ModuleType zu.
+    """Maps an NI product designation (e.g. "NI 9215") to a ModuleType.
 
-    Gibt None zurück, falls das Modul (noch) nicht unterstützt wird - die
-    Setup-Ansicht kann solche Module dann als "nicht unterstützt" anzeigen,
-    statt abzustürzen.
+    Returns None if the module is (not yet) supported - the setup view
+    can then display such modules as "not supported" instead of
+    crashing.
     """
     normalized = product_type.replace(" ", "").replace("-", "").upper()
     for module_type in ModuleType:
@@ -207,8 +206,40 @@ def _map_product_type(product_type: str) -> Optional[ModuleType]:
     return None
 
 
+def _has_any_channels(device: "nidaqmx.system.Device") -> bool:
+    """Checks whether `device` has ANY channel at all - analog in/out,
+    digital in/out, or counter.
+
+    This app currently supports exclusively analog input (see
+    `DeviceInfo.num_channels`, which deliberately counts only
+    `ai_physical_chans`) - a pure analog-output module like the NI9263
+    would thus have `num_channels == 0`, just like an empty chassis
+    controller entry with no channels at all. Without this separate,
+    cross-channel-type check, a physically present but (not yet)
+    unsupported non-AI module would be confused, when filtering for
+    "has channels" (see `gui/setup_view.py::set_discovered_devices`),
+    with an empty chassis entry and thereby wrongly and silently hidden -
+    see `DeviceInfo.has_any_channels`.
+    """
+    channel_lists = (
+        "ai_physical_chans",
+        "ao_physical_chans",
+        "di_lines",
+        "do_lines",
+        "ci_physical_chans",
+        "co_physical_chans",
+    )
+    for attr_name in channel_lists:
+        try:
+            if len(getattr(device, attr_name)) > 0:
+                return True
+        except DaqmxError:
+            continue
+    return False
+
+
 class NIDAQSharedTask:
-    """Verwaltet einen gemeinsamen nidaqmx-Task für mehrere Geräte."""
+    """Manages a shared nidaqmx task for multiple devices."""
 
     def __init__(self) -> None:
         self._task: Optional["nidaqmx.Task"] = None
@@ -220,15 +251,15 @@ class NIDAQSharedTask:
         self._samples_per_read = 0
 
     def configure(self, sample_rate_hz: float, samples_per_read: int) -> None:
-        """Erzeugt den zugrunde liegenden Task.
+        """Creates the underlying task.
 
-        Das Sample-Clock-Timing wird bewusst NICHT hier konfiguriert:
-        `cfg_samp_clk_timing()` schlägt mit "no devices in the task" fehl,
-        solange der Task noch keine Kanäle enthält. Kanäle werden erst
-        danach von `NIDAQDevice.configure()` (einmal pro Gerät, über
-        `_add_channel_to_task()`) direkt zu `self._task` hinzugefügt; das
-        Timing wird abschließend über `finalize()` konfiguriert, sobald
-        alle Geräte ihre Kanäle hinzugefügt haben.
+        Sample clock timing is deliberately NOT configured here:
+        `cfg_samp_clk_timing()` fails with "no devices in the task" as
+        long as the task contains no channels yet. Channels are only
+        added afterwards by `NIDAQDevice.configure()` (once per device,
+        via `_add_channel_to_task()`) directly to `self._task`; timing
+        is finally configured via `finalize()` once all devices have
+        added their channels.
         """
         if not NIDAQMX_AVAILABLE:
             raise AcquisitionError("nidaqmx ist nicht installiert oder der NI-DAQmx-Treiber ist auf diesem System nicht verfügbar.")
@@ -239,9 +270,9 @@ class NIDAQSharedTask:
         self._configured = True
 
     def finalize(self) -> None:
-        """Konfiguriert das Sample-Clock-Timing, nachdem alle Geräte ihre
-        Kanäle hinzugefügt haben. Muss genau einmal aufgerufen werden,
-        bevor der Task gestartet wird."""
+        """Configures the sample clock timing after all devices have
+        added their channels. Must be called exactly once before the
+        task is started."""
         if self._task is None:
             raise AcquisitionError("Shared task ist nicht konfiguriert.")
         if self._channel_count == 0:
@@ -264,9 +295,9 @@ class NIDAQSharedTask:
         if self._task is None:
             raise AcquisitionError("Shared task ist nicht konfiguriert.")
         if self._started:
-            # Mehrere Geräte teilen sich diesen Task und rufen start()
-            # jeweils einzeln auf - ein erneuter Start des bereits
-            # laufenden Tasks würde nidaqmx einen Fehler werfen lassen.
+            # Multiple devices share this task and call start()
+            # individually - starting the already running task again
+            # would cause nidaqmx to raise an error.
             return
         self._task.start()
         self._started = True
@@ -292,16 +323,21 @@ class NIDAQSharedTask:
         )
         return buffer
 
+    def available_samples(self) -> int:
+        if not self._configured or self._task is None:
+            return 0
+        return self._task.in_stream.avail_samp_per_chan
+
 
 class NIDAQDevice(BaseDevice):
-    """Basisklasse für NI-cDAQ-Module; verwaltet den Lebenszyklus eines
-    einzelnen Tasks oder eines gemeinsamen Shared-Tasks.
+    """Base class for NI cDAQ modules; manages the lifecycle of an
+    individual task or a shared task.
 
-    Konkrete Subklassen (`NI9215`, `NI9234`) implementieren ausschließlich
-    `_add_channel_to_task()`, um den modulspezifischen nidaqmx-Kanaltyp
-    hinzuzufügen (z. B. Spannung vs. IEPE-Beschleunigung). Task-Erzeugung,
-    Timing-Konfiguration, Start/Stop und blockweises Lesen sind hier
-    einmalig implementiert.
+    Concrete subclasses (`NI9215`, `NI9234`) implement exclusively
+    `_add_channel_to_task()` to add the module-specific nidaqmx channel
+    type (e.g. voltage vs. IEPE acceleration). Task creation, timing
+    configuration, start/stop, and block-wise reading are implemented
+    here once, in common.
     """
 
     def __init__(self, device_info: DeviceInfo, channels: list[Channel]) -> None:
@@ -337,22 +373,22 @@ class NIDAQDevice(BaseDevice):
 
         try:
             if shared_task is not None:
-                # Mehrere Geräte teilen sich denselben Hardware-Task, damit
-                # ihre Samples aus derselben Abtastung stammen.
+                # Multiple devices share the same hardware task, so
+                # their samples come from the same sampling instant.
                 self._shared_task = shared_task
                 if not self._shared_task._configured:
                     self._shared_task.configure(sample_rate_hz, samples_per_read)
                 self._channel_offset = self._shared_task._channel_count
                 for channel in self.active_channels:
-                    # Bewusst dieselbe modulspezifische Methode wie im
-                    # Standalone-Task-Pfad verwenden (siehe unten), damit
-                    # Sensitivität, Messbereich, Anregungsstrom etc. auch
-                    # im gemeinsamen Task korrekt gesetzt werden. Ein
-                    # separates NIDAQSharedTask.add_channel() mit nur
-                    # physical_channel/name würde für IEPE-Kanäle auf
-                    # nidaqmx-Defaults zurückfallen (z. B. sensitivity=1000
-                    # mV/g statt des konfigurierten Sensorwerts) und so
-                    # falsche Messwerte liefern.
+                    # Deliberately use the same module-specific method as
+                    # in the standalone task path (see below), so that
+                    # sensitivity, measurement range, excitation current,
+                    # etc. are also set correctly in the shared task. A
+                    # separate NIDAQSharedTask.add_channel() with only
+                    # physical_channel/name would fall back to nidaqmx
+                    # defaults for IEPE channels (e.g. sensitivity=1000
+                    # mV/g instead of the configured sensor value) and
+                    # thus return incorrect measurement values.
                     self._add_channel_to_task(self._shared_task._task, channel)
                     self._shared_task._channel_count += 1
                 self._is_configured = True
@@ -396,10 +432,10 @@ class NIDAQDevice(BaseDevice):
 
     @abstractmethod
     def _add_channel_to_task(self, task: "nidaqmx.Task", channel: Channel) -> None:
-        """Fügt einen einzelnen Kanal modulspezifisch zum Task hinzu.
+        """Adds a single channel to the task in a module-specific way.
 
-        Muss von konkreten Subklassen implementiert werden, z. B. via
-        `task.ai_channels.add_ai_voltage_chan(...)` (NI9215) oder
+        Must be implemented by concrete subclasses, e.g. via
+        `task.ai_channels.add_ai_voltage_chan(...)` (NI9215) or
         `task.ai_channels.add_ai_accel_chan(...)` (NI9234).
         """
 
@@ -505,8 +541,15 @@ class NIDAQDevice(BaseDevice):
             ) from exc
         return buffer
 
+    def available_samples(self) -> int:
+        if self._shared_task is not None:
+            return self._shared_task.available_samples()
+        if self._task is None:
+            return 0
+        return self._task.in_stream.avail_samp_per_chan
+
     def _cleanup_task(self) -> None:
-        """Schließt den nidaqmx-Task und setzt interne Referenzen zurück."""
+        """Closes the nidaqmx task and resets internal references."""
         if self._task is not None:
             try:
                 self._task.close()
