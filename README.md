@@ -64,26 +64,6 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Measurements can also be run entirely without the GUI from a Python
   script (`core/measurement_runner.py`, see `doc/messung_per_skript.md`)
 
-## Installation
-
-A virtual environment is recommended:
-
-    python -m venv .venv
-    .venv\Scripts\activate        # Windows
-    pip install -r requirements.txt
-
-To communicate with real hardware, the **NI-DAQmx driver** from National
-Instruments must also be installed. Without the driver, the application
-still starts – device discovery then returns an empty list, and starting
-a measurement reports a clean error.
-
-## Running
-
-    python main.py
-
-Alternatively, measurements can be run entirely without the GUI from your
-own script, see `doc/messung_per_skript.md`.
-
 ## Architecture
 
 The application is strictly layered; the GUI never talks to `nidaqmx`
@@ -91,15 +71,37 @@ directly:
 
     GUI  ->  MeasurementController  ->  Hardware Interface  ->  nidaqmx  ->  NI cDAQ
 
+**Threading model:** acquisition runs on one or more dedicated DAQ
+threads (`core/acquisition.py`), separate from the Qt GUI thread.
+Longer-running operations that would otherwise block the UI - device
+discovery, loading a saved measurement - run on short-lived background
+worker threads (`gui/workers.py`) and report back to the GUI thread via
+Qt signals.
+
 Data flow during a measurement:
 
-    DAQ thread  ->  Ring buffer  ->  Live View
-                                 ->  Storage Writer
+    DAQ thread(s)  ->  Ring buffer  ->  Live View
+                                     ->  Storage Writer
+
+**Multi-rate acquisition:** most C Series modules can share a single
+DAQmx task and sample clock. A few can't - the NI 9210 has a
+hardware-fixed rate of 14 S/s, and the NI 9234/NI 9235 each have their
+own sample-rate grid (`fs = base / n`) that may not intersect with
+another module's grid at the requested target rate. `resolve_rate_groups()`
+(`data/models.py`) partitions the active channels into one or more
+`RateGroup`s accordingly; each group becomes its own DAQmx task,
+started in parallel (`core/controller.py`). Groups running slower than
+the fastest one are merged onto its tick rate via zero-order-hold
+forward-fill (`core/rate_merge.py::RateMerger`) before the combined
+block reaches the (single) ring buffer - so everything downstream (Live
+View, storage, analysis) sees one consistent, tick-rate-aligned stream,
+with each channel's real native rate tagged in the measurement metadata.
 
 Directories:
 
-- `core/` – ring buffer, DAQ thread, measurement controller,
-  channel/device logic, `MeasurementRunner` for GUI-less scripted use
+- `core/` – ring buffer, DAQ thread(s), measurement controller,
+  rate-group resolution and merging, channel/device logic,
+  `MeasurementRunner` for GUI-less scripted use
 - `hardware/` – hardware abstraction and NI cDAQ modules (`ni9215.py`,
   `ni9234.py`, `ni9210.py`, `ni9213.py`, `ni9235.py`) – the only place
   that touches `nidaqmx`
@@ -114,25 +116,8 @@ Directories:
 - `config/` – persistent configuration
 - `resources/` – application icon (`icon.png`/`icon.ico`), accessed at
   runtime via `config.settings.get_resource_path()`
-- `doc/` – supplementary documentation (currently: scripted/headless
-  measurement usage)
-
-## Packaging as a portable Windows application (PyInstaller)
-
-    pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name ezDAQ ^
-        --icon resources\icon.ico --add-data "resources;resources" main.py
-
-`--icon` sets the icon of the generated `.exe` (Explorer/taskbar),
-`--add-data` bundles the `resources/` folder so `get_resource_path()` can
-still find the icon at runtime in the packaged build (window/taskbar
-icon, About dialog).
-
-Note: `nidaqmx` loads the native NI-DAQmx library from the target system
-at runtime, so the NI-DAQmx driver must also be installed on the target
-machine. Depending on the PyInstaller version, an additional
-`--hidden-import nidaqmx` or collecting `pyqtgraph` resources may be
-necessary.
+- `doc/` – supplementary documentation (scripted/headless measurement
+  usage, an Arduino sketch for testing the serial trigger)
 
 ## Important note on hardware testing
 

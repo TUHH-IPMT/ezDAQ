@@ -60,26 +60,6 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Messungen auch ganz ohne GUI aus einem eigenen Python-Skript steuerbar
   (`core/measurement_runner.py`, siehe `doc/messung_per_skript.md`)
 
-## Installation
-
-Empfohlen wird eine virtuelle Umgebung:
-
-    python -m venv .venv
-    .venv\Scripts\activate        # Windows
-    pip install -r requirements.txt
-
-Für die Kommunikation mit echter Hardware muss zusätzlich der
-**NI-DAQmx-Treiber** von National Instruments installiert sein. Ohne
-Treiber startet die Anwendung dennoch – die Geräteerkennung liefert dann
-eine leere Liste, und ein Messstart meldet einen sauberen Fehler.
-
-## Start
-
-    python main.py
-
-Alternativ ganz ohne GUI aus einem eigenen Skript heraus steuerbar, siehe
-`doc/messung_per_skript.md`.
-
 ## Architektur
 
 Die Anwendung ist strikt geschichtet; die GUI kommuniziert niemals direkt
@@ -87,14 +67,38 @@ mit `nidaqmx`:
 
     GUI  ->  MeasurementController  ->  Hardware Interface  ->  nidaqmx  ->  NI cDAQ
 
+**Threading-Modell:** Die Erfassung läuft auf einem oder mehreren
+dedizierten DAQ-Threads (`core/acquisition.py`), getrennt vom
+Qt-GUI-Thread. Länger laufende Vorgänge, die sonst die Oberfläche
+blockieren würden – Geräteerkennung, Laden einer gespeicherten Messung –
+laufen auf kurzlebigen Background-Worker-Threads (`gui/workers.py`) und
+melden sich per Qt-Signal beim GUI-Thread zurück.
+
 Datenfluss während einer Messung:
 
-    DAQ-Thread  ->  Ring Buffer  ->  Live View
-                                 ->  Storage Writer
+    DAQ-Thread(s)  ->  Ring Buffer  ->  Live View
+                                     ->  Storage Writer
+
+**Multi-Raten-Erfassung:** Die meisten C-Series-Module können sich einen
+DAQmx-Task und Sample-Takt teilen. Manche können das nicht – NI 9210 hat
+eine hardwarefeste Rate von 14 S/s, und NI 9234/NI 9235 haben jeweils ein
+eigenes Abtastraster (`fs = Basis / n`), das sich für die gewünschte
+Zielrate nicht mit dem Raster eines anderen Moduls überschneiden muss.
+`resolve_rate_groups()` (`data/models.py`) teilt die aktiven Kanäle
+dementsprechend in eine oder mehrere `RateGroup`s auf; jede Gruppe wird
+ein eigener DAQmx-Task, parallel gestartet (`core/controller.py`).
+Gruppen, die langsamer als die schnellste laufen, werden per
+Zero-Order-Hold-Vorwärtsauffüllung (`core/rate_merge.py::RateMerger`) auf
+deren Takt gemergt, bevor der kombinierte Block den (einzigen) Ring
+Buffer erreicht – dadurch sieht alles Nachgelagerte (Live View,
+Speicherung, Analyse) einen einzigen, taktgleichen Datenstrom, wobei die
+tatsächliche native Rate jedes Kanals in den Messmetadaten erhalten
+bleibt.
 
 Verzeichnisse:
 
-- `core/` – Ring Buffer, DAQ-Thread, Messcontroller, Kanal-/Geräte-Logik,
+- `core/` – Ring Buffer, DAQ-Thread(s), Messcontroller,
+  Ratengruppen-Auflösung und -Mergen, Kanal-/Geräte-Logik,
   `MeasurementRunner` für den GUI-losen Skript-Gebrauch
 - `hardware/` – Hardware-Abstraktion und NI-cDAQ-Module (`ni9215.py`,
   `ni9234.py`, `ni9210.py`, `ni9213.py`, `ni9235.py`) – einzige Stelle
@@ -110,24 +114,8 @@ Verzeichnisse:
 - `config/` – persistente Konfiguration
 - `resources/` – Anwendungs-Icon (`icon.png`/`icon.ico`), Zugriff zur
   Laufzeit über `config.settings.get_resource_path()`
-- `doc/` – ergänzende Dokumentation (aktuell: Messung per Skript steuern)
-
-## Verpacken als portable Windows-Anwendung (PyInstaller)
-
-    pip install pyinstaller
-    pyinstaller --noconfirm --windowed --name ezDAQ ^
-        --icon resources\icon.ico --add-data "resources;resources" main.py
-
-`--icon` setzt das Icon der erzeugten `.exe` (Explorer/Taskbar), `--add-data`
-bündelt den `resources/`-Ordner mit, damit `get_resource_path()` das Icon
-auch im gepackten Programm zur Laufzeit findet (Fenster-/Taskbar-Icon,
-About-Dialog).
-
-Hinweis: `nidaqmx` lädt die native NI-DAQmx-Bibliothek zur Laufzeit vom
-Zielsystem; der NI-DAQmx-Treiber muss daher auch auf dem Zielrechner
-installiert sein. Je nach PyInstaller-Version kann ein zusätzliches
-`--hidden-import nidaqmx` bzw. das Einsammeln von `pyqtgraph`-Ressourcen
-nötig sein.
+- `doc/` – ergänzende Dokumentation (Messung per Skript steuern, ein
+  Arduino-Sketch zum Testen des seriellen Triggers)
 
 ## Wichtiger Hinweis zum Hardware-Test
 
