@@ -396,6 +396,28 @@ def nav_icon_color() -> QColor:
     return QColor(0, 0, 0)
 
 
+def disabled_text_color() -> QColor:
+    """Themeabhängige Textfarbe für deaktivierte/nicht verfügbare Einträge
+    (siehe `_build_light_palette`/`_build_dark_palette`,
+    `QPalette.ColorGroup.Disabled`).
+
+    Wird als EXPLIZITE Vordergrundfarbe auf einzelne `QTreeWidgetItem`s
+    gesetzt (z. B. `gui/widgets/channel_table.py::HardwareChannelPickerDialog`
+    für "bereits belegt"/nicht unterstützte Kanäle, `gui/setup_view.py`s
+    Gerätebaum für nicht unterstützte Module) - Qt wendet die
+    Disabled-Farbgruppe NICHT zuverlässig automatisch an, nur weil ein
+    einzelnes Item sein `ItemIsEnabled`-Flag verliert (anders als bei
+    einem komplett deaktivierten Widget), das Item würde sonst trotz
+    gesetztem Flag optisch wie ein normaler, aktivierbarer Eintrag wirken.
+    """
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is not None:
+        return app.palette().color(QPalette.ColorGroup.Disabled, QPalette.ColorRole.Text)
+    return QColor(150, 150, 150)
+
+
 def _new_icon_pixmap(size: int) -> tuple[QPixmap, QPainter]:
     """Erzeugt eine leere Pixmap für ein selbst gezeichnetes Icon.
 

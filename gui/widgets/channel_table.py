@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtGui import QBrush, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -50,6 +50,7 @@ from gui.i18n import connect_language_changed, t
 from gui.widgets.spinbox import PrecisionDoubleSpinBox
 from gui.theme import (
     connect_theme_changed,
+    disabled_text_color,
     draw_ellipsis_icon,
     draw_minus_icon,
     draw_plus_icon,
@@ -188,6 +189,14 @@ class HardwareChannelPickerDialog(QDialog):
             )
             device_item = QTreeWidgetItem([f"{device.device_name} - {device.product_type}{module_info}"])
             device_item.setFlags(device_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            if is_unsupported_module:
+                # Reine Flags (ItemIsEnabled/-Selectable) reichen NICHT aus,
+                # um ein Item optisch als deaktiviert erkennbar zu machen -
+                # Qt wendet die Disabled-Farbgruppe der Palette dafür nicht
+                # zuverlässig automatisch an (siehe
+                # `gui/theme.py::disabled_text_color`). Deshalb hier UND
+                # unten bei den einzelnen Kanal-Items explizit gesetzt.
+                device_item.setForeground(0, QBrush(disabled_text_color()))
             channels = device.physical_channels or [
                 f"{device.device_name}/ai{i}" for i in range(device.num_channels)
             ]
@@ -207,6 +216,7 @@ class HardwareChannelPickerDialog(QDialog):
                         & ~Qt.ItemFlag.ItemIsEnabled
                         & ~Qt.ItemFlag.ItemIsSelectable
                     )
+                    channel_item.setForeground(0, QBrush(disabled_text_color()))
                 device_item.addChild(channel_item)
                 if channel == current_channel:
                     selected_item = channel_item

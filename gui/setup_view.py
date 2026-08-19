@@ -22,7 +22,7 @@ import logging
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QLocale, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -66,6 +66,7 @@ from gui.theme import (
     RECORD_ICON_COLOR,
     action_button_style,
     connect_theme_changed,
+    disabled_text_color,
     draw_play_icon,
     draw_record_icon,
     draw_stop_icon,
@@ -640,6 +641,17 @@ class SetupView(QWidget):
             ]
             for channel in channels:
                 device_item.addChild(QTreeWidgetItem([channel]))
+            if device.module_type is None:
+                # Optisch als nicht verfügbar erkennbar machen - reines
+                # Deaktivieren über Item-Flags reicht dafür nicht aus (Qt
+                # wendet die Disabled-Palette-Farbe für einzelne
+                # QTreeWidgetItems nicht zuverlässig automatisch an), siehe
+                # `gui/theme.py::disabled_text_color`. Rekursiv, damit auch
+                # die (rein informativen) Kanal-Kindeinträge grau erscheinen.
+                brush = QBrush(disabled_text_color())
+                device_item.setForeground(0, brush)
+                for i in range(device_item.childCount()):
+                    device_item.child(i).setForeground(0, brush)
             self._device_list.addTopLevelItem(device_item)
         # Standardmäßig eingeklappt (nur Gerätenamen sichtbar) - spart bei
         # mehreren Modulen mit jeweils vielen Kanälen deutlich Platz. Der
