@@ -11,23 +11,32 @@
 *[Deutsche Version](README.de.md)*
 
 Windows desktop application for data acquisition and analysis with
-NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213).
+NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 
 ## Features (current state)
 
 **Hardware & Acquisition**
 - Device discovery and configuration for NI 9215 (±10 V voltage),
   NI 9234 (voltage or IEPE acceleration/microphone), NI 9210 (4-channel
-  thermocouple), and NI 9213 (16-channel thermocouple, J/K/T/E/N/R/S/B)
-- Synchronized acquisition across multiple modules (shared nidaqmx task)
+  thermocouple), NI 9213 (16-channel thermocouple, J/K/T/E/N/R/S/B), and
+  NI 9235 (8-channel 120 Ω quarter-bridge strain gauge)
+- Modules the driver reports but this application does not (yet)
+  recognize are flagged with a warning dialog on every device refresh,
+  and their channels cannot be selected in the channel configuration
+- Synchronized acquisition across multiple modules (shared nidaqmx task),
+  including automatic splitting into independent, internally
+  synchronized tasks when combined modules cannot share one sample clock
+  (e.g. NI 9210's fixed 14 S/s, or NI 9234/NI 9235 sample-rate grids that
+  don't intersect for the requested rate)
 - Live data acquisition on a dedicated DAQ thread via a thread-safe ring
   buffer (designed for up to 100 kHz)
 - Storage during measurement as Parquet (preferred) or CSV, including a
   `metadata` JSON file (start time, sample rate, hardware, channels,
   scaling, units)
 - Per-channel parameters depending on signal type (scaling, offset,
-  sensitivity, thermocouple type) via a dedicated settings dialog per
-  channel, including 2-point calibration for thermocouples
+  sensitivity, thermocouple type, gage factor/bridge type for strain)
+  via a dedicated settings dialog per channel, including 2-point
+  calibration for thermocouples
 
 **Live View**
 - Real-time visualization of multiple channels (PyQtGraph,
@@ -92,8 +101,8 @@ Directories:
 - `core/` – ring buffer, DAQ thread, measurement controller,
   channel/device logic, `MeasurementRunner` for GUI-less scripted use
 - `hardware/` – hardware abstraction and NI cDAQ modules (`ni9215.py`,
-  `ni9234.py`, `ni9210.py`, `ni9213.py`) – the only place that touches
-  `nidaqmx`
+  `ni9234.py`, `ni9210.py`, `ni9213.py`, `ni9235.py`) – the only place
+  that touches `nidaqmx`
 - `data/` – data models (`models.py`), metadata/projects, export
   (Parquet/CSV), loading saved measurements (`loader.py`, for the
   Analysis view)
@@ -128,11 +137,18 @@ necessary.
 ## Important note on hardware testing
 
 The hardware layer (`hardware/nidaq_device.py`, `ni9215.py`, `ni9234.py`,
-`ni9210.py`, `ni9213.py`) was developed and checked against the official
-`nidaqmx` API signatures, but has **not been comprehensively tested
-against real hardware** – NI 9210/NI 9213 (thermocouple, including
-2-point calibration) not at all so far. Testing with connected hardware
-is strongly recommended before relying on this for production
+`ni9210.py`, `ni9213.py`, `ni9235.py`) was developed and checked against
+the official `nidaqmx` API signatures. NI 9215, NI 9234, and NI 9210
+(including combined multi-rate measurements with NI 9210's fixed
+14 S/s alongside a faster module) have since been extensively verified
+against real hardware. NI 9213 has **not** been tested against real
+hardware so far. NI 9235 has been verified against real hardware for
+device discovery, channel configuration, and sample-rate handling
+(including a combined measurement with NI 9234 forcing an automatic
+task split) – but **not yet with an actual strain gauge/bridge
+connected** (only with an open/unconnected channel), so the accuracy of
+real strain readings is still unverified. Testing with connected
+hardware is strongly recommended before relying on this for production
 measurements. All other layers (ring buffer, controller, storage, GUI)
 have been tested end-to-end with simulated hardware.
 
