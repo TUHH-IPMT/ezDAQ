@@ -211,6 +211,30 @@ def _channel_axis_label(channel: Channel) -> str:
     return f"{channel.display_name}{unit_suffix}"
 
 
+def _apply_axis_label_visibility(plot_item, channel: Channel) -> None:
+    """Shows/hides the X and Y axis TITLES of `plot_item` according to
+    `Channel.plot_show_x_label`/`plot_show_y_label`.
+
+    `AxisItem.showLabel()` rather than clearing the text via
+    `setLabel("")`: it also gives the reserved space back
+    (`_updateWidth()`/`_updateHeight()` internally), so the plot area
+    actually grows - which is the point of switching a title off. Tick
+    marks, tick numbers and the grid are untouched.
+
+    MUST be called AFTER every `setLabel()` on the same axis:
+    `setLabel()` internally ends with `showLabel(bool(text))` and would
+    otherwise silently switch a hidden title back on - which is exactly
+    what happens on a language change (see `LiveView.retranslate_ui`).
+    """
+    for axis_name, show in (
+        ("bottom", channel.plot_show_x_label),
+        ("left", channel.plot_show_y_label),
+    ):
+        axis = plot_item.getAxis(axis_name)
+        if axis is not None:
+            axis.showLabel(show)
+
+
 def _channel_display_key(channel: Channel) -> tuple[str, str]:
     """Unique key for display-related dicts/caches (dialog rows, popout
     window tracking, Y range cache) - NOT just `hardware_channel` alone.
@@ -457,6 +481,8 @@ class ChannelDisplayDialog(QDialog):
                 "plot_y_max": channel.plot_y_max if channel.plot_y_max is not None else hw_default_max,
                 "plot_autoscale": channel.plot_autoscale,
                 "plot_time_window_seconds": channel.plot_time_window_seconds,
+                "plot_show_x_label": channel.plot_show_x_label,
+                "plot_show_y_label": channel.plot_show_y_label,
             }
             self._value_settings[key] = {
                 "plot_value_integer_digits": channel.plot_value_integer_digits,
@@ -608,9 +634,9 @@ class ChannelDisplayDialog(QDialog):
 
 class ChannelPlotSettingsDialog(QDialog):
     """Fine-grained settings for the plot area of ONE channel (curve/
-    background/grid line color, Y range, autoscaling, time span) -
-    opened via the "Plot" button in `ChannelDisplayDialog`, to keep its
-    row compact given the now-large number of options."""
+    background/grid line color, Y range, autoscaling, time span, axis
+    titles) - opened via the "Plot" button in `ChannelDisplayDialog`, to
+    keep its row compact given the now-large number of options."""
 
     def __init__(
         self, channel_name: str, settings: dict, parent: QWidget | None = None
@@ -666,6 +692,22 @@ class ChannelPlotSettingsDialog(QDialog):
         self._time_window_spin.setValue(settings["plot_time_window_seconds"])
         form.addRow(f"{t('plot_time_window_seconds')}:", self._time_window_spin)
 
+        # Axis TITLES only, switchable per axis - ticks/numbers/grid are
+        # deliberately NOT affected (see `Channel.plot_show_x_label`).
+        # Separate checkboxes rather than one shared "axis labels": with
+        # several subplots stacked in one grid it is usually the X title
+        # ("Time [s]", identical on every subplot) that is redundant,
+        # while the Y title still names the channel.
+        self._x_label_check = QCheckBox(t("show_x_axis_label_checkbox"))
+        self._x_label_check.setToolTip(t("axis_label_checkbox_tooltip"))
+        self._x_label_check.setChecked(settings.get("plot_show_x_label", True))
+        form.addRow("", self._x_label_check)
+
+        self._y_label_check = QCheckBox(t("show_y_axis_label_checkbox"))
+        self._y_label_check.setToolTip(t("axis_label_checkbox_tooltip"))
+        self._y_label_check.setChecked(settings.get("plot_show_y_label", True))
+        form.addRow("", self._y_label_check)
+
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
@@ -705,6 +747,8 @@ class ChannelPlotSettingsDialog(QDialog):
             "plot_y_max": self._max_spin.value(),
             "plot_autoscale": self._autoscale_check.isChecked(),
             "plot_time_window_seconds": self._time_window_spin.value(),
+            "plot_show_x_label": self._x_label_check.isChecked(),
+            "plot_show_y_label": self._y_label_check.isChecked(),
         }
 
 
@@ -1561,10 +1605,17 @@ class LiveView(QWidget):
         self._set_trigger_arm_button_text()
         self._storage_group.setTitle(t("storage_buffer_group"))
 
-        for plot_item in self._plot_items:
+        for pos, plot_item in enumerate(self._plot_items):
             # `units=` NOT used (see `ChannelPopoutWindow.__init__`) - time
             # unit consistently in square brackets everywhere.
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+            # `setLabel()` re-shows the title unconditionally (see
+            # `_apply_axis_label_visibility`) - without this, switching
+            # the language would bring back an X title turned off per
+            # channel.
+            if pos < len(self._curve_channel_indices):
+                channel = self._channels[self._curve_channel_indices[pos]]
+                _apply_axis_label_visibility(plot_item, channel)
 
         # Running duration/sample rate correct themselves on the next
         # timer tick - only the idle placeholder would otherwise stay
@@ -1758,6 +1809,12 @@ class LiveView(QWidget):
             channel.plot_y_min = values.get("plot_y_min")
             channel.plot_y_max = values.get("plot_y_max")
             channel.plot_autoscale = values.get("plot_autoscale", True)
+            # Applied by `_apply_channel_appearance()` at the end of this
+            # method (via `_apply_channel_curve_style`) - no rebuild
+            # needed, showing/hiding an axis title only re-lays out the
+            # plot item itself.
+            channel.plot_show_x_label = values.get("plot_show_x_label", True)
+            channel.plot_show_y_label = values.get("plot_show_y_label", True)
             new_time_window = max(
                 0.1, float(values.get("plot_time_window_seconds", 5.0))
             )
@@ -2220,6 +2277,11 @@ class LiveView(QWidget):
             axis = plot_item.getAxis(axis_name)
             if axis is not None:
                 axis.setTickPen(grid_color)
+        # Axis titles on/off - here rather than only at creation time, so
+        # a change in the dialog takes effect without a full rebuild
+        # (this method is the shared update path for main-grid subplots
+        # and own windows alike, see `_apply_channel_appearance`).
+        _apply_axis_label_visibility(plot_item, channel)
         plot_item.setVisible(channel.plot_show_graph)
 
     def _apply_channel_appearance(self) -> None:

@@ -763,6 +763,13 @@ class Channel:
             actual value range when `plot_y_min`/`plot_y_max` is
             exceeded/undershot - if `False`, the fixed range always
             stays active.
+        plot_show_x_label: Whether the X axis TITLE ("Time [s]") is
+            drawn on the plot. Only the title text - tick marks, tick
+            numbers and the grid stay untouched. Off gives the space
+            back to the plot area, which is what makes it worth having
+            with many subplots in one grid.
+        plot_show_y_label: Same for the Y axis title (channel name plus
+            unit, see `gui/live_view.py::_channel_axis_label`).
         plot_visible: Whether the channel is shown as its own subplot in
             the live view. Affects ONLY the display, not
             acquisition/storage - a channel with `plot_visible=False` is
@@ -800,6 +807,12 @@ class Channel:
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
     plot_time_window_seconds: float = 5.0
+    # Axis TITLES ("Time [s]" / channel name + unit), switchable
+    # separately per axis - ticks and grid are unaffected. Default on,
+    # i.e. the previous appearance (see
+    # `gui/live_view.py::ChannelPlotSettingsDialog`).
+    plot_show_x_label: bool = True
+    plot_show_y_label: bool = True
     # Whether the actual curve trace is shown (main grid AND own window) -
     # independent of `plot_show_value` below: both switched off together
     # shows nothing at all (see `plot_visible` for that). Default is ONLY
@@ -878,6 +891,8 @@ class Channel:
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
             "plot_time_window_seconds": self.plot_time_window_seconds,
+            "plot_show_x_label": self.plot_show_x_label,
+            "plot_show_y_label": self.plot_show_y_label,
             "plot_show_graph": self.plot_show_graph,
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
@@ -923,6 +938,8 @@ class Channel:
             plot_time_window_seconds=max(
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
             ),
+            plot_show_x_label=data.get("plot_show_x_label", True),
+            plot_show_y_label=data.get("plot_show_y_label", True),
             plot_show_graph=data.get("plot_show_graph", True),
             plot_show_value=data.get("plot_show_value", False),
             plot_value_integer_digits=max(

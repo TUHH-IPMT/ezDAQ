@@ -160,6 +160,13 @@ _translations = {
         "plot_background": "Hintergrund",
         "plot_grid_color": "Gitterlinien",
         "autoscale_checkbox": "Autoskalierung",
+        "show_x_axis_label_checkbox": "X-Achsenbeschriftung",
+        "show_y_axis_label_checkbox": "Y-Achsenbeschriftung",
+        "axis_label_checkbox_tooltip": (
+            "Blendet nur den Achsentitel ein/aus - Teilstriche, Zahlen "
+            "und Gitter bleiben unveraendert. Ausgeschaltet gibt der "
+            "Titel seinen Platz an die Plotflaeche zurueck."
+        ),
         "autoscale_checkbox_tooltip": (
             "Nutzt den festgelegten Bereich, solange die Messwerte darin "
             "liegen - überschreiten sie ihn, schaltet die Skalierung "
@@ -583,6 +590,13 @@ _translations = {
         "plot_background": "Background",
         "plot_grid_color": "Grid Lines",
         "autoscale_checkbox": "Autoscale",
+        "show_x_axis_label_checkbox": "X axis label",
+        "show_y_axis_label_checkbox": "Y axis label",
+        "axis_label_checkbox_tooltip": (
+            "Shows/hides the axis title only - tick marks, numbers and "
+            "grid stay unchanged. Switched off, the title gives its "
+            "space back to the plot area."
+        ),
         "autoscale_checkbox_tooltip": (
             "Uses the configured range as long as the measured values stay "
             "within it - if they exceed it, scaling automatically switches "
