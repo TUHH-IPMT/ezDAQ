@@ -135,13 +135,13 @@ fehlenden Treiber im Geraetebrowser.
 ```
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean installer\ezDAQ.spec
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\ezDAQ.spec
 ```
 
 Ergebnis ist `dist\ezDAQ\` (rund 310 MB, den Loewenanteil machen
 pyarrow, PyQt6 und scipy aus) mit `ezDAQ.exe` im Wurzelverzeichnis.
 
-`installer/ezDAQ.spec` nutzt **onedir**, nicht onefile: onefile entpackt bei jedem
+`packaging/ezDAQ.spec` nutzt **onedir**, nicht onefile: onefile entpackt bei jedem
 Start das gesamte Bundle nach `%TEMP%`, was Sekunden Startzeit kostet
 und ein Muster ist, das Virenscanner regelmaessig anschlagen laesst.
 `config/settings.py::get_resource_path` unterstuetzt beide Varianten.
@@ -155,12 +155,12 @@ zwangslaeufig.
 - **Am einfachsten:** `dist\ezDAQ\` auf eine Netzwerkfreigabe legen und
   den Nutzern eine Verknuepfung auf `ezDAQ.exe` geben. Keine
   Installation, ein Update ist ein Ordnertausch.
-- **Installer:** `installer/installer.iss` baut einen mit
+- **Installer:** `packaging/ezDAQ.iss` baut einen mit
   [Inno Setup](https://jrsoftware.org/isinfo.php) (kostenlos, muss
   separat installiert sein):
 
   ```
-  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\installer.iss
+  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\ezDAQ.iss
   ```
 
   Daraus entsteht `dist\ezDAQ-Setup-<version>.exe` mit Startmenue-

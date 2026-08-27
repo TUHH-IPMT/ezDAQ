@@ -22,7 +22,7 @@ APP_NAME = "ezDAQ"
 
 # Single source of truth for the version. Shown in the About dialog
 # (see `gui/main_window.py::_on_about`) and mirrored by the installer
-# (`installer/installer.iss`), which cannot import Python - a test keeps
+# (`packaging/ezDAQ.iss`), which cannot import Python - a test keeps
 # the two from drifting apart (`tests/test_version.py`).
 APP_VERSION = "0.1"
 

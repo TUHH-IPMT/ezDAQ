@@ -5,7 +5,7 @@ Keeps the application version consistent across the places that show it.
 
 `config/settings.py::APP_VERSION` is the single source of truth. The
 About dialog reads it directly (`gui/main_window.py::_on_about`), but
-`installer/installer.iss` cannot - Inno Setup has no way to import
+`packaging/ezDAQ.iss` cannot - Inno Setup has no way to import
 Python, so the value is duplicated there. That duplication is the whole
 reason this test exists: an installer announcing a different version
 than the running application is the kind of mismatch nobody notices
@@ -21,28 +21,28 @@ from pathlib import Path
 from config.settings import APP_VERSION
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_INSTALLER_SCRIPT = _PROJECT_ROOT / "installer" / "installer.iss"
+_INNO_SCRIPT = _PROJECT_ROOT / "packaging" / "ezDAQ.iss"
 
 
 class AppVersionTest(unittest.TestCase):
     def test_version_looks_like_a_version(self) -> None:
         self.assertRegex(APP_VERSION, r"^\d+(\.\d+)+$")
 
-    def test_installer_script_exists_where_the_readme_says(self) -> None:
+    def test_inno_script_exists_where_the_readme_says(self) -> None:
         """The README documents this path in the build command - a moved
         file would make the instructions wrong AND silently disable the
         version check below."""
-        self.assertTrue(_INSTALLER_SCRIPT.is_file(), _INSTALLER_SCRIPT)
+        self.assertTrue(_INNO_SCRIPT.is_file(), _INNO_SCRIPT)
 
-    def test_installer_version_matches_app_version(self) -> None:
-        script = _INSTALLER_SCRIPT.read_text(encoding="utf-8")
+    def test_inno_script_version_matches_app_version(self) -> None:
+        script = _INNO_SCRIPT.read_text(encoding="utf-8")
         match = re.search(r'#define\s+AppVersion\s+"([^"]+)"', script)
-        self.assertIsNotNone(match, "no AppVersion defined in installer.iss")
+        self.assertIsNotNone(match, "no AppVersion defined in ezDAQ.iss")
 
         self.assertEqual(
             match.group(1),
             APP_VERSION,
-            "installer/installer.iss and config/settings.py::APP_VERSION "
+            "packaging/ezDAQ.iss and config/settings.py::APP_VERSION "
             "disagree - bump both together",
         )
 

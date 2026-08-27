@@ -1,10 +1,10 @@
-; installer.iss
+; packaging/ezDAQ.iss
 ;
 ; Inno Setup script for ezDAQ - builds a Windows installer around the
 ; PyInstaller onedir output in dist\ezDAQ. See the "Deployment" section
 ; of the README for the full sequence.
 ;
-; Build:  "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\installer.iss
+; Build:  "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" packaging\ezDAQ.iss
 ;         (a per-machine Inno Setup install puts ISCC.exe under
 ;         "C:\Program Files (x86)\Inno Setup 6" instead)
 ; Result: dist\ezDAQ-Setup-<version>.exe (at the project root)

@@ -137,13 +137,13 @@ in the device browser.
 ```
 py -3 -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
-.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean installer\ezDAQ.spec
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\ezDAQ.spec
 ```
 
 The result is `dist\ezDAQ\` (roughly 310 MB, dominated by pyarrow,
 PyQt6 and scipy) with `ezDAQ.exe` at its root.
 
-`installer/ezDAQ.spec` uses **onedir**, not onefile: onefile unpacks the whole
+`packaging/ezDAQ.spec` uses **onedir**, not onefile: onefile unpacks the whole
 bundle into `%TEMP%` on every start, which costs seconds of startup time
 and is a pattern virus scanners regularly flag.
 `config/settings.py::get_resource_path` supports both modes.
@@ -157,12 +157,12 @@ way round.
 - **Simplest:** put `dist\ezDAQ\` on a network share and give users a
   shortcut to `ezDAQ.exe`. No installation, and an update is a folder
   replacement.
-- **Installer:** `installer/installer.iss` builds one with
+- **Installer:** `packaging/ezDAQ.iss` builds one with
   [Inno Setup](https://jrsoftware.org/isinfo.php) (free, must be
   installed separately):
 
   ```
-  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\installer.iss
+  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\ezDAQ.iss
   ```
 
   This produces `dist\ezDAQ-Setup-<version>.exe` with a Start menu

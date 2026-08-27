@@ -5,10 +5,11 @@ ezDAQ.spec
 PyInstaller build definition for ezDAQ - see the "Deployment" section of
 the README for how to run it.
 
-Lives in installer/ together with installer.iss, but is always invoked
+Lives in packaging/ next to ezDAQ.iss (the Inno Setup script that
+wraps this bundle into a Windows installer), but is always invoked
 from the PROJECT ROOT:
 
-    .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean installer\ezDAQ.spec
+    .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\ezDAQ.spec
 
 so that dist/ and build/ land at the top level, where .gitignore expects
 them. Paths to project files are therefore built from `SPECPATH` (the
