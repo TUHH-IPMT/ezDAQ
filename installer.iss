@@ -28,12 +28,27 @@ AppPublisherURL={#AppURL}
 AppSupportURL={#AppURL}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
-; Per-machine install into Program Files, which is what a shared lab PC
-; wants. Safe here because ezDAQ never writes next to its executable:
+; The user picks per-machine or per-user at the start of the wizard:
+;   "for all users"  -> elevates, installs into Program Files, one copy
+;                       for everyone. Right for a shared lab PC.
+;   "for me only"    -> NO administrator rights needed, installs into
+;                       %LOCALAPPDATA%\Programs\ezDAQ. Right when the
+;                       user does not have admin on their own machine.
+; Every path constant in this script is an "auto" one ({autopf},
+; {autodesktop}, {group}), so all of them follow that choice by
+; themselves - nothing else has to change between the two modes.
+;
+; Either way is safe because ezDAQ never writes next to its executable:
 ; configuration goes to %APPDATA%\ezDAQ (see
 ; config/settings.py::get_config_directory) and measurement data to a
 ; storage location the user picks.
-PrivilegesRequired=admin
+;
+; Note that the NI-DAQmx driver itself always needs administrator
+; rights. A per-user install of ezDAQ therefore only removes the admin
+; requirement for THIS application, not for putting a machine into a
+; state where it can measure at all.
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=dist
 OutputBaseFilename=ezDAQ-Setup-{#AppVersion}
 SetupIconFile=resources\icon.ico

@@ -166,9 +166,22 @@ way round.
   ```
 
   This produces `dist\ezDAQ-Setup-<version>.exe` with a Start menu
-  entry and an uninstaller. Installing into `Program Files` is safe:
-  ezDAQ never writes next to its executable - the configuration lives in
-  `%APPDATA%\ezDAQ` and measurement data wherever the user chose.
+  entry and an uninstaller. At the start of the wizard the user chooses:
+
+  - **for all users** - elevates, installs into `Program Files`, one
+    copy shared by everyone. Right for a shared lab PC.
+  - **for me only** - **no administrator rights**, installs into
+    `%LOCALAPPDATA%\Programs\ezDAQ`. Right when the user does not have
+    admin on their own machine. Costs the full bundle size per user
+    profile.
+
+  Either way is safe because ezDAQ never writes next to its executable -
+  the configuration lives in `%APPDATA%\ezDAQ` and measurement data
+  wherever the user chose.
+
+  The NI-DAQmx driver always needs administrator rights, so a per-user
+  install only removes that requirement for ezDAQ itself, not for
+  getting a machine into a state where it can measure.
 
 Note that an unsigned executable triggers a SmartScreen "unknown
 publisher" warning on every machine. Either suppress it by policy or

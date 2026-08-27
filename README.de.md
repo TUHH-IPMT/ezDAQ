@@ -164,10 +164,24 @@ zwangslaeufig.
   ```
 
   Daraus entsteht `dist\ezDAQ-Setup-<version>.exe` mit Startmenue-
-  Eintrag und Deinstallation. Die Installation nach `Programme` ist
-  unproblematisch: ezDAQ schreibt nie neben die eigene Programmdatei -
-  die Konfiguration liegt in `%APPDATA%\ezDAQ`, die Messdaten dort, wo
-  der Nutzer sie hinlegt.
+  Eintrag und Deinstallation. Zu Beginn des Assistenten waehlt der
+  Nutzer:
+
+  - **Fuer alle Benutzer** - fordert Adminrechte an, installiert nach
+    `Programme`, eine gemeinsame Kopie. Richtig fuer einen geteilten
+    Mess-PC.
+  - **Nur fuer mich** - **ohne Administratorrechte**, installiert nach
+    `%LOCALAPPDATA%\Programs\ezDAQ`. Richtig, wenn der Nutzer auf
+    seinem Rechner keine Adminrechte hat. Kostet die volle Bundle-Groesse
+    pro Benutzerprofil.
+
+  Beides ist unproblematisch, weil ezDAQ nie neben die eigene
+  Programmdatei schreibt - die Konfiguration liegt in
+  `%APPDATA%\ezDAQ`, die Messdaten dort, wo der Nutzer sie hinlegt.
+
+  Der NI-DAQmx-Treiber braucht immer Adminrechte. Eine Installation nur
+  fuer den Nutzer nimmt diese Huerde also nur fuer ezDAQ selbst, nicht
+  dafuer, den Rechner ueberhaupt messfaehig zu machen.
 
 Zu beachten: eine unsignierte .exe loest auf jedem Rechner die
 SmartScreen-Warnung "unbekannter Herausgeber" aus. Entweder per
