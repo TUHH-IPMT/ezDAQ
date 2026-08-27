@@ -340,3 +340,66 @@ class ValueRefreshBoundsTest(unittest.TestCase):
         self.assertLessEqual(dialog._refresh_hz_spin.value(), _MAX_VALUE_REFRESH_HZ)
         dialog.deleteLater()
         app.processEvents()
+
+    def test_zero_is_clamped_on_every_entry_path(self) -> None:
+        """0 Hz would be a division by zero in `_update_value_readouts`.
+        It can arrive from four directions, not just the spin box - each
+        one clamps to the same floor.
+        """
+        from PyQt6.QtWidgets import QApplication
+        from gui.live_view import (
+            ChannelValueSettingsDialog,
+            LiveView,
+            _channel_display_key,
+        )
+        from gui.widgets.channel_table import ChannelTableWidget
+
+        app = QApplication.instance() or QApplication([])
+        floor = 0.1
+
+        # 1. The spin box cannot even be set to it.
+        dialog = ChannelValueSettingsDialog(
+            "Force",
+            {
+                "plot_value_integer_digits": 3,
+                "plot_value_decimal_digits": 3,
+                "plot_value_refresh_hz": 0.0,
+            },
+        )
+        dialog._refresh_hz_spin.setValue(0.0)
+        self.assertGreaterEqual(dialog.results()["plot_value_refresh_hz"], floor)
+        dialog.deleteLater()
+
+        # 2. A stored configuration.
+        data = Channel("cDAQ1Mod1/ai0", "Force").to_dict()
+        for bad in (0.0, -5.0, float("nan")):
+            with self.subTest(stored=bad):
+                data["plot_value_refresh_hz"] = bad
+                self.assertGreaterEqual(
+                    Channel.from_dict(data).plot_value_refresh_hz, floor
+                )
+
+        # 3. The channel table's display-settings round trip.
+        table = ChannelTableWidget()
+        table.set_channels(
+            [Channel("cDAQ1Mod1/ai0", "Force", plot_value_refresh_hz=0.0)]
+        )
+        self.assertGreaterEqual(table.get_channels()[0].plot_value_refresh_hz, floor)
+        table.deleteLater()
+
+        # 4. Applying dialog values to already-running channels.
+        channel = Channel("cDAQ1Mod1/ai0", "Force")
+        view = _view(channel)
+        view._plot_items = []
+        view._curves = []
+        view._curve_channel_indices = []
+        view._value_boxes = []
+        view._value_unit_boxes = []
+        view._popout_windows = {}
+        view._popout_y_auto_active = {}
+        LiveView._apply_display_settings_to_live_channels(
+            view, {_channel_display_key(channel): {"plot_value_refresh_hz": 0.0}}
+        )
+        self.assertGreaterEqual(channel.plot_value_refresh_hz, floor)
+
+        app.processEvents()
