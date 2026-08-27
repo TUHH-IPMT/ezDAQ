@@ -212,31 +212,55 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(nav_container)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(8)
-        # 3D bevel look: "outset"/light gradient in the normal state looks
-        # raised, "inset"/dark gradient in the checked state simulates
-        # being pressed in. Padding deliberately identical in BOTH states
-        # so icon+text always stay exactly centered (no shifting).
+        # Depth, but from EDGES rather than a full-height ramp. The previous
+        # style used `border: outset` - CSS's crude two-tone bevel - plus a
+        # gradient spanning the whole tile. On tiles this tall (a third of
+        # the window) that ramp reads as a big glossy slab, and the checked
+        # state ran from palette(dark) to palette(midlight), a harsh jump.
+        #
+        # Instead: a crisp 1px border, and a gradient whose stops sit in the
+        # top few percent so only a thin highlight edge is visible - the way
+        # a real surface catches light. The checked tile inverts that into a
+        # thin dark edge (inset) and additionally carries an accent bar.
+        #
+        # Concretely: a resting tile gets a light edge at the TOP and a
+        # dark one at the BOTTOM (lit from above, standing proud); the
+        # checked tile gets the dark edge at the top and none at the
+        # bottom, which is what a recess looks like under the same light.
+        #
+        # The accent bar is a border-left that is ALWAYS 4px and merely
+        # changes color: making it appear only when checked would shift
+        # icon and text sideways on every switch.
+        #
+        # Only palette(...) references, no baked hex - that is what lets
+        # `_retheme_nav_icons()` repolish them into the new theme.
         nav_container.setStyleSheet(
             "QToolButton {"
-            # palette(dark) instead of palette(mid): "mid" sits too close
-            # to the background in both themes (contrast difference
-            # ~13-40) so the border was barely visible - "dark" doubles
-            # the contrast (~33-80) and stays clearly visible in both
-            # themes without changing the 3D bevel look itself.
-            "   border: 2px outset palette(dark);"
-            "   border-radius: 8px;"
+            "   border: 1px solid palette(mid);"
+            "   border-left: 4px solid transparent;"
+            "   border-radius: 10px;"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(light), stop:1 palette(button));"
+            "                                stop:0 palette(light),"
+            "                                stop:0.04 palette(button),"
+            "                                stop:0.96 palette(button),"
+            "                                stop:1 palette(mid));"
             "   padding: 8px;"
             "}"
             "QToolButton:hover:!checked {"
+            "   border-color: palette(dark);"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(light), stop:1 palette(midlight));"
+            "                                stop:0 palette(light),"
+            "                                stop:0.06 palette(midlight),"
+            "                                stop:1 palette(midlight));"
             "}"
             "QToolButton:checked {"
-            "   border: 2px inset palette(dark);"
+            "   border-color: palette(dark);"
+            "   border-left-color: palette(highlight);"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(dark), stop:1 palette(midlight));"
+            "                                stop:0 palette(dark),"
+            "                                stop:0.035 palette(mid),"
+            "                                stop:0.10 palette(midlight),"
+            "                                stop:1 palette(midlight));"
             "}"
             # As soon as ANY ancestor carries a stylesheet, Qt renders
             # child QLabels through the CSS engine instead of purely from
