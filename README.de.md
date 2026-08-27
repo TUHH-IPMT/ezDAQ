@@ -117,6 +117,63 @@ Verzeichnisse:
 - `doc/` – ergänzende Dokumentation (Messung per Skript steuern, ein
   Arduino-Sketch zum Testen des seriellen Triggers)
 
+## Verteilung (Windows-Programm)
+
+Fuer den Rollout auf mehrere Mess-PCs wird ezDAQ mit PyInstaller
+gepackt, damit die Nutzer weder Python noch eine virtuelle Umgebung
+brauchen.
+
+**Der NI-DAQmx-Treiber laesst sich nicht mitbuendeln.** Er ist ein
+System-Treiber von National Instruments (Administratorrechte, meist
+Neustart); `nidaqmx` laedt zur Laufzeit nur dessen DLL. Jeder Rechner
+braucht die NI-DAQmx-Runtime also unabhaengig davon, wie ezDAQ selbst
+verpackt ist. Ohne sie startet die Anwendung trotzdem und meldet den
+fehlenden Treiber im Geraetebrowser.
+
+### Bundle bauen
+
+```
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean ezDAQ.spec
+```
+
+Ergebnis ist `dist\ezDAQ\` (rund 310 MB, den Loewenanteil machen
+pyarrow, PyQt6 und scipy aus) mit `ezDAQ.exe` im Wurzelverzeichnis.
+
+`ezDAQ.spec` nutzt **onedir**, nicht onefile: onefile entpackt bei jedem
+Start das gesamte Bundle nach `%TEMP%`, was Sekunden Startzeit kostet
+und ein Muster ist, das Virenscanner regelmaessig anschlagen laesst.
+`config/settings.py::get_resource_path` unterstuetzt beide Varianten.
+
+Auf der aeltesten zu unterstuetzenden Windows-Version bauen - ein unter
+Windows 11 gebautes Bundle laeuft unter Windows 10, umgekehrt aber nicht
+zwangslaeufig.
+
+### Verteilen
+
+- **Am einfachsten:** `dist\ezDAQ\` auf eine Netzwerkfreigabe legen und
+  den Nutzern eine Verknuepfung auf `ezDAQ.exe` geben. Keine
+  Installation, ein Update ist ein Ordnertausch.
+- **Installer:** `installer.iss` baut einen mit
+  [Inno Setup](https://jrsoftware.org/isinfo.php) (kostenlos, muss
+  separat installiert sein):
+
+  ```
+  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+  ```
+
+  Daraus entsteht `dist\ezDAQ-Setup-<version>.exe` mit Startmenue-
+  Eintrag und Deinstallation. Die Installation nach `Programme` ist
+  unproblematisch: ezDAQ schreibt nie neben die eigene Programmdatei -
+  die Konfiguration liegt in `%APPDATA%\ezDAQ`, die Messdaten dort, wo
+  der Nutzer sie hinlegt.
+
+Zu beachten: eine unsignierte .exe loest auf jedem Rechner die
+SmartScreen-Warnung "unbekannter Herausgeber" aus. Entweder per
+Gruppenrichtlinie unterdruecken oder den Build mit einem
+Code-Signing-Zertifikat signieren.
+
 ## Wichtiger Hinweis zum Hardware-Test
 
 Die Hardware-Schicht (`hardware/nidaq_device.py`, `ni9215.py`,
