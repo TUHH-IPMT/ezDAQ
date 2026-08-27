@@ -646,6 +646,19 @@ class MainWindow(QMainWindow):
         if row == _VIEW_LIVE and not self._controller.is_running:
             channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
             self._live_view.preview_channels(channels)
+        # Refresh the device list whenever the user comes back to Setup:
+        # the list is a snapshot of the moment it was taken, and a cable
+        # pulled in the meantime would otherwise keep showing as
+        # available until the user thinks to press "search devices"
+        # (see `hardware/nidaq_device.py::_is_device_connected`).
+        #
+        # NOT while a measurement is running: discovery now probes the
+        # hardware via `self_test_device()`, which must not be fired at a
+        # device that currently has a running task. Re-entry during an
+        # already pending discovery is handled by `_on_discover_hardware`
+        # itself.
+        if row == _VIEW_SETUP and not self._controller.is_running:
+            self._setup_view.discover_hardware_requested.emit()
 
     # ------------------------------------------------------------------ #
     # Storage location

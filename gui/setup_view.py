@@ -177,6 +177,16 @@ class SetupView(QWidget):
         self._storage_path_is_set = False
         self._status_reason_key = ""
         self._discovery_in_progress = False
+        # Problem devices (unsupported module / not connected) already
+        # reported by dialog, as {(device_name, kind)}. Since switching
+        # to this view triggers a device search on its own (see
+        # `gui/main_window.py::_on_nav_changed`), the dialogs would
+        # otherwise pop up again on EVERY switch for a problem that is
+        # already visible - grayed out - in the device list. Reporting
+        # only what is NEW keeps the notice for a device that has just
+        # appeared/dropped out, without turning it into a recurring
+        # modal interruption (see `set_discovered_devices`).
+        self._reported_problem_devices: set[tuple[str, str]] = set()
 
         # The entire view sits inside a QScrollArea: with many sections
         # (devices, channels, measurement settings, storage) the window
@@ -595,9 +605,14 @@ class SetupView(QWidget):
 
         Additionally reports via dialog if any of the detected devices
         have an UNSUPPORTED module type (`DeviceInfo.module_type is
-        None`, see `hardware/nidaq_device.py::_map_product_type`) -
-        re-checked on EVERY device refresh, so a newly connected module
-        that is (still) unsupported doesn't go unnoticed. Their channels
+        None`, see `hardware/nidaq_device.py::_map_product_type`) or do
+        not respond at all - re-checked on EVERY device refresh, so a
+        newly connected module that is (still) unsupported, or a device
+        that has just dropped out, doesn't go unnoticed. Only devices
+        NOT yet reported produce a dialog (see
+        `_reported_problem_devices`): switching to this view triggers a
+        refresh on its own, and an unchanged problem must not pop up a
+        modal dialog every time - it stays visible in the device list. Their channels
         are already not selectable in the channel table (see
         `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) -
         the message here additionally makes visible WHY/WHICH ones.
@@ -612,6 +627,15 @@ class SetupView(QWidget):
         genuinely connected but unsupported module would be wrongly
         treated here as "no hardware" and neither displayed nor
         reported.
+
+        Devices that are merely configured in the driver but do not
+        respond (`DeviceInfo.is_connected is False`, e.g. a reserved
+        network cDAQ chassis whose cable was pulled) are deliberately
+        still LISTED - grayed out and reported via dialog - rather than
+        dropped: they are visible in NI-MAX too, and silently omitting
+        them would look like the device had never been configured.
+        Their channels are not offered for assignment (see
+        `gui/widgets/channel_table.py::set_available_devices`).
         """
         self._device_list.clear()
         devices_with_channels = [
@@ -621,10 +645,18 @@ class SetupView(QWidget):
         self._channel_table.set_available_devices(devices_with_channels)
         if not devices_with_channels:
             self._device_list.addTopLevelItem(QTreeWidgetItem([t("no_devices_found")]))
+            # Nothing left that could be a problem device - clearing the
+            # memo means a device that comes back and is STILL a problem
+            # is reported again rather than silently suppressed.
+            self._reported_problem_devices.clear()
             return
         unsupported_devices: list[DeviceInfo] = []
+        disconnected_devices: list[DeviceInfo] = []
         for device in devices_with_channels:
-            if device.module_type is None:
+            if not device.is_connected:
+                disconnected_devices.append(device)
+                module_info = f" [{t('device_not_connected')}]"
+            elif device.module_type is None:
                 unsupported_devices.append(device)
                 module_info = f" [{t('device_module_unsupported')}]"
             else:
@@ -640,7 +672,7 @@ class SetupView(QWidget):
             ]
             for channel in channels:
                 device_item.addChild(QTreeWidgetItem([channel]))
-            if device.module_type is None:
+            if device.module_type is None or not device.is_connected:
                 # Make it visually recognizable as unavailable - merely
                 # disabling via item flags isn't enough for this (Qt
                 # doesn't reliably apply the disabled palette color to
@@ -658,9 +690,43 @@ class SetupView(QWidget):
         # channels. The user expands a device individually as needed.
         self._device_list.collapseAll()
 
-        if unsupported_devices:
+        # Only devices NOT already reported produce a dialog - see
+        # `_reported_problem_devices`. The memo is replaced by the
+        # current problem set (not merely extended), so a device that
+        # recovers and drops out again is reported afresh.
+        newly_disconnected = [
+            d
+            for d in disconnected_devices
+            if (d.device_name, "disconnected") not in self._reported_problem_devices
+        ]
+        newly_unsupported = [
+            d
+            for d in unsupported_devices
+            if (d.device_name, "unsupported") not in self._reported_problem_devices
+        ]
+        self._reported_problem_devices = {
+            (d.device_name, "disconnected") for d in disconnected_devices
+        } | {(d.device_name, "unsupported") for d in unsupported_devices}
+
+        # Reported BEFORE the unsupported-module warning: a device that
+        # doesn't answer at all is the more fundamental problem, and its
+        # module type comes from the same stale driver cache that made it
+        # look available in the first place - so a "not supported" notice
+        # about it would be actively misleading. Hence a disconnected
+        # device is never also counted as unsupported above.
+        if newly_disconnected:
+            device_list = "\n".join(
+                f"- {d.device_name} ({d.product_type})" for d in newly_disconnected
+            )
+            QMessageBox.warning(
+                self,
+                t("disconnected_devices_title"),
+                t("disconnected_devices_body", devices=device_list),
+            )
+
+        if newly_unsupported:
             module_list = "\n".join(
-                f"- {d.device_name} ({d.product_type})" for d in unsupported_devices
+                f"- {d.device_name} ({d.product_type})" for d in newly_unsupported
             )
             QMessageBox.warning(
                 self,
@@ -678,6 +744,9 @@ class SetupView(QWidget):
         """
         self._device_list.clear()
         self._discovered_devices = None
+        # Discovery failed as a whole, so nothing is known about problem
+        # devices any more - report afresh after the next success.
+        self._reported_problem_devices.clear()
         self._channel_table.set_available_devices([])
         self._device_list.addTopLevelItem(
             QTreeWidgetItem([f"{t('device_discovery_failed')}: {message}"])

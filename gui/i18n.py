@@ -328,11 +328,20 @@ _translations = {
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
         "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
+        "hw_channel_device_offline": "{channel} (Gerät nicht verbunden)",
         "device_module_unsupported": "nicht unterstützt",
+        "device_not_connected": "nicht verbunden",
         "unsupported_modules_title": "Nicht unterstützte Module",
         "unsupported_modules_body": (
             "Die folgenden Module werden derzeit nicht unterstützt und können "
             "keinem Kanal zugewiesen werden:\n\n{modules}"
+        ),
+        "disconnected_devices_title": "Nicht verbundene Geräte",
+        "disconnected_devices_body": (
+            "Die folgenden Geräte sind im NI-DAQmx-Treiber konfiguriert, "
+            "antworten aber nicht. Sie sind vermutlich ausgesteckt oder über "
+            "das Netzwerk nicht erreichbar und können keinem Kanal zugewiesen "
+            "werden:\n\n{devices}"
         ),
         "no_hw_channel_available": "Kein freier Hardwarekanal mehr verfügbar.",
         "all_channels_assigned_title": "Alle Kanäle belegt",
@@ -742,11 +751,19 @@ _translations = {
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
         "hw_channel_unsupported_module": "{channel} (module not supported)",
+        "hw_channel_device_offline": "{channel} (device not connected)",
         "device_module_unsupported": "not supported",
+        "device_not_connected": "not connected",
         "unsupported_modules_title": "Unsupported Modules",
         "unsupported_modules_body": (
             "The following modules are currently not supported and cannot be "
             "assigned to a channel:\n\n{modules}"
+        ),
+        "disconnected_devices_title": "Disconnected Devices",
+        "disconnected_devices_body": (
+            "The following devices are configured in the NI-DAQmx driver but "
+            "do not respond. They are most likely unplugged or unreachable "
+            "over the network and cannot be assigned to a channel:\n\n{devices}"
         ),
         "no_hw_channel_available": "No free hardware channel available.",
         "all_channels_assigned_title": "All Channels Assigned",

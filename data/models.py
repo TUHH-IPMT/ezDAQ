@@ -973,6 +973,16 @@ class DeviceInfo:
             supported" despite `num_channels == 0`, instead of silently
             hiding them like an empty chassis entry (see
             `gui/setup_view.py::set_discovered_devices`).
+        is_connected: Whether the device actually responded to a
+            hardware probe during discovery - as opposed to merely being
+            present in the NI-DAQmx configuration database. Everything
+            else in this dataclass comes from that database, which keeps
+            a once-configured device (in particular a RESERVED network
+            cDAQ chassis) listed with its full channel tree even after
+            its cable has been pulled. Without this flag such a device
+            would keep showing up as selectable although no measurement
+            can be started with it (see
+            `hardware/nidaq_device.py::_is_device_connected`).
     """
 
     device_name: str
@@ -982,6 +992,9 @@ class DeviceInfo:
     has_any_channels: bool = False
     # List of physical channel names, e.g. ["cDAQ1Mod1/ai0", ...]
     physical_channels: list[str] = field(default_factory=list)
+    # Defaults to True so that callers constructing DeviceInfo without a
+    # hardware probe (tests, metadata) keep the previous behavior.
+    is_connected: bool = True
 
 
 @dataclass
