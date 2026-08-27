@@ -835,6 +835,16 @@ class Channel:
     plot_value_integer_digits: int = 3
     # Number of decimal digits - see `plot_value_integer_digits`.
     plot_value_decimal_digits: int = 3
+    # How often the numeric readout is refreshed, in Hz - deliberately
+    # DECOUPLED from the live view's tick rate (~66 Hz, see
+    # `gui/live_view.py::_UI_UPDATE_INTERVAL_MS`), which the curve needs
+    # but which makes a noisy reading an unreadable blur of digits.
+    # Between two refreshes the readings are AVERAGED rather than
+    # sampled: showing every n-th instantaneous value would only make
+    # the number jump less often, not settle down. Applies solely to the
+    # readout - curve, ring buffer and stored data are untouched. See
+    # `gui/live_view.py::ChannelValueSettingsDialog`.
+    plot_value_refresh_hz: float = 30.0
     plot_visible: bool = True
     # Shows the channel in its own window (instead of the live view's
     # main grid) (see `gui/live_view.py::ChannelPopoutWindow`) - not
@@ -897,6 +907,7 @@ class Channel:
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
             "plot_value_decimal_digits": self.plot_value_decimal_digits,
+            "plot_value_refresh_hz": self.plot_value_refresh_hz,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
             "plot_popout_x": self.plot_popout_x,
@@ -947,6 +958,9 @@ class Channel:
             ),
             plot_value_decimal_digits=max(
                 0, int(data.get("plot_value_decimal_digits", 3))
+            ),
+            plot_value_refresh_hz=max(
+                0.1, float(data.get("plot_value_refresh_hz", 30.0))
             ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),

@@ -54,6 +54,8 @@ Architecture note (performance):
 from __future__ import annotations
 
 import logging
+import math
+import time
 import weakref
 
 import numpy as np
@@ -127,6 +129,10 @@ pg.setConfigOptions(antialias=True, useOpenGL=True)
 _DEFAULT_DISPLAY_WINDOW_SECONDS = 5.0
 _UI_UPDATE_INTERVAL_MS = 15  # ~66 Hz; with useOpenGL=True, rendering is no longer the bottleneck
 _STORAGE_UPDATE_INTERVAL_MS = 1000  # file access (stat) less often than the plot update
+# Upper bound for `Channel.plot_value_refresh_hz`: refreshing the readout
+# more often than the view ticks is impossible, so the spin box stops
+# exactly there instead of offering a rate that silently caps.
+_MAX_VALUE_REFRESH_HZ = 1000.0 / _UI_UPDATE_INTERVAL_MS
 # Upper bound on the point count passed to `curve.setData()` (see
 # `_downsample_for_display`) - well more than any screen has horizontal
 # pixels, so the curve looks visually unchanged.
@@ -487,6 +493,7 @@ class ChannelDisplayDialog(QDialog):
             self._value_settings[key] = {
                 "plot_value_integer_digits": channel.plot_value_integer_digits,
                 "plot_value_decimal_digits": channel.plot_value_decimal_digits,
+                "plot_value_refresh_hz": channel.plot_value_refresh_hz,
             }
 
             row = QHBoxLayout()
@@ -753,8 +760,9 @@ class ChannelPlotSettingsDialog(QDialog):
 
 
 class ChannelValueSettingsDialog(QDialog):
-    """Fine-grained setting for the value display of ONE channel (number
-    format) - opened via the "Value" button in `ChannelDisplayDialog`."""
+    """Fine-grained settings for the value display of ONE channel (number
+    format, refresh rate) - opened via the "Value" button in
+    `ChannelDisplayDialog`."""
 
     def __init__(
         self, channel_name: str, settings: dict, parent: QWidget | None = None
@@ -780,6 +788,26 @@ class ChannelValueSettingsDialog(QDialog):
         self._value_format_edit.setToolTip(t("plot_value_integer_digits_tooltip"))
         form.addRow(f"{t('plot_value_integer_digits')}:", self._value_format_edit)
 
+        # Refresh rate of the READOUT, decoupled from the view's tick
+        # rate (see `Channel.plot_value_refresh_hz`). Capped at the tick
+        # rate itself - anything above that could not be honored.
+        self._refresh_hz_spin = NoWheelDoubleSpinBox()
+        # Upper bound rounded DOWN to the spin box's own precision: with
+        # one decimal, a maximum of 66.666... would be displayed - and
+        # returned - as 66.7, i.e. minimally ABOVE the tick rate it is
+        # supposed to cap.
+        self._refresh_hz_spin.setRange(0.1, math.floor(_MAX_VALUE_REFRESH_HZ * 10.0) / 10.0)
+        self._refresh_hz_spin.setDecimals(1)
+        self._refresh_hz_spin.setSingleStep(1.0)
+        self._refresh_hz_spin.setValue(
+            min(
+                _MAX_VALUE_REFRESH_HZ,
+                max(0.1, float(settings.get("plot_value_refresh_hz", 30.0))),
+            )
+        )
+        self._refresh_hz_spin.setToolTip(t("plot_value_refresh_hz_tooltip"))
+        form.addRow(f"{t('plot_value_refresh_hz')}:", self._refresh_hz_spin)
+
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
@@ -792,6 +820,7 @@ class ChannelValueSettingsDialog(QDialog):
         return {
             "plot_value_integer_digits": integer_digits,
             "plot_value_decimal_digits": decimal_digits,
+            "plot_value_refresh_hz": self._refresh_hz_spin.value(),
         }
 
 
@@ -1119,6 +1148,18 @@ class LiveView(QWidget):
         self._value_unit_boxes: list = []
         self._value_unit_labels: list = []
 
+        # Averaging accumulator for the numeric readout, per CHANNEL
+        # INDEX (not per subplot position): main grid and own window show
+        # the same channel and must therefore show the same number at the
+        # same moment. Between two refreshes every incoming sample is
+        # summed here; on refresh the mean is displayed and the
+        # accumulator reset - see `Channel.plot_value_refresh_hz` and
+        # `_update_value_readouts`.
+        self._value_sum: dict[int, float] = {}
+        self._value_count: dict[int, int] = {}
+        # Monotonic deadline per channel index for the next refresh.
+        self._value_next_refresh_s: dict[int, float] = {}
+
         # Own windows of individual channels (see `ChannelPopoutWindow`,
         # `_on_popout_requested`), keyed by `_channel_display_key()`
         # (NOT `hardware_channel` alone - see there) - independent of
@@ -1401,6 +1442,7 @@ class LiveView(QWidget):
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
         self._channel_total_ticks_seen = {index: 0 for index in range(len(channels))}
+        self._reset_value_readout_state()
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -1818,6 +1860,7 @@ class LiveView(QWidget):
         visibility_changed = False
         time_window_changed = False
         integer_digits_changed = False
+        refresh_rate_changed = False
         show_value_changed = False
         for channel in self._channels:
             values = settings.get(_channel_display_key(channel))
@@ -1871,6 +1914,12 @@ class LiveView(QWidget):
                 integer_digits_changed = True
             channel.plot_value_integer_digits = new_integer_digits
             channel.plot_value_decimal_digits = new_decimal_digits
+            new_refresh_hz = max(
+                0.1, float(values.get("plot_value_refresh_hz", 30.0))
+            )
+            if new_refresh_hz != channel.plot_value_refresh_hz:
+                refresh_rate_changed = True
+            channel.plot_value_refresh_hz = new_refresh_hz
             new_visible = values.get("plot_visible", True)
             new_popout = values.get("plot_popout", False)
             if new_visible != channel.plot_visible or new_popout != channel.plot_popout:
@@ -1878,6 +1927,11 @@ class LiveView(QWidget):
             channel.plot_visible = new_visible
             channel.plot_popout = new_popout
             changed = True
+        if refresh_rate_changed:
+            # Otherwise a rate just lowered would keep the OLD, already
+            # running deadline and the next refresh could come up to one
+            # old interval late (see `_reset_value_readout_state`).
+            self._reset_value_readout_state()
         if visibility_changed or time_window_changed or integer_digits_changed or show_value_changed:
             if time_window_changed:
                 # The buffer is sized to the widest time window across
@@ -1900,6 +1954,83 @@ class LiveView(QWidget):
         elif changed:
             self._apply_channel_appearance()
             self._apply_y_range_mode()
+
+    def _reset_value_readout_state(self) -> None:
+        """Clears the averaging accumulators and schedules the first
+        refresh of every channel for the next tick.
+
+        Called at measurement start and whenever the refresh rate is
+        changed in the dialog - without it, a rate that was just lowered
+        would keep the OLD deadline (up to the old interval too late),
+        and a remnant of the previous measurement could still be part of
+        the first mean shown.
+        """
+        self._value_sum = {index: 0.0 for index in range(len(self._channels))}
+        self._value_count = {index: 0 for index in range(len(self._channels))}
+        # 0.0 = due immediately, so the first reading appears on the very
+        # next tick rather than only after one full interval.
+        self._value_next_refresh_s = {index: 0.0 for index in range(len(self._channels))}
+
+    def _update_value_readouts(self, scaled: np.ndarray) -> dict[int, float]:
+        """Feeds the block just read into the per-channel accumulators
+        and returns, for every channel whose refresh is due NOW, the mean
+        over the elapsed interval.
+
+        Channels not in the returned dict keep their currently displayed
+        number - deliberately not rewritten with an interim value, that
+        is the whole point of the setting (see
+        `Channel.plot_value_refresh_hz`).
+
+        The mean rather than the last sample: at 1000 S/s and 4 Hz, one
+        interval covers ~250 readings: showing `values[-1]` would pick a
+        single arbitrary one of them and keep jumping, just less often.
+        """
+        now = time.monotonic()
+        due: dict[int, float] = {}
+        for index in range(len(self._channels)):
+            block = scaled[index]
+            if block.size:
+                self._value_sum[index] = self._value_sum.get(index, 0.0) + float(block.sum())
+                self._value_count[index] = self._value_count.get(index, 0) + int(block.size)
+            if now < self._value_next_refresh_s.get(index, 0.0):
+                continue
+            count = self._value_count.get(index, 0)
+            if count:
+                due[index] = self._value_sum[index] / count
+                self._value_sum[index] = 0.0
+                self._value_count[index] = 0
+            # Deadline advanced even without new data: otherwise a
+            # channel idle for a while would fire on every tick as soon
+            # as data resumes, until it has caught up.
+            #
+            # Advanced by a fixed grid step instead of `now + interval`:
+            # a refresh can only ever happen ON a tick (~66 Hz), so
+            # `now` already carries the overshoot past the deadline, and
+            # re-basing on it would accumulate that overshoot and
+            # quantize the rate DOWN - a requested 30 Hz would really
+            # run at ~22 Hz. Stepping the grid keeps the long-run
+            # average at the requested rate.
+            # Clamped on BOTH sides at the point of use, not just in
+            # the dialog: `Channel.plot_value_refresh_hz` also arrives
+            # from a stored configuration, which `Channel.from_dict`
+            # only guards against zero/negative (a division by zero
+            # here) - it cannot know the view's tick rate. An absurdly
+            # high stored rate would otherwise be capped only
+            # incidentally, by the re-base branch below; capping it here
+            # makes "never faster than the view ticks" the stated rule.
+            refresh_hz = min(
+                _MAX_VALUE_REFRESH_HZ,
+                max(0.1, self._channels[index].plot_value_refresh_hz),
+            )
+            interval = 1.0 / refresh_hz
+            deadline = self._value_next_refresh_s.get(index, 0.0) + interval
+            if deadline <= now:
+                # More than a full interval behind - the view was
+                # stopped, or the rate is faster than the tick rate.
+                # Re-base instead of firing on every tick to catch up.
+                deadline = now + interval
+            self._value_next_refresh_s[index] = deadline
+        return due
 
     def _find_channel_by_key(self, key: tuple[str, str]) -> Channel | None:
         """Finds a channel via `_channel_display_key()` - for popout-
@@ -2516,6 +2647,11 @@ class LiveView(QWidget):
         self._check_threshold_trigger(scaled)
         self._check_stop_threshold_trigger(scaled)
         self._write_to_display_buffer(scaled)
+        # Numeric readout runs on its OWN, per-channel rate (see
+        # `Channel.plot_value_refresh_hz`) - computed once here for both
+        # the main grid and any own windows, so the same channel never
+        # shows two different numbers at the same moment.
+        due_values = self._update_value_readouts(scaled)
 
         channel_views = {
             index: self._get_channel_display_view(index)
@@ -2531,11 +2667,13 @@ class LiveView(QWidget):
                 times, values, self._channel_display_capacity(channel_index)
             )
             curve.setData(draw_times, draw_values)
-            if values.size and self._value_labels[pos] is not None:
+            if channel_index in due_values and self._value_labels[pos] is not None:
                 channel = self._channels[channel_index]
                 self._value_labels[pos].setText(
                     _format_channel_value(
-                        values[-1], channel.plot_value_integer_digits, channel.plot_value_decimal_digits
+                        due_values[channel_index],
+                        channel.plot_value_integer_digits,
+                        channel.plot_value_decimal_digits,
                     )
                 )
 
@@ -2562,10 +2700,12 @@ class LiveView(QWidget):
                     times, values, self._channel_display_capacity(index)
                 )
                 window.curve.setData(draw_times, draw_values)
-                if values.size:
+                if index in due_values:
                     window.value_label.setText(
                         _format_channel_value(
-                            values[-1], channel.plot_value_integer_digits, channel.plot_value_decimal_digits
+                            due_values[index],
+                            channel.plot_value_integer_digits,
+                            channel.plot_value_decimal_digits,
                         )
                     )
                 self._apply_channel_y_range(

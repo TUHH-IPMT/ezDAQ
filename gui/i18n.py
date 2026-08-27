@@ -197,6 +197,14 @@ _translations = {
         "value_settings_button_tooltip": "Einstellungen für die Messwertanzeige: Zahlenformat.",
         "value_settings_dialog_title": "Zahlenwert-Einstellungen",
         "plot_value_integer_digits": "Zahlenformat",
+        "plot_value_refresh_hz": "Aktualisierungsrate [Hz]",
+        "plot_value_refresh_hz_tooltip": (
+            "Wie oft der Zahlenwert neu geschrieben wird. Betrifft nur die "
+            "Zahl - Kurve, Messung und gespeicherte Daten bleiben unveraendert. "
+            "Zwischen zwei Aktualisierungen wird gemittelt, die Anzeige zeigt "
+            "also den Mittelwert ueber das Intervall statt eines zufaelligen "
+            "Momentanwerts. Niedrigere Werte beruhigen ein verrauschtes Signal."
+        ),
         "plot_value_integer_digits_tooltip": (
             "Format der Messwertanzeige, z. B. \"000.0000\" (Nullen vor "
             "dem Punkt = Vorkommastellen, danach = Nachkommastellen - der "
@@ -627,6 +635,14 @@ _translations = {
         "value_settings_button_tooltip": "Value display settings: number format.",
         "value_settings_dialog_title": "Value Display Settings",
         "plot_value_integer_digits": "Number Format",
+        "plot_value_refresh_hz": "Refresh Rate [Hz]",
+        "plot_value_refresh_hz_tooltip": (
+            "How often the numeric value is rewritten. Affects the number "
+            "only - curve, measurement and stored data stay unchanged. "
+            "Readings are averaged between two refreshes, so the display "
+            "shows the mean over the interval rather than a random "
+            "instantaneous sample. Lower values settle a noisy signal."
+        ),
         "plot_value_integer_digits_tooltip": (
             "Format of the value display, e.g. \"000.0000\" (zeros before "
             "the dot = integer digits, after = decimal digits - the dot "
