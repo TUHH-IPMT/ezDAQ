@@ -37,6 +37,7 @@ from PyQt6.QtGui import (
     QPixmap,
     QPolygonF,
 )
+from PyQt6.QtWidgets import QProxyStyle, QStyle
 
 _current_theme = "light"
 
@@ -225,6 +226,50 @@ def _build_dark_palette() -> QPalette:
 _PALETTES = {"light": _build_light_palette, "dark": _build_dark_palette}
 
 
+# Outline drawn around every check box indicator, per theme. Chosen
+# for contrast against the field it sits in (Base): 4.0:1 on the light
+# theme's white, 3.4:1 on the dark theme's #232323.
+_CHECKBOX_OUTLINE_COLORS = {"light": "#7f7f7f", "dark": "#8a8a8a"}
+
+
+def checkbox_outline_color() -> QColor:
+    """Border color for check box indicators in the current theme."""
+    return QColor(_CHECKBOX_OUTLINE_COLORS[_current_theme])
+
+
+class _CheckBoxOutlineStyle(QProxyStyle):
+    """Fusion, plus a visible border around check box indicators.
+
+    Fusion derives that border from the palette's Window color and
+    LIGHTENS it. On the dark theme that yields a readable gray; on the
+    light theme #f0f0f0 lightens to white and the box disappears into
+    its own white fill - measured: of the pixels Fusion painted for an
+    unchecked box, none were anything but the fill or the background.
+    Only the check mark of a ticked box was visible, and an unticked
+    one looked like an empty cell.
+
+    Fixed here rather than per widget: the color is derived inside the
+    style from a role the application needs for other things, so no
+    palette tweak reaches it, and a helper called at each of the 13
+    construction sites would be forgotten by the fourteenth.
+    """
+
+    def drawPrimitive(self, element, option, painter, widget=None) -> None:
+        super().drawPrimitive(element, option, painter, widget)
+        if element != QStyle.PrimitiveElement.PE_IndicatorCheckBox:
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(checkbox_outline_color(), 1))
+        # Half-pixel inset so the 1px stroke lands ON the pixel grid
+        # instead of straddling two rows and rendering as a soft gray.
+        painter.drawRoundedRect(
+            QRectF(option.rect).adjusted(0.5, 0.5, -0.5, -0.5), 2.0, 2.0
+        )
+        painter.restore()
+
+
 def init_theme(app) -> None:
     """Must be called once at app startup (after `QApplication(...)`,
     before the first window is created).
@@ -233,7 +278,8 @@ def init_theme(app) -> None:
     reliably on all platforms (the native Windows style ignores a custom
     `QPalette` for many widgets).
     """
-    app.setStyle("Fusion")
+    # Fusion with one correction, see `_CheckBoxOutlineStyle`.
+    app.setStyle(_CheckBoxOutlineStyle("Fusion"))
     app.setPalette(_PALETTES[_current_theme]())
     # Global PyQtGraph default for newly created widgets, BEFORE
     # `style_plot_container()` applies explicitly - window background
