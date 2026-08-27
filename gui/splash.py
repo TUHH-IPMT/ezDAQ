@@ -31,9 +31,26 @@ Two details make that possible at all:
 from __future__ import annotations
 
 import math
+import time
 
-from PyQt6.QtCore import QEasingCurve, QEventLoop, QPropertyAnimation, Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
+from PyQt6.QtCore import (
+    QEasingCurve,
+    QEventLoop,
+    QPointF,
+    QRect,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+)
+from PyQt6.QtGui import (
+    QImage,
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtWidgets import QSplashScreen
 
 # Height of the band holding the animated trace, below the logo.
@@ -42,15 +59,66 @@ _TRACE_HEIGHT = 58
 _FOOTER_HEIGHT = 46
 _PROGRESS_HEIGHT = 4
 _MARGIN = 16
+# Gap between the logo (or its card) and the trace band. Without it
+# the card's rounded bottom edge reaches into the band and the curve
+# visibly cuts across it.
+_LOGO_GAP = 12
 
-# ~33 fps. Fast enough to look continuous, slow enough that the repaint
-# never competes with the initialization steps it is meant to cover.
-_FRAME_INTERVAL_MS = 30
+# ~60 fps. The splash only has to repaint the trace band and footer
+# (logo and card are baked into the base pixmap), so this stays cheap.
+_FRAME_INTERVAL_MS = 16
 # Full sweeps of the trace per second.
 _TRACE_SPEED_HZ = 0.5
 _TRACE_CYCLES = 2.5
+# Distance between path sample points, in pixels.
+_TRACE_SAMPLE_PX = 3.0
+# Edge length of the duck riding the leading edge of the trace.
+_RIDER_SIZE = 30
 
 _FADE_MS = 180
+
+
+def _dark_ink_share(image: QImage) -> float:
+    """Share of the opaque pixels that are very dark.
+
+    Sampled coarsely - this only decides whether a light panel goes
+    behind the logo, so a rough figure is plenty."""
+    step = max(1, min(image.width(), image.height()) // 96)
+    dark = opaque = 0
+    for x in range(0, image.width(), step):
+        for y in range(0, image.height(), step):
+            color = image.pixelColor(x, y)
+            if color.alpha() < 128:
+                continue
+            opaque += 1
+            if color.lightness() < 90:
+                dark += 1
+    return dark / opaque if opaque else 0.0
+
+
+def _opaque_bounds(image: QImage) -> QRect | None:
+    """Bounding box of everything not fully transparent, or `None` for
+    an image without an alpha channel or with nothing opaque in it.
+
+    Sampled on a coarse grid and then padded by one step: an exact
+    per-pixel scan of a 1374x1145 image on every start would cost more
+    than the crop is worth, and a pixel of slack is invisible."""
+    if not image.hasAlphaChannel():
+        return None
+    step = max(1, min(image.width(), image.height()) // 128)
+    xs, ys = [], []
+    for x in range(0, image.width(), step):
+        for y in range(0, image.height(), step):
+            if image.pixelColor(x, y).alpha() > 8:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return None
+    left = max(0, min(xs) - step)
+    top = max(0, min(ys) - step)
+    right = min(image.width() - 1, max(xs) + step)
+    bottom = min(image.height() - 1, max(ys) + step)
+    return QRect(left, top, right - left + 1, bottom - top + 1)
 
 
 class StartupSplash(QSplashScreen):
@@ -74,12 +142,13 @@ class StartupSplash(QSplashScreen):
             plot_foreground_color,
         )
 
-        self._logo = logo
+        self._logo_height = logo.height()
         self._version = version
         self._step_count = max(1, step_count)
         self._step = 0
         self._message = ""
         self._phase = 0.0
+        self._last_frame = time.monotonic()
 
         self._background = QColor(plot_background_color())
         self._text_color = QColor(plot_foreground_color())
@@ -91,18 +160,40 @@ class StartupSplash(QSplashScreen):
         self._faint_color = QColor(self._text_color)
         self._faint_color.setAlpha(38)
 
-        # The logo PNG is opaque white with no alpha channel, so under
-        # the dark theme it cannot blend into the background. It is
-        # therefore placed on a rounded white card with a margin all
-        # around - which reads as a deliberate design element instead
-        # of a mismatched white block butting against a dark strip. In
-        # the light theme the card is barely distinguishable from the
-        # background anyway.
+        # The duck rides the leading edge of the trace.
+        self._rider = self._load_rider()
+
+        # A cut-out logo sits directly on the themed background. Only an
+        # OPAQUE one gets a rounded white card behind it: without an alpha
+        # channel it cannot blend into a dark background, and a white
+        # block butting against a dark strip looks like a mistake rather
+        # than a design. See `_logo_card_color`.
         width = logo.width() + 2 * _MARGIN
-        height = _MARGIN + logo.height() + _TRACE_HEIGHT + _FOOTER_HEIGHT
+        self._trace_top = _MARGIN + logo.height() + _LOGO_GAP
+        height = self._trace_top + _TRACE_HEIGHT + _FOOTER_HEIGHT
         canvas = QPixmap(width, height)
         canvas.fill(self._background)
-        self._logo_card = QColor("#ffffff")
+
+        # Logo and card are painted ONCE into the base pixmap, not per
+        # frame in `drawContents`: they never change, and re-blitting a
+        # 420px logo on every one of ~60 frames a second was the bulk of
+        # the work behind the visibly jerky duck.
+        card = self._logo_card_color(logo)
+        painter = QPainter(canvas)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if card is not None:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(card)
+            painter.drawRoundedRect(
+                _MARGIN // 2,
+                _MARGIN // 2,
+                width - _MARGIN,
+                logo.height() + _MARGIN,
+                6,
+                6,
+            )
+        painter.drawPixmap(_MARGIN, _MARGIN, logo)
+        painter.end()
         super().__init__(canvas)
 
         # Frameless is already implied by QSplashScreen; the translucent
@@ -124,6 +215,9 @@ class StartupSplash(QSplashScreen):
         """Shows the splash, fading it in and starting the animation."""
         self.setWindowOpacity(0.0)
         super().show()
+        # Reset here, not in __init__: construction and show() can be
+        # seconds apart, and the duck would jump forward by that gap.
+        self._last_frame = time.monotonic()
         self._timer.start()
         self._fade_to(1.0)
 
@@ -164,6 +258,60 @@ class StartupSplash(QSplashScreen):
         loop.exec()
         self.finish(window)
 
+    def _logo_card_color(self, logo: QPixmap) -> QColor | None:
+        """A light panel behind the logo, or `None` if it can stand on
+        the background by itself.
+
+        Needed in two cases:
+
+        * an OPAQUE logo, which carries its own white block and cannot
+          blend into a dark background at all,
+        * a cut-out logo drawn mostly in DARK ink on a dark background -
+          the ezDAQ mark is about half deep navy (measured: 48% of its
+          opaque pixels below lightness 90), which all but disappears on
+          the dark theme's #232323.
+
+        Under the light theme a cut-out logo needs nothing and gets
+        nothing, which is the point of having cut it out."""
+        if not logo.hasAlphaChannel():
+            return QColor("#ffffff")
+        if self._background.lightness() > 128:
+            return None
+        return (
+            QColor("#f7f7f7")
+            if _dark_ink_share(logo.toImage()) > 0.25
+            else None
+        )
+
+    @staticmethod
+    def _load_rider() -> QPixmap | None:
+        """The small duck riding the trace, or `None` if unavailable.
+
+        Cropped to its opaque bounding box first: the source is a
+        cut-out with a wide transparent margin, and scaling that
+        untouched would leave the duck floating well above the curve
+        with no obvious reason.
+
+        Never raises - a missing or damaged image costs the gimmick, it
+        must not keep the application from starting."""
+        try:
+            from config.settings import get_resource_path
+
+            path = get_resource_path("ezDAQ_logo_full_3.png")
+            if not path.exists():
+                return None
+            image = QImage(str(path))
+            if image.isNull():
+                return None
+            bounds = _opaque_bounds(image)
+            if bounds is not None:
+                image = image.copy(bounds)
+            return QPixmap.fromImage(image).scaledToHeight(
+                _RIDER_SIZE, Qt.TransformationMode.SmoothTransformation
+            )
+        except Exception:
+            return None
+
     def _fade_to(self, target: float) -> None:
         animation = QPropertyAnimation(self, b"windowOpacity", self)
         animation.setDuration(_FADE_MS)
@@ -176,36 +324,30 @@ class StartupSplash(QSplashScreen):
         self._fade = animation
 
     def _on_frame(self) -> None:
-        self._phase += _FRAME_INTERVAL_MS / 1000.0 * _TRACE_SPEED_HZ
-        self.repaint()
+        # Time-based rather than counting frames: a delayed timer tick
+        # would otherwise slow the duck down instead of letting it catch
+        # up, which is exactly what reads as stuttering.
+        now = time.monotonic()
+        self._phase += (now - self._last_frame) * _TRACE_SPEED_HZ
+        self._last_frame = now
+        # `update()`, not `repaint()`: repaint() paints synchronously on
+        # the spot, so a slow frame delays the next tick instead of being
+        # coalesced with it.
+        self.update()
 
     # ------------------------------------------------------------------ #
     # Painting
     # ------------------------------------------------------------------ #
 
     def drawContents(self, painter: QPainter) -> None:  # type: ignore[override]
-        """Draws logo, trace, progress bar, status and version.
+        """Draws only what changes: the trace, the progress bar, the
+        status line and the version.
 
-        Everything is painted here rather than baked into the splash
-        pixmap: the trace changes every frame, and the progress bar and
-        status change per step.
-        """
+        Logo and card are already in the base pixmap that QSplashScreen
+        blits before calling this (see `__init__`)."""
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         width = self.pixmap().width()
-
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(self._logo_card)
-        painter.drawRoundedRect(
-            _MARGIN // 2,
-            _MARGIN // 2,
-            width - _MARGIN,
-            self._logo.height() + _MARGIN,
-            6,
-            6,
-        )
-        painter.drawPixmap(_MARGIN, _MARGIN, self._logo)
-
-        trace_top = _MARGIN + self._logo.height()
+        trace_top = self._trace_top
         self._draw_trace(painter, trace_top, width, _TRACE_HEIGHT)
         self._draw_footer(painter, trace_top + _TRACE_HEIGHT, width)
 
@@ -230,22 +372,72 @@ class StartupSplash(QSplashScreen):
             painter.drawLine(left, int(y), right, int(y))
 
         progress = self._phase % 1.0
-        visible = int((right - left) * progress)
-        if visible < 2:
+        # Float, not an integer pixel count: quantizing the leading edge to
+        # whole pixels made the duck advance in visible steps.
+        span = (right - left) * progress
+        if span < 2:
             return
 
-        painter.setPen(QPen(self._trace_color, 2))
-        previous = None
-        for offset in range(visible + 1):
-            x = left + offset
+        # A single QPainterPath of QPointF, NOT a chain of drawLine() calls
+        # between integer points: rounding every y to a whole pixel turns
+        # the sine into a visible staircase, and antialiasing cannot
+        # recover a shape that was already quantized away - it only
+        # smooths the edges of each little step. Float coordinates let the
+        # rasterizer place the curve between pixels, which is what makes
+        # it look smooth.
+        pen = QPen(self._trace_color, 2.0)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        # `drawPath()` FILLS with the current brush - which is still
+        # the white of the logo card set above, so without this the
+        # area under the sine is painted solid white.
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        fade = min(1.0, progress * 4)
+
+        def trace_y(offset: float) -> float:
+            """Fades in over the first few pixels so the curve does not jump
+            back to full height when the sweep restarts."""
             angle = 2 * math.pi * _TRACE_CYCLES * offset / (right - left)
-            # Fades in over the first few pixels so the curve does not
-            # jump back to full height when the sweep restarts.
-            y = middle - math.sin(angle) * amplitude * min(1.0, progress * 4)
-            current = (x, int(y))
-            if previous is not None:
-                painter.drawLine(previous[0], previous[1], current[0], current[1])
-            previous = current
+            return middle - math.sin(angle) * amplitude * fade
+
+        # Sampled every few pixels instead of every single one: the sine is
+        # smooth enough that the difference is invisible, and it keeps the
+        # path short enough to rebuild on every frame.
+        path = QPainterPath()
+        path.moveTo(QPointF(left, trace_y(0.0)))
+        offset = _TRACE_SAMPLE_PX
+        while offset < span:
+            path.lineTo(QPointF(left + offset, trace_y(offset)))
+            offset += _TRACE_SAMPLE_PX
+        # Ends exactly at the leading edge, so the duck sits on the tip
+        # rather than a rounded-down sample point.
+        path.lineTo(QPointF(left + span, trace_y(span)))
+        painter.drawPath(path)
+
+        if self._rider is None:
+            return
+
+        # Sits on the leading edge and tilts with the local slope, so it
+        # leans into the climbs and descents instead of sliding along
+        # flat. The slope is the analytic derivative of the sine above -
+        # sampling two neighbouring points would jitter at the turning
+        # points, where the difference is smallest.
+        angle = 2 * math.pi * _TRACE_CYCLES * span / (right - left)
+        slope = (
+            -math.cos(angle)
+            * amplitude
+            * fade
+            * (2 * math.pi * _TRACE_CYCLES / (right - left))
+        )
+        painter.save()
+        painter.translate(QPointF(left + span, trace_y(span)))
+        painter.rotate(math.degrees(math.atan(slope)))
+        painter.drawPixmap(
+            QPointF(-_RIDER_SIZE / 2, -float(_RIDER_SIZE)), self._rider
+        )
+        painter.restore()
 
     def _draw_footer(self, painter: QPainter, top: int, width: int) -> None:
         left = _MARGIN

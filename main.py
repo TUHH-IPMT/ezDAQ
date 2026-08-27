@@ -126,7 +126,12 @@ def main() -> int:
     # appears - without visible feedback, the app would look frozen
     # during this time.
     splash = None
-    splash_path = get_resource_path("ezDAQ_logo_full.png")
+    # Cut-out logo preferred: with an alpha channel it sits directly on
+    # the themed splash background. The older, opaque-white version stays
+    # as a fallback so a missing file cannot break the start.
+    splash_path = get_resource_path("ezDAQ_logo_full_2.png")
+    if not splash_path.exists():
+        splash_path = get_resource_path("ezDAQ_logo_full.png")
     if splash_path.exists():
         pixmap = QPixmap(str(splash_path))
         if not pixmap.isNull():
