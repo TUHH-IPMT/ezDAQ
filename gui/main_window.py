@@ -38,6 +38,7 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSizePolicy,
+    QGraphicsDropShadowEffect,
     QStackedWidget,
     QWidget,
 )
@@ -71,6 +72,7 @@ from gui.theme import (
     draw_gear_icon,
     draw_play_icon,
     draw_record_icon,
+    nav_shadow_color,
     get_theme,
     is_position_on_screen,
     repolish,
@@ -210,7 +212,10 @@ class MainWindow(QMainWindow):
         nav_container.setFixedWidth(180)
         nav_container.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         nav_layout = QVBoxLayout(nav_container)
-        nav_layout.setContentsMargins(0, 0, 0, 0)
+        # Room for the tiles' drop shadows (see
+        # `_update_nav_tile_elevation`) - with zero margins the shadow
+        # is clipped at the column edges and the tiles look flat again.
+        nav_layout.setContentsMargins(7, 7, 7, 7)
         nav_layout.setSpacing(8)
         # A real, readable bevel - but built from 1px edges and palette tones
         # instead of CSS's `outset`/`inset`, whose hard two-tone frame is what
@@ -293,6 +298,7 @@ class MainWindow(QMainWindow):
         self._nav_buttons: list[QToolButton] = []
         self._nav_icon_labels: list[QLabel] = []
         self._nav_text_labels: list[QLabel] = []
+        self._nav_shadows: list[QGraphicsDropShadowEffect] = []
         for index, key, icon in _NAV_ITEMS:
             button = QToolButton()
             button.setCheckable(True)
@@ -329,10 +335,16 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append(button)
             self._nav_icon_labels.append(icon_label)
             self._nav_text_labels.append(text_label)
+            # One effect instance per widget - a QGraphicsEffect cannot
+            # be shared between widgets.
+            shadow = QGraphicsDropShadowEffect(button)
+            button.setGraphicsEffect(shadow)
+            self._nav_shadows.append(shadow)
             # stretch=1 on all three buttons -> they evenly share the full
             # height of the navigation column.
             nav_layout.addWidget(button, stretch=1)
 
+        self._update_nav_tile_elevation()
         self._retheme_nav_icons()
         self._nav_button_group.idClicked.connect(self._on_nav_changed)
         root_layout.addWidget(nav_container)
@@ -358,6 +370,33 @@ class MainWindow(QMainWindow):
         """
         self._nav_buttons[index].setChecked(True)
         self._workspace.setCurrentIndex(min(index, _VIEW_ANALYSIS))
+        self._update_nav_tile_elevation()
+
+    def _update_nav_tile_elevation(self) -> None:
+        """Raises the resting tiles and sinks the checked one.
+
+        Qt stylesheets have no `box-shadow`, so a border alone can only
+        hint at depth. A real drop shadow underneath is what makes a tile
+        look like it stands off the surface - and removing it on the
+        checked tile is what makes that one look pressed into it.
+
+        Called on every switch and after a theme change: the shadow color
+        differs per theme (see `gui/theme.py::nav_shadow_color`).
+        """
+        color = nav_shadow_color()
+        for button, shadow in zip(self._nav_buttons, self._nav_shadows):
+            shadow.setColor(color)
+            if button.isChecked():
+                # Pressed in: no cast shadow at all, otherwise the tile
+                # still floats however dark the face is.
+                shadow.setEnabled(False)
+            else:
+                shadow.setEnabled(True)
+                shadow.setBlurRadius(20)
+                shadow.setXOffset(0)
+                # Straight down - a light source overhead, matching the
+                # light edge the stylesheet puts on the top of each tile.
+                shadow.setYOffset(5)
 
     def _retheme_nav_icons(self) -> None:
         """Redraws the navigation icons and forces a re-polish of the
@@ -383,6 +422,7 @@ class MainWindow(QMainWindow):
         ]
         for widget in all_widgets:
             repolish(widget)
+        self._update_nav_tile_elevation()
 
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()
@@ -709,6 +749,7 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, row: int) -> None:
         self._workspace.setCurrentIndex(min(row, _VIEW_ANALYSIS))
+        self._update_nav_tile_elevation()
         # Pre-populate the live view with the channels currently
         # configured in Setup as soon as we switch there (the plot
         # windows are then already in place instead of only appearing

@@ -451,6 +451,18 @@ def nav_icon_color() -> QColor:
     return QColor(0, 0, 0)
 
 
+def nav_shadow_color() -> QColor:
+    """Drop-shadow color for the raised navigation tiles.
+
+    Qt stylesheets have no `box-shadow`, so the elevation is a real
+    `QGraphicsDropShadowEffect` (see
+    `gui/main_window.py::_update_nav_tile_elevation`). Denser in the
+    dark theme: a shadow has to be darker than its background to be
+    seen at all, and the dark surface is already close to black.
+    """
+    return QColor(0, 0, 0, 160 if _current_theme == "dark" else 100)
+
+
 def disabled_text_color() -> QColor:
     """Theme-dependent text color for disabled/unavailable entries (see
     `_build_light_palette`/`_build_dark_palette`,
