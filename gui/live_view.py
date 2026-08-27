@@ -94,6 +94,7 @@ from gui.theme import (
     action_button_style,
     axis_tick_point_size,
     connect_theme_changed,
+    channel_curve_color,
     curve_color,
     draw_ellipsis_icon,
     draw_play_icon,
@@ -454,7 +455,6 @@ class ChannelDisplayDialog(QDialog):
     def __init__(
         self,
         channels: list[Channel],
-        default_color: str,
         default_background: str,
         default_grid_color: str,
         plot_columns: int = 1,
@@ -470,13 +470,12 @@ class ChannelDisplayDialog(QDialog):
         self._plot_settings: dict[tuple[str, str], dict] = {}
         self._value_settings: dict[tuple[str, str], dict] = {}
         self._rows: dict[tuple[str, str], dict[str, QWidget]] = {}
-        # Handed to the plot sub-dialog so it can preview a `None` color
-        # as the theme default without storing it.
-        self._color_defaults = {
-            "plot_color": default_color,
-            "plot_background": default_background,
-            "plot_grid_color": default_grid_color,
-        }
+        # Per CHANNEL, not one shared set: the curve color a channel falls
+        # back to depends on its position in the palette (see
+        # `gui/theme.py::channel_curve_color`), so a single shared default
+        # would show every swatch in the same color while the plots are
+        # drawn in different ones. Filled in per channel below.
+        self._color_defaults: dict[tuple[str, str], dict[str, str]] = {}
 
         outer_layout = QVBoxLayout(self)
 
@@ -546,6 +545,11 @@ class ChannelDisplayDialog(QDialog):
                 "plot_show_y_label": channel.plot_show_y_label,
                 "plot_show_grid": channel.plot_show_grid,
                 "plot_line_width": channel.plot_line_width,
+            }
+            self._color_defaults[key] = {
+                "plot_color": channel_curve_color(index),
+                "plot_background": default_background,
+                "plot_grid_color": default_grid_color,
             }
             self._value_settings[key] = {
                 "plot_value_integer_digits": channel.plot_value_integer_digits,
@@ -683,7 +687,7 @@ class ChannelDisplayDialog(QDialog):
             self._plot_settings[key],
             self,
             channel_count=len(self._plot_settings),
-            color_defaults=self._color_defaults,
+            color_defaults=self._color_defaults.get(key),
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_sub_dialog_result(self._plot_settings, key, dialog)
@@ -761,7 +765,6 @@ class ChannelPlotSettingsDialog(QDialog):
         self._color = settings.get("plot_color")
         self._background = settings.get("plot_background")
         self._grid_color = settings.get("plot_grid_color")
-        self._color_defaults = color_defaults or {}
         self._color_defaults = color_defaults or {}
 
         layout = QVBoxLayout(self)
@@ -2115,7 +2118,6 @@ class LiveView(QWidget):
             return None
         dialog = ChannelDisplayDialog(
             channels,
-            curve_color(),
             plot_background_color(),
             plot_foreground_color(),
             plot_columns=self._plot_columns,
@@ -2350,7 +2352,9 @@ class LiveView(QWidget):
             x_min + channel.plot_time_window_seconds,
             padding=0,
         )
-        self._apply_channel_curve_style(window.plot_item, window.curve, channel)
+        self._apply_channel_curve_style(
+            window.plot_item, window.curve, channel, channel_index
+        )
         self._apply_channel_y_range(window.plot_item, channel, None, self._popout_y_auto_active)
         # IMPORTANT: the closure holds `self` (LiveView) ONLY as a
         # `weakref`, not directly - otherwise a real reference cycle
@@ -2643,7 +2647,12 @@ class LiveView(QWidget):
             # (`Channel.plot_time_window_seconds`) - a linked X axis
             # would force the most recently set range onto all other
             # subplots and make the per-channel setting pointless.
-            curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=channel.plot_line_width))
+            curve = plot_item.plot(
+                pen=pg.mkPen(
+                    color=channel.plot_color or channel_curve_color(index),
+                    width=channel.plot_line_width,
+                )
+            )
             # NO `autoDownsample` - see comment in `ChannelPopoutWindow.__init__`.
             curve.setClipToView(True)
             plot_item.getViewBox().setBackgroundColor(background)
@@ -2724,13 +2733,20 @@ class LiveView(QWidget):
         self._apply_y_range_mode()
 
     @staticmethod
-    def _apply_channel_curve_style(plot_item, curve, channel: Channel) -> None:
+    def _apply_channel_curve_style(
+        plot_item, curve, channel: Channel, index: int = 0
+    ) -> None:
         """Applies curve color and width, background color, gridline color
         and grid visibility of a SINGLE channel to its plot/curve pair -
         theme default if no own color is configured. Shared by main-grid
         subplots (`_apply_channel_appearance`) and own windows
         (`_open_popout_window`)."""
-        color = channel.plot_color or curve_color()
+        # Falls back to the channel's PALETTE slot, not one shared color:
+        # every channel used to be drawn in the same blue, which made a grid
+        # of subplots hard to scan. Derived from the position on each
+        # repaint, never stored - a stored color would stop following the
+        # theme (see `channel_curve_color`).
+        color = channel.plot_color or channel_curve_color(index)
         # Clamped like everywhere the width is read: a stored 0 would make
         # the curve invisible with nothing in the dialog explaining why.
         curve.setPen(pg.mkPen(color=color, width=max(0.1, channel.plot_line_width)))
@@ -2769,7 +2785,9 @@ class LiveView(QWidget):
         """
         for pos, (plot_item, curve) in enumerate(zip(self._plot_items, self._curves)):
             channel = self._channels[self._curve_channel_indices[pos]]
-            self._apply_channel_curve_style(plot_item, curve, channel)
+            self._apply_channel_curve_style(
+                plot_item, curve, channel, self._curve_channel_indices[pos]
+            )
             # Window background color, not the individual channel color -
             # see `_rebuild_plots` for the reasoning.
             if self._value_boxes[pos] is not None:
@@ -2779,7 +2797,12 @@ class LiveView(QWidget):
         for key, window in self._popout_windows.items():
             channel = self._find_channel_by_key(key)
             if channel is not None:
-                self._apply_channel_curve_style(window.plot_item, window.curve, channel)
+                self._apply_channel_curve_style(
+                    window.plot_item,
+                    window.curve,
+                    channel,
+                    self._channels.index(channel),
+                )
                 # Own window is a normal Qt layout (not a PyQtGraph
                 # `GraphicsLayout` with a fixed column width like in the
                 # main grid) - `setVisible()` on the `PlotWidget` itself

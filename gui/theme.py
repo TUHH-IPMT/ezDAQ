@@ -247,6 +247,56 @@ def get_theme() -> str:
     return _current_theme
 
 
+# Categorical palette for the channel curves. Without it every channel
+# was drawn in the same `curve` color above, so a grid of six subplots
+# showed six identical blue traces.
+#
+# Values are the documented default palette of the data-viz guidance,
+# taken unchanged - re-stepping them by hand would invalidate the
+# checks they passed. Verified against ezDAQ's ACTUAL plot surfaces
+# (#ffffff / #232323) rather than the reference ones, on the adjacent
+# pairlist, in both modes:
+#
+#   lightness band, chroma floor          PASS
+#   CVD separation  worst dE 9.1 / 8.4    PASS (target >= 8)
+#   normal vision   worst dE 19.6 / 19.3  PASS (floor >= 15)
+#   contrast        3 light slots < 3:1   WARN
+#
+# The contrast warning carries an obligation to label the marks
+# directly - which the live view does by construction: every subplot
+# is titled with its channel name and unit and carries its own axis
+# labels.
+#
+# That direct labelling is also why the palette is used at its full
+# length rather than the three-slot cap the guidance puts on
+# all-pairs forms: color here is a scanning aid, not the key to which
+# channel is which. Beyond eight channels the order repeats, for the
+# same reason.
+_CHANNEL_CURVE_COLORS = {
+    "light": (
+        "#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+        "#e87ba4", "#008300", "#4a3aa7", "#e34948",
+    ),
+    "dark": (
+        "#3987e5", "#d95926", "#199e70", "#c98500",
+        "#d55181", "#008300", "#9085e9", "#e66767",
+    ),
+}
+
+
+def channel_curve_color(index: int) -> str:
+    """Default curve color for the channel at position `index`.
+
+    Derived from the position on every repaint rather than stored on the
+    channel: a stored color would stop following the theme, which is the
+    exact defect `gui/live_view.py::ChannelPlotSettingsDialog` was fixed
+    for. A channel that HAS its own color keeps it - see
+    `_apply_channel_curve_style`.
+    """
+    palette = _CHANNEL_CURVE_COLORS[_current_theme]
+    return palette[max(0, index) % len(palette)]
+
+
 def curve_color() -> str:
     """Default curve color for new plots in the current theme."""
     return _PLOT_COLORS[_current_theme]["curve"]

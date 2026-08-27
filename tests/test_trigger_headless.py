@@ -126,7 +126,7 @@ class TriggerModelTests(unittest.TestCase):
             plot_visible=False,
             plot_popout=True,
         )
-        dialog = ChannelDisplayDialog([channel], "#ffffff", "#000000", "#cccccc")
+        dialog = ChannelDisplayDialog([channel], "#000000", "#cccccc")
         key = (channel.hardware_channel, channel.display_name)
         row = dialog._rows[key]
         visible_check = row["visible"]

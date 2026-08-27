@@ -296,7 +296,7 @@ class DialogHeightTest(unittest.TestCase):
         app = _app()
         heights = []
         for count in (8, 32, 64):
-            dialog = ChannelDisplayDialog(_channels(count), "#f00", "#fff", "#ccc")
+            dialog = ChannelDisplayDialog(_channels(count), "#fff", "#ccc")
             heights.append(dialog.sizeHint().height())
             dialog.deleteLater()
         app.processEvents()
@@ -312,7 +312,7 @@ class DialogHeightTest(unittest.TestCase):
 
         app = _app()
         # 8 x NI9215 in a cDAQ-9189.
-        dialog = ChannelDisplayDialog(_channels(32), "#f00", "#fff", "#ccc")
+        dialog = ChannelDisplayDialog(_channels(32), "#fff", "#ccc")
         height = dialog.sizeHint().height()
         dialog.deleteLater()
         app.processEvents()
@@ -354,17 +354,19 @@ class ThemeColorFreezingTest(unittest.TestCase):
             ChannelPlotSettingsDialog,
             _channel_display_key,
         )
-        from gui.theme import curve_color, plot_background_color, plot_foreground_color
+        from gui.theme import plot_background_color, plot_foreground_color
 
         parent = ChannelDisplayDialog(
-            [channel], curve_color(), plot_background_color(), plot_foreground_color()
+            [channel], plot_background_color(), plot_foreground_color()
         )
         key = _channel_display_key(channel)
         sub = ChannelPlotSettingsDialog(
             channel.display_name,
             parent._plot_settings[key],
             channel_count=1,
-            color_defaults=parent._color_defaults,
+            # The per-channel set, not the whole map - the curve default
+            # depends on the channel's palette slot.
+            color_defaults=parent._color_defaults[key],
         )
         return parent, sub
 
