@@ -470,6 +470,13 @@ class ChannelDisplayDialog(QDialog):
         self._plot_settings: dict[tuple[str, str], dict] = {}
         self._value_settings: dict[tuple[str, str], dict] = {}
         self._rows: dict[tuple[str, str], dict[str, QWidget]] = {}
+        # Handed to the plot sub-dialog so it can preview a `None` color
+        # as the theme default without storing it.
+        self._color_defaults = {
+            "plot_color": default_color,
+            "plot_background": default_background,
+            "plot_grid_color": default_grid_color,
+        }
 
         outer_layout = QVBoxLayout(self)
 
@@ -521,9 +528,16 @@ class ChannelDisplayDialog(QDialog):
             hw_default_min = channel.min_range if channel.min_range is not None else -10.0
             hw_default_max = channel.max_range if channel.max_range is not None else 10.0
             self._plot_settings[key] = {
-                "plot_color": channel.plot_color or default_color,
-                "plot_background": channel.plot_background or default_background,
-                "plot_grid_color": channel.plot_grid_color or default_grid_color,
+                # RAW values, deliberately not filled in with the theme
+                # default: `None` means "follow the theme". Filling it in here
+                # and writing it back on OK froze the colors of whichever theme
+                # happened to be active - after that the channel never followed
+                # a theme change again, and there was no way back. The plot
+                # sub-dialog SHOWS the theme default for a `None`, it just no
+                # longer stores it.
+                "plot_color": channel.plot_color,
+                "plot_background": channel.plot_background,
+                "plot_grid_color": channel.plot_grid_color,
                 "plot_y_min": channel.plot_y_min if channel.plot_y_min is not None else hw_default_min,
                 "plot_y_max": channel.plot_y_max if channel.plot_y_max is not None else hw_default_max,
                 "plot_autoscale": channel.plot_autoscale,
@@ -669,6 +683,7 @@ class ChannelDisplayDialog(QDialog):
             self._plot_settings[key],
             self,
             channel_count=len(self._plot_settings),
+            color_defaults=self._color_defaults,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_sub_dialog_result(self._plot_settings, key, dialog)
@@ -731,6 +746,7 @@ class ChannelPlotSettingsDialog(QDialog):
         settings: dict,
         parent: QWidget | None = None,
         channel_count: int = 1,
+        color_defaults: dict | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{t('plot_settings_dialog_title')} - {channel_name}")
@@ -739,9 +755,14 @@ class ChannelPlotSettingsDialog(QDialog):
         # which names how many channels are about to be overwritten.
         self._channel_count = channel_count
 
-        self._color = settings["plot_color"]
-        self._background = settings["plot_background"]
-        self._grid_color = settings["plot_grid_color"]
+        # Each may be `None` = "follow the theme". The swatches show
+        # `_effective()` so a color is still visible, but only a color
+        # actually PICKED is stored (see `_pick_color`/`results`).
+        self._color = settings.get("plot_color")
+        self._background = settings.get("plot_background")
+        self._grid_color = settings.get("plot_grid_color")
+        self._color_defaults = color_defaults or {}
+        self._color_defaults = color_defaults or {}
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -749,21 +770,25 @@ class ChannelPlotSettingsDialog(QDialog):
 
         self._color_button = QPushButton()
         self._color_button.setFixedSize(24, 24)
-        self._update_swatch(self._color_button, self._color)
+        self._update_swatch(self._color_button, self._effective("plot_color"))
         self._color_button.clicked.connect(lambda: self._pick_color("color"))
         form.addRow(f"{t('plot_color')}:", self._color_button)
 
         self._bg_button = QPushButton()
         self._bg_button.setFixedSize(24, 24)
-        self._update_swatch(self._bg_button, self._background)
+        self._update_swatch(self._bg_button, self._effective("plot_background"))
         self._bg_button.clicked.connect(lambda: self._pick_color("background"))
         form.addRow(f"{t('plot_background')}:", self._bg_button)
 
         self._grid_button = QPushButton()
         self._grid_button.setFixedSize(24, 24)
-        self._update_swatch(self._grid_button, self._grid_color)
+        self._update_swatch(self._grid_button, self._effective("plot_grid_color"))
         self._grid_button.clicked.connect(lambda: self._pick_color("grid"))
         form.addRow(f"{t('plot_grid_color')}:", self._grid_button)
+        self._reset_colors_button = QPushButton(t("reset_colors_to_theme"))
+        self._reset_colors_button.setToolTip(t("reset_colors_to_theme_tooltip"))
+        self._reset_colors_button.clicked.connect(self._reset_colors_to_theme)
+        form.addRow("", self._reset_colors_button)
         # Directly below the grid COLOR, which it belongs with: the color
         # was configurable while the grid itself used to be hardwired on.
         self._grid_check = QCheckBox(t("show_grid_checkbox"))
@@ -839,6 +864,33 @@ class ChannelPlotSettingsDialog(QDialog):
         cancel_button.clicked.connect(self.reject)
         layout.addWidget(button_box)
 
+    def _effective(self, key: str) -> str:
+        """The color to SHOW for `key`: the channel's own if it has one,
+        otherwise the current theme default.
+
+        Kept apart from what `results()` stores, so a swatch can display
+        a concrete color while the channel keeps following the theme."""
+        stored = {
+            "plot_color": self._color,
+            "plot_background": self._background,
+            "plot_grid_color": self._grid_color,
+        }[key]
+        return stored or self._color_defaults.get(key, "#808080")
+
+    def _reset_colors_to_theme(self) -> None:
+        """Drops this channel's own colors so it follows the theme again.
+
+        The only way back: once a color was set it stayed, and a
+        configuration carrying the other theme's colors - a black grid on
+        a dark background, say - could not be repaired from the dialog at
+        all."""
+        self._color = None
+        self._background = None
+        self._grid_color = None
+        self._update_swatch(self._color_button, self._effective("plot_color"))
+        self._update_swatch(self._bg_button, self._effective("plot_background"))
+        self._update_swatch(self._grid_button, self._effective("plot_grid_color"))
+
     def _pick_color(self, which: str) -> None:
         current = {
             "color": self._color,
@@ -892,6 +944,9 @@ class ChannelPlotSettingsDialog(QDialog):
 
     def results(self) -> dict:
         return {
+            # May each be `None` = follow the theme. Deliberately NOT filled
+            # in with the current theme default - that is exactly what used
+            # to freeze the colors on a plain OK (see `__init__`).
             "plot_color": self._color,
             "plot_background": self._background,
             "plot_grid_color": self._grid_color,

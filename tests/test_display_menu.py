@@ -322,3 +322,123 @@ class DialogHeightTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThemeColorFreezingTest(unittest.TestCase):
+    """Confirming the plot dialog must not turn "follow the theme" into a
+    hardcoded color.
+
+    The dialog pre-fills missing colors with the current theme default so
+    the swatches show something. It used to write those back on OK, so
+    merely opening the dialog and pressing OK - without touching a color
+    - froze the active theme's palette onto the channel. Switching theme
+    afterwards left that channel behind: a configuration made in the
+    light theme showed a black grid on the dark theme's dark background.
+    """
+
+    def setUp(self) -> None:
+        from gui.theme import get_theme, set_theme
+
+        _app()
+        self._original_theme = get_theme()
+        set_theme("light")
+
+    def tearDown(self) -> None:
+        from gui.theme import set_theme
+
+        set_theme(self._original_theme)
+
+    def _dialogs(self, channel: Channel):
+        from gui.live_view import (
+            ChannelDisplayDialog,
+            ChannelPlotSettingsDialog,
+            _channel_display_key,
+        )
+        from gui.theme import curve_color, plot_background_color, plot_foreground_color
+
+        parent = ChannelDisplayDialog(
+            [channel], curve_color(), plot_background_color(), plot_foreground_color()
+        )
+        key = _channel_display_key(channel)
+        sub = ChannelPlotSettingsDialog(
+            channel.display_name,
+            parent._plot_settings[key],
+            channel_count=1,
+            color_defaults=parent._color_defaults,
+        )
+        return parent, sub
+
+    def test_plain_ok_keeps_the_channel_following_the_theme(self) -> None:
+        channel = Channel("cDAQ1Mod1/ai0", "Force")
+        parent, sub = self._dialogs(channel)
+
+        result = sub.results()
+
+        for key in ("plot_color", "plot_background", "plot_grid_color"):
+            with self.subTest(key=key):
+                self.assertIsNone(result[key], "theme color was frozen onto the channel")
+
+        sub.deleteLater()
+        parent.deleteLater()
+        _app().processEvents()
+
+    def test_swatch_still_shows_the_theme_default(self) -> None:
+        """The user must see a color even while none is stored."""
+        from gui.theme import plot_foreground_color
+
+        channel = Channel("cDAQ1Mod1/ai0", "Force")
+        parent, sub = self._dialogs(channel)
+
+        self.assertEqual(sub._effective("plot_grid_color"), plot_foreground_color())
+
+        sub.deleteLater()
+        parent.deleteLater()
+        _app().processEvents()
+
+    def test_a_picked_color_is_kept(self) -> None:
+        channel = Channel("cDAQ1Mod1/ai0", "Force", plot_grid_color="#ff00ff")
+        parent, sub = self._dialogs(channel)
+
+        self.assertEqual(sub.results()["plot_grid_color"], "#ff00ff")
+
+        sub.deleteLater()
+        parent.deleteLater()
+        _app().processEvents()
+
+    def test_grid_color_follows_a_theme_change(self) -> None:
+        from gui.live_view import _channel_grid_color
+        from gui.theme import plot_foreground_color, set_theme
+
+        channel = Channel("cDAQ1Mod1/ai0", "Force")
+
+        seen = []
+        for theme in ("light", "dark"):
+            set_theme(theme)
+            seen.append((_channel_grid_color(channel), plot_foreground_color()))
+
+        self.assertEqual(seen[0][0], seen[0][1])
+        self.assertEqual(seen[1][0], seen[1][1])
+        self.assertNotEqual(seen[0][0], seen[1][0], "theme change had no effect")
+
+    def test_reset_repairs_an_already_frozen_channel(self) -> None:
+        """Existing configurations carry frozen colors, and without this
+        there is no way back to theme-following from the dialog."""
+        channel = Channel(
+            "cDAQ1Mod1/ai0",
+            "Force",
+            plot_color="#1565c0",
+            plot_background="#ffffff",
+            plot_grid_color="#000000",
+        )
+        parent, sub = self._dialogs(channel)
+
+        sub._reset_colors_to_theme()
+        result = sub.results()
+
+        for key in ("plot_color", "plot_background", "plot_grid_color"):
+            with self.subTest(key=key):
+                self.assertIsNone(result[key])
+
+        sub.deleteLater()
+        parent.deleteLater()
+        _app().processEvents()

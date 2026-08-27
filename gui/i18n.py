@@ -163,6 +163,13 @@ _translations = {
         "show_x_axis_label_checkbox": "X-Achsenbeschriftung",
         "show_y_axis_label_checkbox": "Y-Achsenbeschriftung",
         "show_grid_checkbox": "Gitter anzeigen",
+        "reset_colors_to_theme": "Farben auf Theme-Standard",
+        "reset_colors_to_theme_tooltip": (
+            "Setzt Kurven-, Hintergrund- und Gitterfarbe dieses Kanals "
+            "zurück, sodass sie wieder dem hellen bzw. dunklen Theme folgen. "
+            "Nötig, wenn ein Kanal Farben des jeweils anderen Themes "
+            "eingefroren hat - etwa ein schwarzes Gitter auf dunklem Grund."
+        ),
         "show_grid_checkbox_tooltip": (
             "Blendet die Gitterlinien in der Plotfläche ein/aus. Die Gitterfarbe "
             "oben gilt weiterhin, wenn das Gitter eingeschaltet ist."
@@ -629,6 +636,13 @@ _translations = {
         "show_x_axis_label_checkbox": "X axis label",
         "show_y_axis_label_checkbox": "Y axis label",
         "show_grid_checkbox": "Show grid",
+        "reset_colors_to_theme": "Colors back to theme",
+        "reset_colors_to_theme_tooltip": (
+            "Clears this channel's curve, background and grid colors so "
+            "they follow the light or dark theme again. Needed when a "
+            "channel has frozen the colors of the other theme - a black "
+            "grid on a dark background, for instance."
+        ),
         "show_grid_checkbox_tooltip": (
             "Shows/hides the grid lines inside the plot area. The grid color "
             "above still applies whenever the grid is switched on."

@@ -12,6 +12,3 @@ dist/
 .idea/
 .vscode/
 *.egg-info/
-
-# Private developer notes, not part of the release
-doc/offene_punkte.md
