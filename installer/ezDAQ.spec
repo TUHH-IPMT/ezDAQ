@@ -5,6 +5,17 @@ ezDAQ.spec
 PyInstaller build definition for ezDAQ - see the "Deployment" section of
 the README for how to run it.
 
+Lives in installer/ together with installer.iss, but is always invoked
+from the PROJECT ROOT:
+
+    .venv\Scripts\python.exe -m PyInstaller --noconfirm --clean installer\ezDAQ.spec
+
+so that dist/ and build/ land at the top level, where .gitignore expects
+them. Paths to project files are therefore built from `SPECPATH` (the
+directory holding this file, provided by PyInstaller) rather than being
+written relative - a relative path here would be resolved against the
+current working directory, not against this file.
+
 ONEDIR, deliberately not onefile: onefile unpacks the whole bundle
 (several hundred MB, dominated by pyarrow/scipy/PyQt6) into %TEMP% on
 EVERY start, which costs seconds of startup time and is a pattern virus
@@ -21,7 +32,11 @@ app itself starts without it and reports the missing driver in the
 device browser (see `hardware/nidaq_device.py::discover_devices`).
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
+PROJECT_ROOT = os.path.abspath(os.path.join(SPECPATH, os.pardir))  # noqa: F821
 
 # pyqtgraph resolves parts of itself dynamically (e.g. the graphics
 # backend and its widget/exporter registries), which the static import
@@ -57,12 +72,15 @@ hiddenimports += [
 ]
 
 analysis = Analysis(
-    ["main.py"],
-    pathex=[],
+    [os.path.join(PROJECT_ROOT, "main.py")],
+    # The application's own packages (core/, gui/, hardware/, ...) are
+    # imported relative to the project root, which is no longer the
+    # directory this spec sits in.
+    pathex=[PROJECT_ROOT],
     binaries=[],
     # Icons and the splash logo, addressed via
     # `config/settings.py::get_resource_path`.
-    datas=[("resources", "resources")] + metadata,
+    datas=[(os.path.join(PROJECT_ROOT, "resources"), "resources")] + metadata,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -104,7 +122,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon="resources/icon.ico",
+    icon=os.path.join(PROJECT_ROOT, "resources", "icon.ico"),
 )
 
 coll = COLLECT(
