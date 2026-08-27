@@ -212,32 +212,35 @@ class MainWindow(QMainWindow):
         nav_layout = QVBoxLayout(nav_container)
         nav_layout.setContentsMargins(0, 0, 0, 0)
         nav_layout.setSpacing(8)
-        # Depth, but from EDGES rather than a full-height ramp. The previous
-        # style used `border: outset` - CSS's crude two-tone bevel - plus a
-        # gradient spanning the whole tile. On tiles this tall (a third of
-        # the window) that ramp reads as a big glossy slab, and the checked
-        # state ran from palette(dark) to palette(midlight), a harsh jump.
+        # A real, readable bevel - but built from 1px edges and palette tones
+        # instead of CSS's `outset`/`inset`, whose hard two-tone frame is what
+        # made the tiles look cheap. Three cues act together, so the state is
+        # unmistakable without a colored accent:
         #
-        # Instead: a crisp 1px border, and a gradient whose stops sit in the
-        # top few percent so only a thin highlight edge is visible - the way
-        # a real surface catches light. The checked tile inverts that into a
-        # thin dark edge (inset) and additionally carries an accent bar.
+        #   1. Edge direction. Raised: light on top/left, dark on bottom/right
+        #      - lit from the upper left. Pressed: exactly reversed.
+        #   2. Face brightness. A pressed face sits in its own shadow, so it is
+        #      DARKER than a resting one (palette(mid) vs palette(button):
+        #      200 vs 240 in the light theme, 40 vs 53 in the dark). Making it
+        #      brighter instead read as 'lit up', not as 'pushed in'.
+        #   3. Content offset. The pressed tile's icon and text sit 1px lower,
+        #      the way a real key travels. Deliberate and symmetric (the
+        #      bottom padding gives back what the top takes), so nothing
+        #      drifts as tiles are switched.
         #
-        # Concretely: a resting tile gets a light edge at the TOP and a
-        # dark one at the BOTTOM (lit from above, standing proud); the
-        # checked tile gets the dark edge at the top and none at the
-        # bottom, which is what a recess looks like under the same light.
-        #
-        # The accent bar is a border-left that is ALWAYS 4px and merely
-        # changes color: making it appear only when checked would shift
-        # icon and text sideways on every switch.
+        # The gradient stops sit in the outermost few percent: on tiles a third
+        # of the window tall, a full-height ramp reads as a glossy slab rather
+        # than as an edge catching light.
         #
         # Only palette(...) references, no baked hex - that is what lets
         # `_retheme_nav_icons()` repolish them into the new theme.
         nav_container.setStyleSheet(
             "QToolButton {"
             "   border: 1px solid palette(mid);"
-            "   border-left: 4px solid transparent;"
+            "   border-top-color: palette(light);"
+            "   border-left-color: palette(light);"
+            "   border-bottom-color: palette(dark);"
+            "   border-right-color: palette(dark);"
             "   border-radius: 10px;"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             "                                stop:0 palette(light),"
@@ -247,20 +250,24 @@ class MainWindow(QMainWindow):
             "   padding: 8px;"
             "}"
             "QToolButton:hover:!checked {"
-            "   border-color: palette(dark);"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
             "                                stop:0 palette(light),"
-            "                                stop:0.06 palette(midlight),"
-            "                                stop:1 palette(midlight));"
+            "                                stop:0.04 palette(midlight),"
+            "                                stop:0.96 palette(midlight),"
+            "                                stop:1 palette(mid));"
             "}"
             "QToolButton:checked {"
-            "   border-color: palette(dark);"
-            "   border-left-color: palette(highlight);"
+            "   border-top-color: palette(shadow);"
+            "   border-left-color: palette(shadow);"
+            "   border-bottom-color: palette(light);"
+            "   border-right-color: palette(light);"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(dark),"
-            "                                stop:0.035 palette(mid),"
-            "                                stop:0.10 palette(midlight),"
+            "                                stop:0 palette(shadow),"
+            "                                stop:0.02 palette(dark),"
+            "                                stop:0.06 palette(mid),"
+            "                                stop:0.97 palette(mid),"
             "                                stop:1 palette(midlight));"
+            "   padding: 9px 8px 7px 8px;"
             "}"
             # As soon as ANY ancestor carries a stylesheet, Qt renders
             # child QLabels through the CSS engine instead of purely from
