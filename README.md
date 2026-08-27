@@ -7,6 +7,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 ![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
 ![Platform: Windows](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
+[![DOI](https://zenodo.org/badge/1336784211.svg)](https://doi.org/10.5281/zenodo.21976180)
 
 *[Deutsche Version](README.de.md)*
 
