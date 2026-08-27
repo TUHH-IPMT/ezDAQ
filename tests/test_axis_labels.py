@@ -259,3 +259,98 @@ class PlotSettingsDialogAxisLabelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PopoutWindowRetranslateTest(unittest.TestCase):
+    """`LiveView.retranslate_ui()` has to reach open own windows too.
+
+    The X axis title is the only translatable text on a plot; everything
+    else there is user data. Own windows are not part of
+    `LiveView._plot_items`, so before this was fixed their title kept the
+    language the window was opened in - the main grid next to it had
+    already switched.
+
+    Built via `__new__` (the pattern used for `SetupView` in
+    `tests/test_trigger_headless.py`): `retranslate_ui` only touches a
+    handful of attributes, all stubbed here.
+    """
+
+    def setUp(self) -> None:
+        from gui.i18n import get_language, set_language
+        from gui.live_view import ChannelPopoutWindow, LiveView, _channel_display_key
+
+        self.app = _app()
+        self._original_language = get_language()
+        set_language("de")
+
+        self.channel = Channel("cDAQ1Mod1/ai0", "Force", unit="N")
+        self.window = ChannelPopoutWindow(self.channel)
+        self.key = _channel_display_key(self.channel)
+
+        view = LiveView.__new__(LiveView)
+        view._channels = [self.channel]
+        view._plot_items = []
+        view._curve_channel_indices = []
+        view._popout_windows = {self.key: self.window}
+        view._reader_id = None
+        # Only reached by the parts of retranslate_ui this test does not
+        # exercise - stubbed so the method can run end to end.
+        view._update_action_button_labels = lambda: None
+        view._set_trigger_arm_button_text = lambda: None
+        view._storage_group = _StubGroup()
+        view._duration_label = _StubLabel()
+        view._sample_rate_label = _StubLabel()
+        self.view = view
+
+    def tearDown(self) -> None:
+        from gui.i18n import set_language
+
+        set_language(self._original_language)
+        self.window.close()
+        self.window.deleteLater()
+        self.app.processEvents()
+
+    def _x_title(self) -> str:
+        return self.window.plot_item.getAxis("bottom").labelText
+
+    def test_language_change_reaches_the_popout_window(self) -> None:
+        from gui.i18n import set_language
+        from gui.live_view import LiveView
+
+        german = self._x_title()
+
+        set_language("en")
+        LiveView.retranslate_ui(self.view)
+
+        self.assertNotEqual(
+            self._x_title(),
+            german,
+            "own window kept the old language - retranslate_ui no longer "
+            "covers LiveView._popout_windows",
+        )
+        self.assertIn("[s]", self._x_title())
+
+    def test_hidden_title_stays_hidden_across_a_language_change(self) -> None:
+        """`setLabel()` re-shows the title unconditionally, so the
+        re-apply has to happen for own windows as well."""
+        from gui.i18n import set_language
+        from gui.live_view import LiveView, _apply_axis_label_visibility
+
+        self.channel.plot_show_x_label = False
+        _apply_axis_label_visibility(self.window.plot_item, self.channel)
+        self.assertFalse(self.window.plot_item.getAxis("bottom").label.isVisible())
+
+        set_language("en")
+        LiveView.retranslate_ui(self.view)
+
+        self.assertFalse(self.window.plot_item.getAxis("bottom").label.isVisible())
+
+
+class _StubGroup:
+    def setTitle(self, _text: str) -> None:
+        pass
+
+
+class _StubLabel:
+    def setText(self, _text: str) -> None:
+        pass

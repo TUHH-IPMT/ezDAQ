@@ -1605,6 +1605,16 @@ class LiveView(QWidget):
         self._set_trigger_arm_button_text()
         self._storage_group.setTitle(t("storage_buffer_group"))
 
+        # The X axis title is the ONLY translatable text on a plot -
+        # plot title, Y axis title and unit are all user data (channel
+        # name/unit, see `_channel_axis_label`).
+        #
+        # Deliberately WITHOUT `**_axis_label_style()`: `setLabel()`
+        # replaces `labelStyle` wholesale ONLY when style kwargs are
+        # passed (`if kwargs: self.labelStyle = kwargs`). Omitting them
+        # keeps both the enlarged font size AND the color that
+        # `style_plot_item()` put there at creation - passing them would
+        # drop the color (see `_axis_label_style`).
         for pos, plot_item in enumerate(self._plot_items):
             # `units=` NOT used (see `ChannelPopoutWindow.__init__`) - time
             # unit consistently in square brackets everywhere.
@@ -1616,6 +1626,16 @@ class LiveView(QWidget):
             if pos < len(self._curve_channel_indices):
                 channel = self._channels[self._curve_channel_indices[pos]]
                 _apply_axis_label_visibility(plot_item, channel)
+
+        # Own windows (see `ChannelPopoutWindow`) are NOT part of
+        # `self._plot_items` - without this loop their X title would keep
+        # the language the window was opened in until it is closed and
+        # reopened, while the main grid next to it already switched.
+        for key, window in self._popout_windows.items():
+            window.plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+            channel = self._find_channel_by_key(key)
+            if channel is not None:
+                _apply_axis_label_visibility(window.plot_item, channel)
 
         # Running duration/sample rate correct themselves on the next
         # timer tick - only the idle placeholder would otherwise stay
