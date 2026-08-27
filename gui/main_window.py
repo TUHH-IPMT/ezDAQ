@@ -65,10 +65,12 @@ from gui.setup_view import NamingScheme, SetupView
 from gui.trigger_settings_dialog import TriggerSettingsDialog
 from gui.workers import BackgroundWorker
 from gui.theme import (
+    RECORD_ICON_COLOR,
     connect_theme_changed,
     draw_magnifier_icon,
     draw_gear_icon,
     draw_play_icon,
+    draw_record_icon,
     get_theme,
     is_position_on_screen,
     repolish,
@@ -524,8 +526,41 @@ class MainWindow(QMainWindow):
         self._live_view.set_trigger_arm_available(available)
 
     def _build_status_bar(self) -> None:
+        # Red dot to the LEFT of the text, shown only while data is
+        # actually being written. "Am I recording?" is the one question a
+        # measurement application has to answer at a glance, and the
+        # status text alone said the same thing for a recording and for a
+        # live-only run (see `_set_measurement_status`).
+        self._recording_indicator = QLabel()
+        self._recording_indicator.setPixmap(
+            draw_record_icon(12, color=RECORD_ICON_COLOR)
+        )
+        self._recording_indicator.setVisible(False)
+        self.statusBar().addWidget(self._recording_indicator)
         self._status_label = QLabel(t("ready"))
         self.statusBar().addWidget(self._status_label)
+
+    def _set_measurement_status(self, config: MeasurementConfig) -> None:
+        """Shows that a measurement is running, and WHETHER it is saved.
+
+        Both cases used to share one message, so a live-only run looked
+        exactly like a recording - leaving room to believe you are
+        recording when you are not, or the other way round."""
+        recording = config.save_to_disk
+        self._recording_indicator.setVisible(recording)
+        self._status_label.setText(
+            t(
+                "measurement_recording_named"
+                if recording
+                else "measurement_live_only_named",
+                name=config.name,
+            )
+        )
+
+    def _clear_measurement_status(self) -> None:
+        """Back to idle - the dot must not outlive the measurement."""
+        self._recording_indicator.setVisible(False)
+        self._status_label.setText(t("ready"))
 
     def retranslate_ui(self) -> None:
         """Updates all static texts of the main window after a language
@@ -559,7 +594,7 @@ class MainWindow(QMainWindow):
         # and corrects itself on the next event. Only the idle state
         # would otherwise remain stuck in the old language permanently.
         if not self._controller.is_running:
-            self._status_label.setText(t("ready"))
+            self._clear_measurement_status()
 
     # ------------------------------------------------------------------ #
     # Saved measurement configurations (File menu)
@@ -860,7 +895,7 @@ class MainWindow(QMainWindow):
             self._live_view.mark_recording_started(0)
             self._maybe_start_stop_listener(config)
             self._set_nav_index(_VIEW_LIVE)
-            self._status_label.setText(t("measurement_running_named", name=config.name))
+            self._set_measurement_status(config)
             return
 
         # Threshold/serial START trigger: hardware acquisition + display
@@ -979,7 +1014,7 @@ class MainWindow(QMainWindow):
 
         self._maybe_start_stop_listener(config)
 
-        self._status_label.setText(t("measurement_running_named", name=config.name))
+        self._set_measurement_status(config)
 
     def _on_trigger_connection_failed(self, message: str) -> None:
         """The serial START trigger could not open the configured COM
@@ -1005,7 +1040,7 @@ class MainWindow(QMainWindow):
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
-        self._status_label.setText(t("ready"))
+        self._clear_measurement_status()
         QMessageBox.warning(self, t("trigger_connection_failed_title"), message)
         self._set_nav_index(_VIEW_SETUP)
 
@@ -1185,7 +1220,7 @@ class MainWindow(QMainWindow):
                 )
             )
         else:
-            self._status_label.setText(t("ready"))
+            self._clear_measurement_status()
 
         self._recording_started = False
         self._setup_view.set_start_enabled(True, "")
@@ -1237,7 +1272,7 @@ class MainWindow(QMainWindow):
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
-        self._status_label.setText(t("ready"))
+        self._clear_measurement_status()
         QMessageBox.critical(
             self,
             t("measurement_error"),
