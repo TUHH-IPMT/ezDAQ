@@ -4,7 +4,9 @@
 ; PyInstaller onedir output in dist\ezDAQ. See the "Deployment" section
 ; of the README for the full sequence.
 ;
-; Build:  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\installer.iss
+; Build:  "%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" installer\installer.iss
+;         (a per-machine Inno Setup install puts ISCC.exe under
+;         "C:\Program Files (x86)\Inno Setup 6" instead)
 ; Result: dist\ezDAQ-Setup-<version>.exe (at the project root)
 ;
 ; Every path below is written relative to THIS file's directory, which is
@@ -62,8 +64,11 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist
 OutputBaseFilename=ezDAQ-Setup-{#AppVersion}
-SetupIconFile=..
-esources\icon.ico
+; Stamps the version into the file properties of the setup .exe,
+; so a deployed installer can be identified without running it.
+VersionInfoVersion={#AppVersion}
+VersionInfoProductVersion={#AppVersion}
+SetupIconFile=..\resources\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
 SolidCompression=yes
