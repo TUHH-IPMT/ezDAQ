@@ -108,6 +108,11 @@ class AppSettings:
             `data.models.TriggerConfig.to_dict()` (analogous to `window`
             above - stored directly as a dict instead of its own flat
             fields, since `TriggerConfig` itself is already nested).
+        live_view_plot_columns: How many channels the live view's main
+            grid places side by side (see
+            `gui/live_view.py::LiveView.set_plot_columns`). A view
+            setting, not a channel property - hence here rather than
+            on `data.models.Channel`.
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -127,6 +132,7 @@ class AppSettings:
     last_recording_stop_value: float = 0.0
     last_recording_stop_unit: str = "samples"
     last_trigger_config: dict = field(default_factory=dict)
+    live_view_plot_columns: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         """Serializes the settings into a JSON-compatible dictionary."""
@@ -166,4 +172,7 @@ class AppSettings:
             last_recording_stop_value=data.get("last_recording_stop_value", 0.0),
             last_recording_stop_unit=data.get("last_recording_stop_unit", "samples"),
             last_trigger_config=data.get("last_trigger_config", {}) or {},
+            # Clamped: a stored 0 or a negative value would make the
+            # grid layout divide by zero (see `_rebuild_plots`).
+            live_view_plot_columns=max(1, int(data.get("live_view_plot_columns", 1))),
         )

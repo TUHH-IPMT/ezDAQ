@@ -162,10 +162,38 @@ _translations = {
         "autoscale_checkbox": "Autoskalierung",
         "show_x_axis_label_checkbox": "X-Achsenbeschriftung",
         "show_y_axis_label_checkbox": "Y-Achsenbeschriftung",
+        "show_grid_checkbox": "Gitter anzeigen",
+        "show_grid_checkbox_tooltip": (
+            "Blendet die Gitterlinien in der Plotfläche ein/aus. Die Gitterfarbe "
+            "oben gilt weiterhin, wenn das Gitter eingeschaltet ist."
+        ),
+        "plot_line_width": "Linienbreite [px]",
+        "plot_line_width_tooltip": (
+            "Stärke der Kurve. Höhere Werte sind auf Beamern und in "
+            "Berichts-Screenshots besser zu erkennen."
+        ),
+        "apply_to_all_channels": "Für alle Kanäle übernehmen",
+        "apply_to_all_channels_tooltip": (
+            "Übernimmt ALLE Einstellungen dieses Dialogs auf jeden Kanal, "
+            "nicht nur auf den gerade bearbeiteten. Wirkt wie OK."
+        ),
+        "apply_to_all_confirm_title": "Auf alle Kanäle übernehmen?",
+        "apply_to_all_confirm_body": (
+            "Die Einstellungen dieses Dialogs werden auf ALLE {count} Kanäle "
+            "übertragen und ersetzen dort die bisherigen Werte. Das lässt "
+            "sich nur über Abbrechen des übergeordneten Dialogs "
+            "zurücknehmen.\n\nFortfahren?"
+        ),
+        "plot_columns": "Spalten im Raster",
+        "plot_columns_tooltip": (
+            "Wie viele Kanäle die Live-Ansicht nebeneinander anordnet. "
+            "Mehr Spalten bedeuten weniger Zeilen und damit höhere "
+            "Diagramme - hilfreich bei vielen Kanälen."
+        ),
         "axis_label_checkbox_tooltip": (
             "Blendet nur den Achsentitel ein/aus - Teilstriche, Zahlen "
-            "und Gitter bleiben unveraendert. Ausgeschaltet gibt der "
-            "Titel seinen Platz an die Plotflaeche zurueck."
+            "und Gitter bleiben unverändert. Ausgeschaltet gibt der "
+            "Titel seinen Platz an die Plotfläche zurück."
         ),
         "autoscale_checkbox_tooltip": (
             "Nutzt den festgelegten Bereich, solange die Messwerte darin "
@@ -200,9 +228,9 @@ _translations = {
         "plot_value_refresh_hz": "Aktualisierungsrate [Hz]",
         "plot_value_refresh_hz_tooltip": (
             "Wie oft der Zahlenwert neu geschrieben wird. Betrifft nur die "
-            "Zahl - Kurve, Messung und gespeicherte Daten bleiben unveraendert. "
+            "Zahl - Kurve, Messung und gespeicherte Daten bleiben unverändert. "
             "Zwischen zwei Aktualisierungen wird gemittelt, die Anzeige zeigt "
-            "also den Mittelwert ueber das Intervall statt eines zufaelligen "
+            "also den Mittelwert über das Intervall statt eines zufälligen "
             "Momentanwerts. Niedrigere Werte beruhigen ein verrauschtes Signal."
         ),
         "plot_value_integer_digits_tooltip": (
@@ -600,6 +628,33 @@ _translations = {
         "autoscale_checkbox": "Autoscale",
         "show_x_axis_label_checkbox": "X axis label",
         "show_y_axis_label_checkbox": "Y axis label",
+        "show_grid_checkbox": "Show grid",
+        "show_grid_checkbox_tooltip": (
+            "Shows/hides the grid lines inside the plot area. The grid color "
+            "above still applies whenever the grid is switched on."
+        ),
+        "plot_line_width": "Line width [px]",
+        "plot_line_width_tooltip": (
+            "Thickness of the curve. Higher values read better on a "
+            "projector and in report screenshots."
+        ),
+        "apply_to_all_channels": "Apply to all channels",
+        "apply_to_all_channels_tooltip": (
+            "Applies EVERY setting in this dialog to all channels, not just "
+            "the one being edited. Acts like OK."
+        ),
+        "apply_to_all_confirm_title": "Apply to all channels?",
+        "apply_to_all_confirm_body": (
+            "The settings in this dialog will be copied to ALL {count} "
+            "channels, replacing their current values. This can only be "
+            "undone by cancelling the parent dialog.\n\nContinue?"
+        ),
+        "plot_columns": "Grid columns",
+        "plot_columns_tooltip": (
+            "How many channels the live view places side by side. More "
+            "columns mean fewer rows and therefore taller plots - helpful "
+            "with many channels."
+        ),
         "axis_label_checkbox_tooltip": (
             "Shows/hides the axis title only - tick marks, numbers and "
             "grid stay unchanged. Switched off, the title gives its "

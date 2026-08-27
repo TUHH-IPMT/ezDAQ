@@ -132,6 +132,12 @@ class ConfigurationManager:
         self._settings.last_storage_path = path
         self.save_settings()
 
+    def update_live_view_plot_columns(self, columns: int) -> None:
+        """Remembers how many channels the live view places side by
+        side (see `gui/live_view.py::LiveView.set_plot_columns`)."""
+        self._settings.live_view_plot_columns = max(1, int(columns))
+        self.save_settings()
+
     def update_last_device_name(self, device_name: str) -> None:
         """Remembers the name of the last used NI cDAQ device."""
         self._settings.last_device_name = device_name

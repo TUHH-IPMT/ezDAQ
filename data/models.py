@@ -813,6 +813,16 @@ class Channel:
     # `gui/live_view.py::ChannelPlotSettingsDialog`).
     plot_show_x_label: bool = True
     plot_show_y_label: bool = True
+    # Grid lines inside the plot area. The grid COLOR was already
+    # configurable (`plot_grid_color`) while the grid itself was
+    # hardwired on - so a grid could be recolored but not switched
+    # off. Covers both axes together, unlike the axis titles above,
+    # which are useful separately (the X title repeats identically on
+    # every subplot, a half grid does not answer any similar need).
+    plot_show_grid: bool = True
+    # Width of the curve in pixels. Previously hardwired to 1.5,
+    # which is thin on a projector or in a report screenshot.
+    plot_line_width: float = 1.5
     # Whether the actual curve trace is shown (main grid AND own window) -
     # independent of `plot_show_value` below: both switched off together
     # shows nothing at all (see `plot_visible` for that). Default is ONLY
@@ -903,6 +913,8 @@ class Channel:
             "plot_time_window_seconds": self.plot_time_window_seconds,
             "plot_show_x_label": self.plot_show_x_label,
             "plot_show_y_label": self.plot_show_y_label,
+            "plot_show_grid": self.plot_show_grid,
+            "plot_line_width": self.plot_line_width,
             "plot_show_graph": self.plot_show_graph,
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
@@ -951,6 +963,10 @@ class Channel:
             ),
             plot_show_x_label=data.get("plot_show_x_label", True),
             plot_show_y_label=data.get("plot_show_y_label", True),
+            plot_show_grid=data.get("plot_show_grid", True),
+            # Clamped: 0 or a negative width would make the curve
+            # invisible with no way to tell why from the dialog.
+            plot_line_width=max(0.1, float(data.get("plot_line_width", 1.5))),
             plot_show_graph=data.get("plot_show_graph", True),
             plot_show_value=data.get("plot_show_value", False),
             plot_value_integer_digits=max(

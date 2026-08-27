@@ -1493,6 +1493,8 @@ class ChannelTableWidget(QWidget):
             "plot_time_window_seconds": channel.plot_time_window_seconds,
             "plot_show_x_label": channel.plot_show_x_label,
             "plot_show_y_label": channel.plot_show_y_label,
+            "plot_show_grid": channel.plot_show_grid,
+            "plot_line_width": channel.plot_line_width,
             "plot_show_graph": channel.plot_show_graph,
             "plot_show_value": channel.plot_show_value,
             "plot_value_integer_digits": channel.plot_value_integer_digits,
@@ -1570,6 +1572,10 @@ class ChannelTableWidget(QWidget):
             ),
             plot_show_x_label=display_settings.get("plot_show_x_label", True),
             plot_show_y_label=display_settings.get("plot_show_y_label", True),
+            plot_show_grid=display_settings.get("plot_show_grid", True),
+            plot_line_width=max(
+                0.1, float(display_settings.get("plot_line_width", 1.5))
+            ),
             plot_show_graph=display_settings.get("plot_show_graph", True),
             plot_show_value=display_settings.get("plot_show_value", False),
             plot_value_integer_digits=max(

@@ -170,6 +170,13 @@ class MainWindow(QMainWindow):
         self._live_view.stop_requested.connect(self._on_stop_measurement)
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
         self._live_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
+        self._live_view.plot_columns_changed.connect(
+            self._configuration_manager.update_live_view_plot_columns
+        )
+        # Restore the persisted grid layout before anything is displayed.
+        self._live_view.set_plot_columns(
+            self._configuration_manager.settings.live_view_plot_columns
+        )
 
         # Arm button (Setup AND live view) only visible if a trigger is
         # already configured/loaded at startup (see
