@@ -99,6 +99,16 @@ def _action_button_font_size_pt() -> int:
 # has been created - but `gui/theme.py` is sometimes imported before that
 # (see the `gui/i18n.py` comment on the same issue). Callers therefore use
 # `action_button_style()` instead of a module-level constant.
+# NOTE: neither style below sets `color` in the plain `QPushButton {}`
+# block, on purpose. A stylesheet color there applies in EVERY state
+# and overrides Qt's automatic `QPalette.ColorGroup.Disabled`
+# handling - a disabled play/record/stop button then keeps its
+# full-strength label and looks perfectly clickable. Measured as text
+# contrast against the button background: with the line, disabled was
+# identical to enabled (195 light / 202 dark); without it, it drops to
+# 97 and 74 respectively, i.e. Qt grays it out by itself in both
+# themes. `palette(button-text)` was the default for the enabled state
+# anyway, so nothing is lost.
 def action_button_style() -> str:
     size = _action_button_font_size_pt()
     return (
@@ -107,7 +117,6 @@ def action_button_style() -> str:
         "   border-radius: 4px;"
         "   padding: 8px 18px;"
         "   background-color: palette(button);"
-        "   color: palette(button-text);"
         f"   font-size: {size}pt;"
         "}"
         "QPushButton:hover { background-color: palette(midlight); }"
@@ -129,7 +138,6 @@ def trigger_arm_button_style() -> str:
         "   border-radius: 4px;"
         "   padding: 8px 18px;"
         "   background-color: palette(button);"
-        "   color: palette(button-text);"
         f"   font-size: {size}pt;"
         "}"
         "QPushButton:hover:!checked { background-color: palette(midlight); }"
