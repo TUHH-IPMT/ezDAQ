@@ -21,7 +21,16 @@ import time
 # sensor database/main window finish faster - otherwise on fast machines
 # it would flash by for only the blink of an eye and look more like a
 # graphics glitch than deliberate startup feedback.
-_SPLASH_MIN_SECONDS = 1.5
+#
+# Sized against the trace animation rather than picked freely: at
+# `gui/splash.py::_TRACE_SPEED_HZ` = 0.5 one sweep takes two seconds,
+# so anything below that cut the curve off mid-sweep and the animation
+# never showed what it was.
+_SPLASH_MIN_SECONDS = 3.0
+
+# Number of steps the splash progress bar is divided into - must match
+# the `_set_splash_status()` calls in `main()`.
+_SPLASH_STEPS = 4
 
 
 def configure_logging() -> None:
@@ -80,20 +89,27 @@ def main() -> int:
     # Imports deliberately inside main(), so a plain import of main.py
     # (e.g. by tooling) does not immediately load PyQt6.
     from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QColor, QIcon, QPainter, QPixmap
-    from PyQt6.QtWidgets import QApplication, QSplashScreen
+    from PyQt6.QtGui import QIcon, QPixmap
+    from PyQt6.QtWidgets import QApplication
 
     from config.configuration_manager import ConfigurationManager
     from config.sensor_database import SensorDatabaseManager
-    from config.settings import get_resource_path
+    from config.settings import APP_VERSION, get_resource_path, read_stored_theme
     from core.controller import MeasurementController
     from gui.main_window import MainWindow
 
     app = QApplication(sys.argv)
     app.setApplicationName("ezDAQ")
 
-    from gui.theme import init_theme
+    from gui.theme import init_theme, set_theme
     init_theme(app)
+    # Restore the stored theme BEFORE the splash is built. The full
+    # configuration is only loaded behind the splash, so without this the
+    # splash - and the first moments of the application - would be painted
+    # with the default palette and flash white on every start under the
+    # dark theme. The later `set_theme()` with the fully loaded settings
+    # then finds the theme already active and returns early.
+    set_theme(read_stored_theme())
 
     # .ico instead of .png: contains multiple resolutions (16-256px),
     # from which Windows picks the appropriate one for title bar/taskbar/
@@ -114,38 +130,30 @@ def main() -> int:
     if splash_path.exists():
         pixmap = QPixmap(str(splash_path))
         if not pixmap.isNull():
+            from gui.splash import StartupSplash
+
             pixmap = pixmap.scaledToWidth(
                 420, Qt.TransformationMode.SmoothTransformation
             )
-            # Own text line placed BELOW the logo instead of overlaid: the
-            # logo already has the "ezDAQ / EASY DATA ACQUISITION" text
-            # burned in at the bottom, so a `showMessage()` right at the
-            # bottom edge of the image would overlap with it.
-            padded = QPixmap(pixmap.width(), pixmap.height() + 28)
-            padded.fill(QColor("white"))
-            painter = QPainter(padded)
-            painter.drawPixmap(0, 0, pixmap)
-            painter.end()
-
-            splash = QSplashScreen(padded)
+            # Trace band, progress bar, status line and version are drawn
+            # BELOW the logo, never on top of it: the logo already carries
+            # the "ezDAQ / EASY DATA ACQUISITION" text along its bottom
+            # edge (see `gui/splash.py`).
+            splash = StartupSplash(pixmap, f"v{APP_VERSION}", _SPLASH_STEPS)
             splash.show()
     else:
         logger.warning("Splash-Grafik nicht gefunden unter %s", splash_path)
 
     def _set_splash_status(message: str) -> None:
-        """Displays `message` at the bottom of the splash and immediately
-        processes pending paint events - without this, Qt would defer
-        the repaint until the next event loop iteration, so the text
-        would stay invisible for as long as the next (potentially slow)
-        initialization step runs synchronously."""
+        """Advances the splash progress bar by one step and shows
+        `message`.
+
+        Repainting is handled by the splash itself - its animation
+        timer redraws anyway, so the manual `processEvents()` this used
+        to need is gone."""
         if splash is None:
             return
-        splash.showMessage(
-            message,
-            Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-            QColor("#13233d"),
-        )
-        app.processEvents()
+        splash.set_step(message)
 
     splash_start = time.monotonic()
 
@@ -168,15 +176,16 @@ def main() -> int:
     window = MainWindow(controller, configuration_manager, sensor_database)
 
     if splash is not None:
-        remaining = _SPLASH_MIN_SECONDS - (time.monotonic() - splash_start)
-        if remaining > 0:
-            time.sleep(remaining)
-        # Order matters: `window.show()` BEFORE `splash.finish()`,
+        # `splash.wait()` instead of `time.sleep()`: the sleep blocked the
+        # event loop, so the splash stood frozen for exactly the time it
+        # was meant to be looked at - and the trace animation with it.
+        splash.wait(_SPLASH_MIN_SECONDS - (time.monotonic() - splash_start))
+        # Order matters: `window.show()` BEFORE the splash goes away,
         # otherwise the empty desktop briefly flashes before the main
         # window appears (Qt's example code for `QSplashScreen` follows
         # the same order).
         window.show()
-        splash.finish(window)
+        splash.finish_with_fade(window)
     else:
         window.show()
 

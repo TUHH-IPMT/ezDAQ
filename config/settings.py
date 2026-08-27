@@ -12,6 +12,7 @@ paths and plain data structures.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field
@@ -48,6 +49,28 @@ def get_resource_path(*parts: str) -> Path:
     else:
         base = Path(__file__).resolve().parent.parent
     return base.joinpath("resources", *parts)
+
+
+def read_stored_theme(default: str = "light") -> str:
+    """Reads ONLY the stored theme, without building an `AppSettings`.
+
+    Needed before the splash screen is created: the full configuration
+    is loaded behind the splash, so without this the splash would be
+    built with the wrong palette and the application would flash white
+    on every start under the dark theme.
+
+    Deliberately silent on every error - a missing, empty or damaged
+    settings file must never keep the application from starting, and at
+    this point there is not even a window to report it in. The real
+    load right after (`ConfigurationManager`) reports properly.
+    """
+    try:
+        path = get_config_directory() / CONFIG_FILE_NAME
+        with open(path, "r", encoding="utf-8") as handle:
+            theme = json.load(handle).get("theme")
+    except Exception:
+        return default
+    return theme if theme in ("light", "dark") else default
 
 
 def get_config_directory() -> Path:
