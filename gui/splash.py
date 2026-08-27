@@ -43,10 +43,12 @@ from PyQt6.QtCore import (
     QTimer,
 )
 from PyQt6.QtGui import (
+    QBrush,
     QImage,
     QColor,
     QFont,
     QPainter,
+    QLinearGradient,
     QPainterPath,
     QPen,
     QPixmap,
@@ -206,6 +208,7 @@ class StartupSplash(QSplashScreen):
         self._timer.timeout.connect(self._on_frame)
 
         self._fade: QPropertyAnimation | None = None
+        self._wait_loop: QEventLoop | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -237,12 +240,40 @@ class StartupSplash(QSplashScreen):
 
         A `time.sleep()` here would freeze the animation for exactly the
         time it is supposed to be watched.
+
+        Cut short by a click or Escape (see `_skip_wait`) - the wait is
+        padding, not work, so there is no reason to enforce it.
         """
         if seconds <= 0:
             return
-        loop = QEventLoop()
-        QTimer.singleShot(int(seconds * 1000), loop.quit)
-        loop.exec()
+        self._wait_loop = QEventLoop()
+        QTimer.singleShot(int(seconds * 1000), self._wait_loop.quit)
+        self._wait_loop.exec()
+        self._wait_loop = None
+
+    def _skip_wait(self) -> None:
+        """Ends a running `wait()` early."""
+        if self._wait_loop is not None and self._wait_loop.isRunning():
+            self._wait_loop.quit()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        """Skips the remaining wait instead of hiding the splash.
+
+        Deliberately does NOT call super(): `QSplashScreen` hides itself
+        on a click, while `wait()` kept running - so a click one second
+        in left the screen empty until the main window appeared, which
+        the longer minimum display time only made more noticeable."""
+        self._skip_wait()
+
+    def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        """Same for Escape/Return/Space, when the splash has focus."""
+        if event.key() in (
+            Qt.Key.Key_Escape,
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+            Qt.Key.Key_Space,
+        ):
+            self._skip_wait()
 
     def finish_with_fade(self, window) -> None:
         """Fades the splash out over `window`, then hands focus to it.
@@ -385,7 +416,17 @@ class StartupSplash(QSplashScreen):
         # smooths the edges of each little step. Float coordinates let the
         # rasterizer place the curve between pixels, which is what makes
         # it look smooth.
-        pen = QPen(self._trace_color, 2.0)
+        # Stroked with a gradient rather than a flat color: the part
+        # already swept fades out behind the duck, so the curve reads as a
+        # trail being pulled along instead of a line that happens to end
+        # where the duck is. A QPen takes a QBrush, so this needs no
+        # segment-by-segment drawing.
+        gradient = QLinearGradient(left, 0.0, left + span, 0.0)
+        for stop, alpha in ((0.0, 20), (0.45, 90), (0.8, 190), (1.0, 255)):
+            faded = QColor(self._trace_color)
+            faded.setAlpha(alpha)
+            gradient.setColorAt(stop, faded)
+        pen = QPen(QBrush(gradient), 2.0)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)

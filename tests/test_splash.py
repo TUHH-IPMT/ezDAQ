@@ -191,3 +191,88 @@ class SplashStepCountTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SkipWaitTest(unittest.TestCase):
+    """A click must END the wait, not just hide the splash.
+
+    `QSplashScreen.mousePressEvent()` hides the widget by default while
+    `wait()` kept counting - so a click one second in left nothing on
+    screen until the main window appeared.
+    """
+
+    def setUp(self) -> None:
+        from gui.theme import init_theme
+
+        self.app = _app()
+        init_theme(self.app)
+
+    def _splash(self):
+        from gui.splash import StartupSplash
+
+        logo = QPixmap(420, 300)
+        logo.fill()
+        return StartupSplash(logo, "v0.1", 4)
+
+    def test_click_ends_the_wait_early(self) -> None:
+        from PyQt6.QtCore import QPoint, Qt as QtCore_Qt
+        from PyQt6.QtGui import QMouseEvent
+
+        splash = self._splash()
+        event = QMouseEvent(
+            QMouseEvent.Type.MouseButtonPress,
+            QPoint(5, 5).toPointF(),
+            QtCore_Qt.MouseButton.LeftButton,
+            QtCore_Qt.MouseButton.LeftButton,
+            QtCore_Qt.KeyboardModifier.NoModifier,
+        )
+        QTimer.singleShot(30, lambda: splash.mousePressEvent(event))
+
+        started = time.monotonic()
+        splash.wait(2.0)
+        elapsed = time.monotonic() - started
+
+        self.assertLess(elapsed, 1.0, "click did not cut the wait short")
+
+        splash.deleteLater()
+        self.app.processEvents()
+
+    def test_escape_ends_the_wait_early(self) -> None:
+        from PyQt6.QtCore import Qt as QtCore_Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        splash = self._splash()
+        event = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            QtCore_Qt.Key.Key_Escape,
+            QtCore_Qt.KeyboardModifier.NoModifier,
+        )
+        QTimer.singleShot(30, lambda: splash.keyPressEvent(event))
+
+        started = time.monotonic()
+        splash.wait(2.0)
+
+        self.assertLess(time.monotonic() - started, 1.0)
+
+        splash.deleteLater()
+        self.app.processEvents()
+
+    def test_other_keys_do_not_end_the_wait(self) -> None:
+        from PyQt6.QtCore import Qt as QtCore_Qt
+        from PyQt6.QtGui import QKeyEvent
+
+        splash = self._splash()
+        event = QKeyEvent(
+            QKeyEvent.Type.KeyPress,
+            QtCore_Qt.Key.Key_A,
+            QtCore_Qt.KeyboardModifier.NoModifier,
+        )
+        QTimer.singleShot(20, lambda: splash.keyPressEvent(event))
+
+        started = time.monotonic()
+        splash.wait(0.3)
+
+        self.assertGreaterEqual(time.monotonic() - started, 0.25)
+
+        splash.deleteLater()
+        self.app.processEvents()
