@@ -44,7 +44,7 @@ from PyQt6.QtWidgets import (
 
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
-from config.settings import get_resource_path
+from config.settings import APP_VERSION, get_resource_path
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
@@ -1243,7 +1243,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_about(self) -> None:
-        QMessageBox.about(self, t("about_title"), t("about_body"))
+        QMessageBox.about(self, t("about_title"), t("about_body", version=APP_VERSION))
 
     def _restore_window_geometry(self) -> None:
         geom = self._configuration_manager.settings.window

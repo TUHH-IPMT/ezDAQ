@@ -448,7 +448,7 @@ _translations = {
         "about_title": "Über ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 0.1\n\n"
+            "Version {version}\n\n"
             "Anwendung zur Messdatenerfassung, Live-Visualisierung und Analyse "
             "mit NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "Unterstützt kanalabhängige Skalierung und Kalibrierung, "
@@ -885,7 +885,7 @@ _translations = {
         "about_title": "About ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 0.1\n\n"
+            "Version {version}\n\n"
             "Application for data acquisition, live visualization, and analysis "
             "with NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "Supports channel scaling and calibration, Parquet/CSV storage, "

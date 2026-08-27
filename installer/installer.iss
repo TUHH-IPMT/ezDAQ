@@ -22,7 +22,10 @@
 ; without it and reports the missing driver in its device browser.
 
 #define AppName "ezDAQ"
-#define AppVersion "1.0.0"
+; Must match config/settings.py::APP_VERSION, which the About dialog
+; shows. Inno Setup cannot import Python, so the value is duplicated
+; here - tests/test_version.py fails if the two drift apart.
+#define AppVersion "0.1"
 #define AppPublisher "TUHH - Institut fuer Produktionsmanagement und -technik"
 #define AppURL "https://github.com/TUHH-IPMT/ezDAQ"
 #define AppExeName "ezDAQ.exe"
@@ -59,7 +62,8 @@ PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist
 OutputBaseFilename=ezDAQ-Setup-{#AppVersion}
-SetupIconFile=..esources\icon.ico
+SetupIconFile=..
+esources\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 Compression=lzma2/max
 SolidCompression=yes
