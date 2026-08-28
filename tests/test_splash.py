@@ -189,8 +189,6 @@ class SplashStepCountTest(unittest.TestCase):
         self.assertEqual(declared, calls)
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class SkipWaitTest(unittest.TestCase):
@@ -276,3 +274,7 @@ class SkipWaitTest(unittest.TestCase):
 
         splash.deleteLater()
         self.app.processEvents()
+
+
+if __name__ == "__main__":
+    unittest.main()

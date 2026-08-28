@@ -280,6 +280,14 @@ _translations = {
         "analysis_layout_four": "4x1",
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
+        "analysis_category_tools": "Werkzeuge",
+        "analysis_cursor_button": "Messcursor",
+        "analysis_cursor_tooltip": (
+            "Blendet ein Fadenkreuz ein, das auf dem nächstgelegenen "
+            "Messpunkt einrastet und dessen x- und y-Wert anzeigt. Es "
+            "springt nur auf tatsächlich gemessene Punkte, nie auf eine "
+            "Stelle dazwischen."
+        ),
         "analysis_category_files": "Dateien und Kanäle",
         "analysis_category_spectral": "Spektralanalyse",
         "analysis_category_filter": "Filter",
@@ -754,6 +762,13 @@ _translations = {
         "analysis_layout_four": "4x1",
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
+        "analysis_category_tools": "Tools",
+        "analysis_cursor_button": "Readout cursor",
+        "analysis_cursor_tooltip": (
+            "Shows a crosshair that snaps to the nearest measured sample "
+            "and reports its x and y value. It only ever lands on samples "
+            "that were actually recorded, never in between."
+        ),
         "analysis_category_files": "Files and Channels",
         "analysis_category_spectral": "Spectral Analysis",
         "analysis_category_filter": "Filter",

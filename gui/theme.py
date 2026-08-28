@@ -668,6 +668,51 @@ def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | Non
     return pixmap
 
 
+def draw_crosshair_icon(size: int = 36) -> QPixmap:
+    """Crosshair over a sample point (analysis cursor).
+
+    Deliberately shows the reticle CENTERED ON A DOT rather than a bare
+    cross: the cursor snaps to measured samples, and the icon should
+    say so.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+
+    center = QPointF(size * 0.5, size * 0.5)
+    reach = size * 0.42
+    gap = size * 0.13
+
+    pen = QPen(color)
+    pen.setWidthF(size * 0.07)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    # Four arms with a gap in the middle, so the sample dot stays
+    # readable instead of being crossed out.
+    painter.drawLine(
+        QPointF(center.x() - reach, center.y()),
+        QPointF(center.x() - gap, center.y()),
+    )
+    painter.drawLine(
+        QPointF(center.x() + gap, center.y()),
+        QPointF(center.x() + reach, center.y()),
+    )
+    painter.drawLine(
+        QPointF(center.x(), center.y() - reach),
+        QPointF(center.x(), center.y() - gap),
+    )
+    painter.drawLine(
+        QPointF(center.x(), center.y() + gap),
+        QPointF(center.x(), center.y() + reach),
+    )
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawEllipse(center, size * 0.09, size * 0.09)
+
+    painter.end()
+    return pixmap
+
+
 def draw_magnifier_icon(size: int = 36) -> QPixmap:
     """Magnifying glass with a schematic time graph inside it (Analysis).
 
