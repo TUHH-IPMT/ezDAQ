@@ -424,6 +424,18 @@ class AnalysisView(QWidget):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
 
+        self._layout_category_label = QLabel(t("analysis_category_layout"))
+        left_layout.addWidget(self._layout_category_label)
+
+        controls_row = QHBoxLayout()
+        controls_row.setContentsMargins(0, 0, 0, 0)
+        self._layout_label = QLabel(t("analysis_layout"))
+        self._layout_combo = QComboBox()
+        self._layout_combo.currentIndexChanged.connect(self._on_layout_changed)
+        controls_row.addWidget(self._layout_label)
+        controls_row.addWidget(self._layout_combo, stretch=1)
+        left_layout.addLayout(controls_row)
+
         # --- Tools ---
         self._tools_category_label = QLabel(t("analysis_category_tools"))
         left_layout.addWidget(self._tools_category_label)
@@ -444,18 +456,6 @@ class AnalysisView(QWidget):
         tools_row.addWidget(self._cursor_button)
         tools_row.addStretch(1)
         left_layout.addLayout(tools_row)
-
-        self._layout_category_label = QLabel(t("analysis_category_layout"))
-        left_layout.addWidget(self._layout_category_label)
-
-        controls_row = QHBoxLayout()
-        controls_row.setContentsMargins(0, 0, 0, 0)
-        self._layout_label = QLabel(t("analysis_layout"))
-        self._layout_combo = QComboBox()
-        self._layout_combo.currentIndexChanged.connect(self._on_layout_changed)
-        controls_row.addWidget(self._layout_label)
-        controls_row.addWidget(self._layout_combo, stretch=1)
-        left_layout.addLayout(controls_row)
 
         for category_key, kinds in _FUNCTION_CATEGORIES:
             category_label = QLabel(t(category_key))
