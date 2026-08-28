@@ -634,6 +634,16 @@ class AnalysisView(QWidget):
             if button is not None:
                 button.setIcon(QIcon(icon_fn(32)))
 
+        # Same for the readout cursor: its icon AND the colors of its lines,
+        # marker and label box are all captured when they are set.
+        self._cursor_button.setIcon(QIcon(draw_crosshair_icon(32)))
+        for crosshair in self._crosshairs:
+            crosshair.restyle(
+                plot_foreground_color(),
+                plot_foreground_color(),
+                plot_background_color(),
+            )
+
         self._tree.retheme_empty_hint()
 
     def _on_cursor_toggled(self, enabled: bool) -> None:

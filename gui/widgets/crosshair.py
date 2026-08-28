@@ -57,34 +57,42 @@ class SnappingCrosshair:
         self._plot_widget = plot_widget
         self._enabled = False
 
-        pen = pg.mkPen(color=color, width=1, style=Qt.PenStyle.DashLine)
         # `movable=False`: the lines are a readout, not a handle - a
         # draggable one would let the cursor be pulled off its sample.
-        self._v_line = pg.InfiniteLine(angle=90, movable=False, pen=pen)
-        self._h_line = pg.InfiniteLine(angle=0, movable=False, pen=pen)
-        self._marker = pg.ScatterPlotItem(
-            size=9,
-            pen=pg.mkPen(color=color, width=1.5),
-            brush=pg.mkBrush(None),
-        )
-        # Filled box behind the text: the readout sits right where the two
-        # crosshair lines cross, and plain text on top of them - and on top
-        # of the curve - is hard to read at a glance.
-        backdrop = QColor(background)
-        backdrop.setAlpha(220)
-        self._label = pg.TextItem(
-            color=text_color,
-            anchor=(0, 1),
-            fill=pg.mkBrush(backdrop),
-            border=pg.mkPen(color=color, width=1),
-        )
+        self._v_line = pg.InfiniteLine(angle=90, movable=False)
+        self._h_line = pg.InfiniteLine(angle=0, movable=False)
+        self._marker = pg.ScatterPlotItem(size=9, brush=pg.mkBrush(None))
+        self._label = pg.TextItem(anchor=(0, 1))
         self._label.setZValue(100)
 
         self._items = (self._v_line, self._h_line, self._marker, self._label)
+        self.restyle(color, text_color, background)
 
     # ------------------------------------------------------------------ #
     # State
     # ------------------------------------------------------------------ #
+
+    def restyle(self, color: str, text_color: str, background: str) -> None:
+        """Applies the current theme's colors.
+
+        Called again after a theme change: every color here is captured at
+        the moment it is set, so a cursor built under the dark theme would
+        otherwise keep drawing light lines on a light plot.
+        """
+        pen = pg.mkPen(color=color, width=1, style=Qt.PenStyle.DashLine)
+        self._v_line.setPen(pen)
+        self._h_line.setPen(pen)
+        self._marker.setPen(pg.mkPen(color=color, width=1.5))
+
+        # Filled box behind the text: the readout sits right where the two
+        # crosshair lines cross, and plain text on top of them - and on
+        # top of the curve - is hard to read at a glance.
+        backdrop = QColor(background)
+        backdrop.setAlpha(220)
+        self._label.setColor(text_color)
+        self._label.fill = pg.mkBrush(backdrop)
+        self._label.border = pg.mkPen(color=color, width=1)
+        self._label.update()
 
     def set_enabled(self, enabled: bool) -> None:
         """Adds the cursor items to the plot, or takes them back out."""

@@ -229,5 +229,41 @@ class LabelTest(unittest.TestCase):
         self.assertEqual(text.splitlines()[0], "x = 1.5")
 
 
+
+
+class ThemeFollowTest(unittest.TestCase):
+    """Every color here is captured at the moment it is set, so a cursor
+    built under one theme keeps drawing that theme's colors unless it is
+    restyled - light lines on a light plot, in the worst case."""
+
+    def setUp(self) -> None:
+        from gui.theme import get_theme
+
+        _app()
+        self._original_theme = get_theme()
+
+    def tearDown(self) -> None:
+        from gui.theme import set_theme
+
+        set_theme(self._original_theme)
+
+    def test_restyle_repaints_lines_marker_and_label(self) -> None:
+        from gui.theme import plot_background_color, plot_foreground_color, set_theme
+
+        fixture = _Fixture(np.arange(0.0, 5.0, 0.5), np.arange(0.0, 5.0, 0.5))
+        seen = {}
+        for theme in ("dark", "light"):
+            set_theme("light" if theme == "dark" else "dark")
+            set_theme(theme)
+            fixture.crosshair.restyle(
+                plot_foreground_color(), plot_foreground_color(), plot_background_color()
+            )
+            seen[theme] = fixture.crosshair._v_line.pen.color().name()
+            self.assertEqual(seen[theme], plot_foreground_color())
+
+        self.assertNotEqual(seen["light"], seen["dark"])
+        fixture.close()
+
+
 if __name__ == "__main__":
     unittest.main()
