@@ -25,7 +25,7 @@ APP_NAME = "ezDAQ"
 # (see `gui/main_window.py::_on_about`) and mirrored by the installer
 # (`packaging/ezDAQ.iss`), which cannot import Python - a test keeps
 # the two from drifting apart (`tests/test_version.py`).
-APP_VERSION = "0.1"
+APP_VERSION = "0.5.0"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
