@@ -26,6 +26,7 @@ Thread safety:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -119,6 +120,10 @@ class MainWindow(QMainWindow):
         # garbage-collect the QThread object prematurely.
         self._background_workers: list[BackgroundWorker] = []
         self._discovery_worker: BackgroundWorker | None = None
+        # Second stage of the device discovery, see
+        # `_start_connection_probe` - runs on its own so a slow probe
+        # never holds up the device list.
+        self._connection_probe_worker: BackgroundWorker | None = None
 
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
@@ -796,8 +801,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_discover_hardware(self) -> None:
-        """Starts device discovery in the background (see
-        `gui/workers.py::BackgroundWorker`).
+        """Starts the FIRST stage of the device discovery in the
+        background (see `gui/workers.py::BackgroundWorker`).
 
         `nidaqmx.system.System.local()` plus channel iteration per device
         (`hardware/nidaq_device.py::discover_devices`) can take a
@@ -805,11 +810,20 @@ class MainWindow(QMainWindow):
         timeouts - it previously ran synchronously on the GUI thread and
         in doing so also blocked the automatic discovery run at program
         startup (see `__init__`).
+
+        Discovery is deliberately split in two: this stage reads the
+        NI-DAQmx configuration database only (`probe_connections=False`,
+        a matter of milliseconds), the hardware probe follows in
+        `_start_connection_probe`. Probing inside this call meant that a
+        configured but unreachable NETWORK cDAQ chassis made the user
+        wait out a driver network timeout before ANY device appeared -
+        on every refresh, and since the setup tab refreshes on entry, on
+        every visit to it.
         """
         if self._discovery_worker is not None:  # a request is already in progress
             return
         self._setup_view.set_discovery_in_progress(True)
-        worker = BackgroundWorker(self._controller.discover_hardware)
+        worker = BackgroundWorker(self._controller.discover_hardware, probe_connections=False)
         self._discovery_worker = worker
         worker.succeeded.connect(self._on_discover_hardware_succeeded)
         worker.failed.connect(self._on_discover_hardware_failed)
@@ -833,6 +847,82 @@ class MainWindow(QMainWindow):
         # actually configure as a channel is counted.
         usable_devices = [d for d in devices if d.num_channels > 0]
         self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
+        self._start_connection_probe(devices)
+
+    def _start_connection_probe(self, devices: list[DeviceInfo]) -> None:
+        """Starts the SECOND stage of the device discovery: the hardware
+        probe for the devices just listed (see
+        `hardware/nidaq_device.py::probe_device_connections`).
+
+        Runs in its own worker, so the device list already on screen
+        stays usable while a network chassis runs into its timeout. The
+        result is applied in `_on_connection_probe_succeeded`.
+
+        Skipped while a measurement is running: the probe uses
+        `self_test_device()`, which must not be fired at a device that
+        currently has a running task. The tab-switch trigger checks the
+        same thing (see `_on_view_changed`), but the manual "search
+        devices" button does not, and a measurement can also be started
+        while stage one is still in flight.
+
+        Skipped as well while a probe is ALREADY running - it cannot be
+        cancelled (it sits in the driver waiting out a timeout), and its
+        result remains valid for the newer list anyway: reachability is a
+        property of the hardware, not of the discovery run that asked for
+        it, and it is applied per device NAME.
+        """
+        if self._connection_probe_worker is not None:
+            return
+        if not devices or self._controller.is_running:
+            return
+        worker = BackgroundWorker(self._controller.probe_hardware_connections, devices)
+        self._connection_probe_worker = worker
+        worker.succeeded.connect(self._on_connection_probe_succeeded)
+        worker.failed.connect(self._on_connection_probe_failed)
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_connection_probe_succeeded(self, connection_states: dict[str, bool]) -> None:
+        """Applies the probe result to the device list currently shown.
+
+        Deliberately applied to the CURRENT list, not to the one this
+        probe was started for: a refresh may have happened in the
+        meantime (switching to the setup tab triggers one), and the
+        reachability of a device does not depend on which run asked for
+        it. Devices the probe says nothing about - added by that newer
+        run, or gone from the driver in the meantime - keep their
+        unprobed state instead of being reported as disconnected.
+
+        An empty result means the probe could not be carried out at all
+        (no `nidaqmx`, driver error). The optimistic state from stage one
+        is then kept, see `probe_device_connections`.
+        """
+        self._connection_probe_worker = None
+        current_devices = self._setup_view.get_discovered_devices()
+        if not connection_states or not current_devices:
+            return
+        self._setup_view.set_discovered_devices(
+            [
+                replace(
+                    device,
+                    is_connected=connection_states[device.device_name],
+                    connection_probed=True,
+                )
+                if device.device_name in connection_states
+                else device
+                for device in current_devices
+            ]
+        )
+
+    def _on_connection_probe_failed(self, message: str) -> None:
+        # Only logged, deliberately without a dialog or a status bar
+        # message: the device list from stage one is on screen and
+        # usable, only the reachability marking is missing. Handling this
+        # like a failed discovery would replace a working list with an
+        # error message.
+        self._connection_probe_worker = None
+        logger.warning("Verbindungsprüfung der Geräte fehlgeschlagen: %s", message)
 
     def _on_discover_hardware_failed(self, message: str) -> None:
         self._discovery_worker = None

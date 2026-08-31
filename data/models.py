@@ -1030,6 +1030,16 @@ class DeviceInfo:
             would keep showing up as selectable although no measurement
             can be started with it (see
             `hardware/nidaq_device.py::_is_device_connected`).
+        connection_probed: Whether `is_connected` actually reflects a
+            hardware probe, as opposed to just its optimistic default.
+            False during the first stage of the two-stage device
+            discovery, which lists the configuration database
+            immediately and only probes afterwards (see
+            `hardware/nidaq_device.py::probe_device_connections`) - the
+            setup view needs to tell "responds" apart from "not asked
+            yet" so it neither grays out a device prematurely nor
+            reports it as disconnected before anything was measured
+            (see `gui/setup_view.py::set_discovered_devices`).
     """
 
     device_name: str
@@ -1040,8 +1050,10 @@ class DeviceInfo:
     # List of physical channel names, e.g. ["cDAQ1Mod1/ai0", ...]
     physical_channels: list[str] = field(default_factory=list)
     # Defaults to True so that callers constructing DeviceInfo without a
-    # hardware probe (tests, metadata) keep the previous behavior.
+    # hardware probe (tests, metadata) keep the previous behavior -
+    # `connection_probed` marks exactly that case.
     is_connected: bool = True
+    connection_probed: bool = False
 
 
 @dataclass

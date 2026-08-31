@@ -19,6 +19,12 @@ tests would otherwise only run on a machine with NI hardware attached.
 `SetupViewProblemReportingTest` additionally covers the reporting side:
 since switching to the setup view now triggers a device search on its
 own, an unchanged problem must not raise its dialog again every time.
+
+`TwoStageDiscoveryTest` covers the split of that discovery into a fast
+listing stage and a separate probing stage
+(`discover_devices(probe_connections=False)` plus
+`probe_device_connections`), which keeps a network chassis running into
+its timeout from delaying the device list.
 """
 
 from __future__ import annotations
@@ -255,10 +261,6 @@ class CreateDevicesConnectionTest(unittest.TestCase):
         self.assertEqual(len(devices), 1)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SetupViewProblemReportingTest(unittest.TestCase):
     """`SetupView.set_discovered_devices()` must not turn an unchanged
     problem into a recurring modal dialog.
@@ -304,9 +306,19 @@ class SetupViewProblemReportingTest(unittest.TestCase):
             self.view.set_discovered_devices(devices)
         return list(self.warnings)
 
-    def _device(self, name: str, is_connected: bool = True, supported: bool = True):
+    def _device(
+        self,
+        name: str,
+        is_connected: bool = True,
+        supported: bool = True,
+        probed: bool = True,
+    ):
         from data.models import DeviceInfo
 
+        # `probed=True` by default: these cases describe the state after
+        # a COMPLETED discovery. `probed=False` is what stage one
+        # delivers - listed from the configuration database, reachability
+        # not yet asked about.
         return DeviceInfo(
             device_name=name,
             product_type="NI 9215" if supported else "NI 9263",
@@ -315,6 +327,7 @@ class SetupViewProblemReportingTest(unittest.TestCase):
             has_any_channels=True,
             physical_channels=[f"{name}/ai0", f"{name}/ai1"],
             is_connected=is_connected,
+            connection_probed=probed,
         )
 
     def test_disconnected_device_reported_once_then_suppressed(self) -> None:
@@ -356,3 +369,138 @@ class SetupViewProblemReportingTest(unittest.TestCase):
         titles = self._set_devices([offline])
         self.assertEqual(len(titles), 1)
         self.assertNotIn("unsupported_modules_title", titles[0].lower().replace(" ", "_"))
+
+    def test_unprobed_device_is_not_reported_as_disconnected(self) -> None:
+        """Stage one has no probe result - an unprobed device must not be
+        declared disconnected on the strength of a default value."""
+        unprobed = self._device("cDAQ2Mod1", is_connected=True, probed=False)
+
+        self.assertEqual(self._set_devices([unprobed]), [])
+
+    def test_stage_one_does_not_clear_the_memo_of_a_reported_device(self) -> None:
+        """The regression this guards: every entry into the setup view
+        runs stage one, then stage two. If stage one - which knows
+        nothing about reachability - reset the memo, stage two would pop
+        up a modal dialog about the same unchanged device every time.
+        """
+        name = "cDAQ2Mod1"
+        stage_one = self._device(name, is_connected=True, probed=False)
+        stage_two = self._device(name, is_connected=False, probed=True)
+
+        # First visit: listed, then probed and reported once.
+        self.assertEqual(self._set_devices([stage_one]), [])
+        self.assertEqual(len(self._set_devices([stage_two])), 1)
+
+        # Second visit, unchanged situation: silent in both stages.
+        self.assertEqual(self._set_devices([stage_one]), [])
+        self.assertEqual(self._set_devices([stage_two]), [])
+
+
+class TwoStageDiscoveryTest(unittest.TestCase):
+    """`discover_devices(probe_connections=False)` plus
+    `probe_device_connections()` - the split that keeps the probe off the
+    path the user waits on.
+    """
+
+    def setUp(self) -> None:
+        self.probe_log: list[str] = []
+        modules = [
+            _FakeDevice("cDAQ1Mod1", "NI 9215", "cDAQ1", probe_log=self.probe_log),
+            _FakeDevice("cDAQ1Mod2", "NI 9234", "cDAQ1", probe_log=self.probe_log),
+            _FakeDevice("cDAQ2Mod1", "NI 9215", "cDAQ2", probe_log=self.probe_log),
+        ]
+        by_name = {module.name: module for module in modules}
+        by_name["cDAQ1"] = _FakeDevice(
+            "cDAQ1", "cDAQ-9189", num_ai_channels=0, reachable=True, probe_log=self.probe_log
+        )
+        by_name["cDAQ2"] = _FakeDevice(
+            "cDAQ2", "cDAQ-9189", num_ai_channels=0, reachable=False, probe_log=self.probe_log
+        )
+
+        self._originals = (
+            nidaq_device.NIDAQMX_AVAILABLE,
+            nidaq_device.System,
+            nidaq_device.DaqmxError,
+        )
+        nidaq_device.NIDAQMX_AVAILABLE = True
+        nidaq_device.System = _FakeSystemFactory(modules, by_name)
+        nidaq_device.DaqmxError = _FakeDaqmxError
+
+    def tearDown(self) -> None:
+        (
+            nidaq_device.NIDAQMX_AVAILABLE,
+            nidaq_device.System,
+            nidaq_device.DaqmxError,
+        ) = self._originals
+
+    def test_stage_one_lists_devices_without_touching_the_hardware(self) -> None:
+        devices = nidaq_device.discover_devices(probe_connections=False)
+
+        self.assertEqual(
+            [d.device_name for d in devices], ["cDAQ1Mod1", "cDAQ1Mod2", "cDAQ2Mod1"]
+        )
+        self.assertEqual(self.probe_log, [])
+        self.assertTrue(all(not d.connection_probed for d in devices))
+        # Optimistic default, deliberately: the unprobed state is the one
+        # the app showed before the probe existed at all.
+        self.assertTrue(all(d.is_connected for d in devices))
+
+    def test_stage_two_reports_reachability_per_device(self) -> None:
+        devices = nidaq_device.discover_devices(probe_connections=False)
+
+        states = nidaq_device.probe_device_connections(devices)
+
+        self.assertEqual(
+            states, {"cDAQ1Mod1": True, "cDAQ1Mod2": True, "cDAQ2Mod1": False}
+        )
+
+    def test_stage_two_probes_once_per_chassis_not_per_module(self) -> None:
+        devices = nidaq_device.discover_devices(probe_connections=False)
+
+        nidaq_device.probe_device_connections(devices)
+
+        # Probes run concurrently, so the ORDER is not fixed - only that
+        # each chassis was probed exactly once.
+        self.assertEqual(sorted(self.probe_log), ["cDAQ1", "cDAQ2"])
+
+    def test_stage_one_and_two_together_match_the_single_stage_result(self) -> None:
+        """The split must not change the outcome, only its timing."""
+        single_stage = {
+            d.device_name: d.is_connected for d in nidaq_device.discover_devices()
+        }
+        self.probe_log.clear()
+
+        devices = nidaq_device.discover_devices(probe_connections=False)
+        two_stage = nidaq_device.probe_device_connections(devices)
+
+        self.assertEqual(two_stage, single_stage)
+
+    def test_device_gone_from_the_driver_is_left_out(self) -> None:
+        """Removed in NI-MAX between the two stages: reported as unknown
+        rather than as disconnected - the next run drops it anyway."""
+        from data.models import DeviceInfo
+
+        states = nidaq_device.probe_device_connections(
+            [DeviceInfo(device_name="cDAQ9Mod1", product_type="NI 9215")]
+        )
+
+        self.assertEqual(states, {})
+
+    def test_probe_without_devices_does_not_touch_the_hardware(self) -> None:
+        self.assertEqual(nidaq_device.probe_device_connections([]), {})
+        self.assertEqual(self.probe_log, [])
+
+    def test_probe_without_nidaqmx_keeps_the_optimistic_state(self) -> None:
+        """Empty rather than all-False: a missing driver is not evidence
+        that the devices are unreachable."""
+        from data.models import DeviceInfo
+
+        nidaq_device.NIDAQMX_AVAILABLE = False
+        devices = [DeviceInfo(device_name="cDAQ1Mod1", product_type="NI 9215")]
+
+        self.assertEqual(nidaq_device.probe_device_connections(devices), {})
+        self.assertEqual(self.probe_log, [])
+
+
+if __name__ == "__main__":
+    unittest.main()

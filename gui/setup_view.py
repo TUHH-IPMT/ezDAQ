@@ -603,6 +603,17 @@ class SetupView(QWidget):
         dictated by the actually connected hardware (see
         `gui/widgets/channel_table.py::set_available_devices`).
 
+        Called TWICE per discovery run, once per stage (see
+        `gui/main_window.py::_on_discover_hardware`): first with the
+        device list straight from the NI-DAQmx configuration database
+        (`DeviceInfo.connection_probed is False` throughout), then again
+        with the same devices once the hardware probe has answered. The
+        rendering is identical for both, so the list appears immediately
+        and only the reachability marking arrives late - which is the
+        entire point of the split, since a configured but unreachable
+        network cDAQ chassis only answers the probe with a driver
+        timeout.
+
         Additionally reports via dialog if any of the detected devices
         have an UNSUPPORTED module type (`DeviceInfo.module_type is
         None`, see `hardware/nidaq_device.py::_map_product_type`) or do
@@ -616,6 +627,11 @@ class SetupView(QWidget):
         are already not selectable in the channel table (see
         `gui/widgets/channel_table.py::HardwareChannelPickerDialog`) -
         the message here additionally makes visible WHY/WHICH ones.
+
+        A device is only counted as disconnected once it has actually
+        been probed. An UNPROBED one is treated as available - the same
+        state the app showed before the probe existed at all - so stage
+        one neither grays out devices prematurely nor reports them.
 
         The filter below deliberately uses `d.has_any_channels` IN
         ADDITION to `d.num_channels > 0`, NOT just the latter:
@@ -653,7 +669,10 @@ class SetupView(QWidget):
         unsupported_devices: list[DeviceInfo] = []
         disconnected_devices: list[DeviceInfo] = []
         for device in devices_with_channels:
-            if not device.is_connected:
+            # `connection_probed` distinguishes "probed and silent" from
+            # "not asked yet": during stage one of the discovery,
+            # `is_connected` is merely its optimistic default.
+            if device.connection_probed and not device.is_connected:
                 disconnected_devices.append(device)
                 module_info = f" [{t('device_not_connected')}]"
             elif device.module_type is None:
@@ -672,7 +691,9 @@ class SetupView(QWidget):
             ]
             for channel in channels:
                 device_item.addChild(QTreeWidgetItem([channel]))
-            if device.module_type is None or not device.is_connected:
+            if device.module_type is None or (
+                device.connection_probed and not device.is_connected
+            ):
                 # Make it visually recognizable as unavailable - merely
                 # disabling via item flags isn't enough for this (Qt
                 # doesn't reliably apply the disabled palette color to
@@ -704,9 +725,26 @@ class SetupView(QWidget):
             for d in unsupported_devices
             if (d.device_name, "unsupported") not in self._reported_problem_devices
         ]
-        self._reported_problem_devices = {
-            (d.device_name, "disconnected") for d in disconnected_devices
-        } | {(d.device_name, "unsupported") for d in unsupported_devices}
+        # Stage one of a discovery run carries NO probe result, so it
+        # must not overwrite the disconnected part of the memo with its
+        # (empty) one - otherwise every entry into this view would clear
+        # the memo and stage two would report the same unchanged
+        # disconnected device again, with a modal dialog, every time.
+        # Carried over only for devices still in the list: one that has
+        # disappeared from the driver is meant to be reported afresh if
+        # it comes back.
+        current_names = {d.device_name for d in devices_with_channels}
+        probed_names = {d.device_name for d in devices_with_channels if d.connection_probed}
+        carried_over_disconnected = {
+            (name, kind)
+            for name, kind in self._reported_problem_devices
+            if kind == "disconnected" and name in current_names and name not in probed_names
+        }
+        self._reported_problem_devices = (
+            {(d.device_name, "disconnected") for d in disconnected_devices}
+            | {(d.device_name, "unsupported") for d in unsupported_devices}
+            | carried_over_disconnected
+        )
 
         # Reported BEFORE the unsupported-module warning: a device that
         # doesn't answer at all is the more fundamental problem, and its
