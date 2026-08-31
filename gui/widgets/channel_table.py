@@ -181,15 +181,22 @@ class HardwareChannelPickerDialog(QDialog):
 
         selected_item: QTreeWidgetItem | None = None
         for device in devices:
-            is_unsupported_module = device.module_type is None
-            module_info = (
-                f" [{t('device_module_unsupported')}]"
-                if is_unsupported_module
-                else f" [{device.module_type.value}]"
-            )
+            # Checked BEFORE the module type: for a device that doesn't
+            # answer, the module type comes from the same stale NI-DAQmx
+            # configuration cache that made the device look available at
+            # all - labeling it "not supported" would name the wrong
+            # cause (see `hardware/nidaq_device.py::_is_device_connected`).
+            is_offline = not device.is_connected
+            is_unsupported_module = not is_offline and device.module_type is None
+            if is_offline:
+                module_info = f" [{t('device_not_connected')}]"
+            elif is_unsupported_module:
+                module_info = f" [{t('device_module_unsupported')}]"
+            else:
+                module_info = f" [{device.module_type.value}]"
             device_item = QTreeWidgetItem([f"{device.device_name} - {device.product_type}{module_info}"])
             device_item.setFlags(device_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
-            if is_unsupported_module:
+            if is_unsupported_module or is_offline:
                 # Flags alone (ItemIsEnabled/-Selectable) are NOT enough to
                 # make an item visually recognizable as disabled - Qt does
                 # not reliably apply the palette's disabled color group for
@@ -202,7 +209,9 @@ class HardwareChannelPickerDialog(QDialog):
             ]
             for channel in channels:
                 is_used = channel in used_channels and channel != current_channel
-                if is_unsupported_module:
+                if is_offline:
+                    label = t("hw_channel_device_offline", channel=channel)
+                elif is_unsupported_module:
                     label = t("hw_channel_unsupported_module", channel=channel)
                 elif is_used:
                     label = t("hw_channel_already_used", channel=channel)
@@ -210,7 +219,7 @@ class HardwareChannelPickerDialog(QDialog):
                     label = channel
                 channel_item = QTreeWidgetItem([label])
                 channel_item.setData(0, _ROLE_CHANNEL_VALUE, channel)
-                if is_used or is_unsupported_module:
+                if is_used or is_unsupported_module or is_offline:
                     channel_item.setFlags(
                         channel_item.flags()
                         & ~Qt.ItemFlag.ItemIsEnabled
@@ -1042,6 +1051,15 @@ class ChannelTableWidget(QWidget):
         `_available_hw_channels` - their channels should never
         automatically be used as a default for a new row (see
         `_on_add_clicked`).
+
+        The same applies to devices that are configured in the driver but
+        do not respond (`DeviceInfo.is_connected is False`, e.g. a
+        reserved network cDAQ chassis whose cable was pulled): their
+        channels exist only in the NI-DAQmx configuration cache, so
+        assigning them would produce a configuration that fails at
+        measurement start. They stay visible but disabled in the picker,
+        for the same reason as unsupported modules - so the user sees
+        WHY a channel they expect is missing.
         """
         self._available_devices = devices or []
         self._hw_channel_to_module = {}
@@ -1050,7 +1068,7 @@ class ChannelTableWidget(QWidget):
             channels = device.physical_channels or [
                 f"{device.device_name}/ai{i}" for i in range(device.num_channels)
             ]
-            if device.module_type is not None:
+            if device.module_type is not None and device.is_connected:
                 self._available_hw_channels.extend(channels)
                 for hw_channel in channels:
                     self._hw_channel_to_module[hw_channel] = device.module_type
@@ -1473,10 +1491,15 @@ class ChannelTableWidget(QWidget):
             "plot_y_max": channel.plot_y_max,
             "plot_autoscale": channel.plot_autoscale,
             "plot_time_window_seconds": channel.plot_time_window_seconds,
+            "plot_show_x_label": channel.plot_show_x_label,
+            "plot_show_y_label": channel.plot_show_y_label,
+            "plot_show_grid": channel.plot_show_grid,
+            "plot_line_width": channel.plot_line_width,
             "plot_show_graph": channel.plot_show_graph,
             "plot_show_value": channel.plot_show_value,
             "plot_value_integer_digits": channel.plot_value_integer_digits,
             "plot_value_decimal_digits": channel.plot_value_decimal_digits,
+            "plot_value_refresh_hz": channel.plot_value_refresh_hz,
             "plot_visible": channel.plot_visible,
             "plot_popout": channel.plot_popout,
             "plot_popout_x": channel.plot_popout_x,
@@ -1547,6 +1570,12 @@ class ChannelTableWidget(QWidget):
             plot_time_window_seconds=max(
                 0.1, float(display_settings.get("plot_time_window_seconds", 5.0))
             ),
+            plot_show_x_label=display_settings.get("plot_show_x_label", True),
+            plot_show_y_label=display_settings.get("plot_show_y_label", True),
+            plot_show_grid=display_settings.get("plot_show_grid", True),
+            plot_line_width=max(
+                0.1, float(display_settings.get("plot_line_width", 1.5))
+            ),
             plot_show_graph=display_settings.get("plot_show_graph", True),
             plot_show_value=display_settings.get("plot_show_value", False),
             plot_value_integer_digits=max(
@@ -1554,6 +1583,9 @@ class ChannelTableWidget(QWidget):
             ),
             plot_value_decimal_digits=max(
                 0, int(display_settings.get("plot_value_decimal_digits", 3))
+            ),
+            plot_value_refresh_hz=max(
+                0.1, float(display_settings.get("plot_value_refresh_hz", 30.0))
             ),
             plot_visible=display_settings.get("plot_visible", True),
             plot_popout=display_settings.get("plot_popout", False),

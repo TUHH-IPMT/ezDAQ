@@ -29,7 +29,12 @@ from core.rate_merge import DeviceGroup
 from core.ringbuffer import RingBuffer
 from data.models import Channel, DeviceInfo, MeasurementConfig, MeasurementSession, TriggerKind, resolve_rate_groups
 from hardware.base_device import AcquisitionError, BaseDevice
-from hardware.nidaq_device import NIDAQSharedTask, discover_devices, open_ni_max
+from hardware.nidaq_device import (
+    NIDAQSharedTask,
+    discover_devices,
+    open_ni_max,
+    probe_device_connections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,9 +87,20 @@ class MeasurementController:
     # Device discovery
     # ------------------------------------------------------------------ #
 
-    def discover_hardware(self) -> list[DeviceInfo]:
-        """Detects connected NI cDAQ modules (for the setup view)."""
-        return discover_devices()
+    def discover_hardware(self, probe_connections: bool = True) -> list[DeviceInfo]:
+        """Detects connected NI cDAQ modules (for the setup view).
+
+        See `hardware.nidaq_device.discover_devices` for why the setup
+        view passes `probe_connections=False` here and asks for the
+        probe separately via `probe_hardware_connections`.
+        """
+        return discover_devices(probe_connections=probe_connections)
+
+    def probe_hardware_connections(self, devices: list[DeviceInfo]) -> dict[str, bool]:
+        """Second stage of the device discovery - see
+        `hardware.nidaq_device.probe_device_connections`.
+        """
+        return probe_device_connections(devices)
 
     def open_ni_max(self) -> None:
         """Starts NI-MAX (see `hardware/nidaq_device.py::open_ni_max`)."""

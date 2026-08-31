@@ -12,6 +12,7 @@ paths and plain data structures.
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import asdict, dataclass, field
@@ -19,6 +20,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 APP_NAME = "ezDAQ"
+
+# Single source of truth for the version. Shown in the About dialog
+# (see `gui/main_window.py::_on_about`) and mirrored by the installer
+# (`packaging/ezDAQ.iss`), which cannot import Python - a test keeps
+# the two from drifting apart (`tests/test_version.py`).
+APP_VERSION = "0.5.0"
 
 CONFIG_FILE_NAME = "settings.json"
 CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
@@ -42,6 +49,28 @@ def get_resource_path(*parts: str) -> Path:
     else:
         base = Path(__file__).resolve().parent.parent
     return base.joinpath("resources", *parts)
+
+
+def read_stored_theme(default: str = "light") -> str:
+    """Reads ONLY the stored theme, without building an `AppSettings`.
+
+    Needed before the splash screen is created: the full configuration
+    is loaded behind the splash, so without this the splash would be
+    built with the wrong palette and the application would flash white
+    on every start under the dark theme.
+
+    Deliberately silent on every error - a missing, empty or damaged
+    settings file must never keep the application from starting, and at
+    this point there is not even a window to report it in. The real
+    load right after (`ConfigurationManager`) reports properly.
+    """
+    try:
+        path = get_config_directory() / CONFIG_FILE_NAME
+        with open(path, "r", encoding="utf-8") as handle:
+            theme = json.load(handle).get("theme")
+    except Exception:
+        return default
+    return theme if theme in ("light", "dark") else default
 
 
 def get_config_directory() -> Path:
@@ -102,6 +131,11 @@ class AppSettings:
             `data.models.TriggerConfig.to_dict()` (analogous to `window`
             above - stored directly as a dict instead of its own flat
             fields, since `TriggerConfig` itself is already nested).
+        live_view_plot_columns: How many channels the live view's main
+            grid places side by side (see
+            `gui/live_view.py::LiveView.set_plot_columns`). A view
+            setting, not a channel property - hence here rather than
+            on `data.models.Channel`.
     """
 
     window: WindowGeometry = field(default_factory=WindowGeometry)
@@ -121,6 +155,7 @@ class AppSettings:
     last_recording_stop_value: float = 0.0
     last_recording_stop_unit: str = "samples"
     last_trigger_config: dict = field(default_factory=dict)
+    live_view_plot_columns: int = 1
 
     def to_dict(self) -> dict[str, Any]:
         """Serializes the settings into a JSON-compatible dictionary."""
@@ -160,4 +195,7 @@ class AppSettings:
             last_recording_stop_value=data.get("last_recording_stop_value", 0.0),
             last_recording_stop_unit=data.get("last_recording_stop_unit", "samples"),
             last_trigger_config=data.get("last_trigger_config", {}) or {},
+            # Clamped: a stored 0 or a negative value would make the
+            # grid layout divide by zero (see `_rebuild_plots`).
+            live_view_plot_columns=max(1, int(data.get("live_view_plot_columns", 1))),
         )

@@ -54,6 +54,8 @@ Architecture note (performance):
 from __future__ import annotations
 
 import logging
+import math
+import time
 import weakref
 
 import numpy as np
@@ -72,7 +74,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QLayout,
+    QScrollArea,
     QLineEdit,
     QMessageBox,
     QProgressBar,
@@ -92,6 +94,7 @@ from gui.theme import (
     action_button_style,
     axis_tick_point_size,
     connect_theme_changed,
+    channel_curve_color,
     curve_color,
     draw_ellipsis_icon,
     draw_play_icon,
@@ -109,7 +112,11 @@ from gui.theme import (
     style_plot_item,
     trigger_arm_button_style,
 )
-from gui.widgets.spinbox import NoWheelDoubleSpinBox, PrecisionDoubleSpinBox
+from gui.widgets.spinbox import (
+    NoWheelDoubleSpinBox,
+    NoWheelSpinBox,
+    PrecisionDoubleSpinBox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +134,19 @@ pg.setConfigOptions(antialias=True, useOpenGL=True)
 _DEFAULT_DISPLAY_WINDOW_SECONDS = 5.0
 _UI_UPDATE_INTERVAL_MS = 15  # ~66 Hz; with useOpenGL=True, rendering is no longer the bottleneck
 _STORAGE_UPDATE_INTERVAL_MS = 1000  # file access (stat) less often than the plot update
+# Upper bound for `Channel.plot_value_refresh_hz`: refreshing the readout
+# more often than the view ticks is impossible, so the spin box stops
+# exactly there instead of offering a rate that silently caps.
+_MAX_VALUE_REFRESH_HZ = 1000.0 / _UI_UPDATE_INTERVAL_MS
+
+# Upper bound for the number of channels the main grid places side by
+# side. Not a technical limit - beyond this the individual plot is
+# narrower than the value readout beside it, so the layout stops being
+# useful before it stops being possible.
+_MAX_PLOT_COLUMNS = 4
+
+# Grid line opacity, previously hardwired at three call sites.
+_GRID_ALPHA = 0.3
 # Upper bound on the point count passed to `curve.setData()` (see
 # `_downsample_for_display`) - well more than any screen has horizontal
 # pixels, so the curve looks visually unchanged.
@@ -209,6 +229,30 @@ def _channel_axis_label(channel: Channel) -> str:
     additionally shown directly on the axis."""
     unit_suffix = f" [{channel.unit}]" if channel.unit else ""
     return f"{channel.display_name}{unit_suffix}"
+
+
+def _apply_axis_label_visibility(plot_item, channel: Channel) -> None:
+    """Shows/hides the X and Y axis TITLES of `plot_item` according to
+    `Channel.plot_show_x_label`/`plot_show_y_label`.
+
+    `AxisItem.showLabel()` rather than clearing the text via
+    `setLabel("")`: it also gives the reserved space back
+    (`_updateWidth()`/`_updateHeight()` internally), so the plot area
+    actually grows - which is the point of switching a title off. Tick
+    marks, tick numbers and the grid are untouched.
+
+    MUST be called AFTER every `setLabel()` on the same axis:
+    `setLabel()` internally ends with `showLabel(bool(text))` and would
+    otherwise silently switch a hidden title back on - which is exactly
+    what happens on a language change (see `LiveView.retranslate_ui`).
+    """
+    for axis_name, show in (
+        ("bottom", channel.plot_show_x_label),
+        ("left", channel.plot_show_y_label),
+    ):
+        axis = plot_item.getAxis(axis_name)
+        if axis is not None:
+            axis.showLabel(show)
 
 
 def _channel_display_key(channel: Channel) -> tuple[str, str]:
@@ -411,9 +455,9 @@ class ChannelDisplayDialog(QDialog):
     def __init__(
         self,
         channels: list[Channel],
-        default_color: str,
         default_background: str,
         default_grid_color: str,
+        plot_columns: int = 1,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -426,13 +470,46 @@ class ChannelDisplayDialog(QDialog):
         self._plot_settings: dict[tuple[str, str], dict] = {}
         self._value_settings: dict[tuple[str, str], dict] = {}
         self._rows: dict[tuple[str, str], dict[str, QWidget]] = {}
+        # Per CHANNEL, not one shared set: the curve color a channel falls
+        # back to depends on its position in the palette (see
+        # `gui/theme.py::channel_curve_color`), so a single shared default
+        # would show every swatch in the same color while the plots are
+        # drawn in different ones. Filled in per channel below.
+        self._color_defaults: dict[tuple[str, str], dict[str, str]] = {}
 
-        layout = QVBoxLayout(self)
-        # Dialog is not resizable - always exactly as large as the
-        # content needs (adapts automatically, e.g. to a different
-        # number of channels), no stretching/distorting of the rows by
-        # manually resizing.
-        layout.setSizeConstraint(QLayout.SizeConstraint.SetFixedSize)
+        outer_layout = QVBoxLayout(self)
+
+        # How many channels the main grid places side by side. A VIEW
+        # setting, not a channel property - hence once at the top instead
+        # of in every channel row (see `LiveView.set_plot_columns`).
+        columns_row = QHBoxLayout()
+        self._columns_spin = NoWheelSpinBox()
+        self._columns_spin.setRange(1, _MAX_PLOT_COLUMNS)
+        self._columns_spin.setValue(max(1, min(_MAX_PLOT_COLUMNS, int(plot_columns))))
+        self._columns_spin.setToolTip(t("plot_columns_tooltip"))
+        columns_row.addWidget(QLabel(f"{t('plot_columns')}:"))
+        columns_row.addWidget(self._columns_spin)
+        columns_row.addStretch(1)
+        outer_layout.addLayout(columns_row)
+
+        separator_top = QFrame()
+        separator_top.setFrameShape(QFrame.Shape.HLine)
+        separator_top.setFrameShadow(QFrame.Shadow.Sunken)
+        outer_layout.addWidget(separator_top)
+
+        # The channel rows sit in a scroll area, the buttons stay outside
+        # it. The dialog used to be `SetFixedSize` and grew by ~41px per
+        # channel: a fully populated chassis (8 x NI9215 = 32 channels)
+        # came to ~1350px, so on a 1080p screen the OK button ended up off
+        # the screen with no way to scroll or resize to it. Same reasoning
+        # and same construction as `gui/setup_view.py`.
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        scroll_area.setWidget(content)
+        outer_layout.addWidget(scroll_area, stretch=1)
+        layout = QVBoxLayout(content)
         form = QFormLayout()
         layout.addLayout(form)
 
@@ -450,17 +527,34 @@ class ChannelDisplayDialog(QDialog):
             hw_default_min = channel.min_range if channel.min_range is not None else -10.0
             hw_default_max = channel.max_range if channel.max_range is not None else 10.0
             self._plot_settings[key] = {
-                "plot_color": channel.plot_color or default_color,
-                "plot_background": channel.plot_background or default_background,
-                "plot_grid_color": channel.plot_grid_color or default_grid_color,
+                # RAW values, deliberately not filled in with the theme
+                # default: `None` means "follow the theme". Filling it in here
+                # and writing it back on OK froze the colors of whichever theme
+                # happened to be active - after that the channel never followed
+                # a theme change again, and there was no way back. The plot
+                # sub-dialog SHOWS the theme default for a `None`, it just no
+                # longer stores it.
+                "plot_color": channel.plot_color,
+                "plot_background": channel.plot_background,
+                "plot_grid_color": channel.plot_grid_color,
                 "plot_y_min": channel.plot_y_min if channel.plot_y_min is not None else hw_default_min,
                 "plot_y_max": channel.plot_y_max if channel.plot_y_max is not None else hw_default_max,
                 "plot_autoscale": channel.plot_autoscale,
                 "plot_time_window_seconds": channel.plot_time_window_seconds,
+                "plot_show_x_label": channel.plot_show_x_label,
+                "plot_show_y_label": channel.plot_show_y_label,
+                "plot_show_grid": channel.plot_show_grid,
+                "plot_line_width": channel.plot_line_width,
+            }
+            self._color_defaults[key] = {
+                "plot_color": channel_curve_color(index),
+                "plot_background": default_background,
+                "plot_grid_color": default_grid_color,
             }
             self._value_settings[key] = {
                 "plot_value_integer_digits": channel.plot_value_integer_digits,
                 "plot_value_decimal_digits": channel.plot_value_decimal_digits,
+                "plot_value_refresh_hz": channel.plot_value_refresh_hz,
             }
 
             row = QHBoxLayout()
@@ -573,17 +667,55 @@ class ChannelDisplayDialog(QDialog):
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
         ok_button.clicked.connect(self.accept)
         cancel_button.clicked.connect(self.reject)
-        layout.addWidget(button_box)
+        # OUTSIDE the scroll area, so the buttons stay reachable however
+        # many channels there are (see the scroll area above).
+        outer_layout.addWidget(button_box)
+
+    def column_count(self) -> int:
+        """Channels placed side by side in the main grid, as chosen at the
+        top of the dialog.
+
+        Deliberately NOT part of `results()`: that is keyed per channel and
+        flows into `Channel.plot_*`, while this is a property of the view
+        (see `LiveView.set_plot_columns`).
+        """
+        return self._columns_spin.value()
 
     def _open_plot_settings(self, key: tuple[str, str], channel_name: str) -> None:
-        dialog = ChannelPlotSettingsDialog(channel_name, self._plot_settings[key], self)
+        dialog = ChannelPlotSettingsDialog(
+            channel_name,
+            self._plot_settings[key],
+            self,
+            channel_count=len(self._plot_settings),
+            color_defaults=self._color_defaults.get(key),
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._plot_settings[key] = dialog.results()
+            self._apply_sub_dialog_result(self._plot_settings, key, dialog)
 
     def _open_value_settings(self, key: tuple[str, str], channel_name: str) -> None:
-        dialog = ChannelValueSettingsDialog(channel_name, self._value_settings[key], self)
+        dialog = ChannelValueSettingsDialog(
+            channel_name,
+            self._value_settings[key],
+            self,
+            channel_count=len(self._value_settings),
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
-            self._value_settings[key] = dialog.results()
+            self._apply_sub_dialog_result(self._value_settings, key, dialog)
+
+    @staticmethod
+    def _apply_sub_dialog_result(store: dict, key: tuple[str, str], dialog) -> None:
+        """Writes a sub-dialog result to one channel, or to all of them.
+
+        A COPY per channel, not the same dict object: the stores are
+        mutated per key elsewhere, and sharing one instance would make an
+        edit to a single channel silently change every other one too.
+        """
+        result = dialog.results()
+        if dialog.apply_to_all():
+            for other_key in store:
+                store[other_key] = dict(result)
+        else:
+            store[key] = result
 
     def results(self) -> dict[tuple[str, str], dict]:
         """Returns the values set per channel (only valid on OK).
@@ -608,19 +740,32 @@ class ChannelDisplayDialog(QDialog):
 
 class ChannelPlotSettingsDialog(QDialog):
     """Fine-grained settings for the plot area of ONE channel (curve/
-    background/grid line color, Y range, autoscaling, time span) -
-    opened via the "Plot" button in `ChannelDisplayDialog`, to keep its
-    row compact given the now-large number of options."""
+    background/grid line color, Y range, autoscaling, time span, axis
+    titles) - opened via the "Plot" button in `ChannelDisplayDialog`, to
+    keep its row compact given the now-large number of options."""
 
     def __init__(
-        self, channel_name: str, settings: dict, parent: QWidget | None = None
+        self,
+        channel_name: str,
+        settings: dict,
+        parent: QWidget | None = None,
+        channel_count: int = 1,
+        color_defaults: dict | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{t('plot_settings_dialog_title')} - {channel_name}")
+        self._apply_to_all = False
+        # Only for the confirmation prompt in `_on_apply_to_all`,
+        # which names how many channels are about to be overwritten.
+        self._channel_count = channel_count
 
-        self._color = settings["plot_color"]
-        self._background = settings["plot_background"]
-        self._grid_color = settings["plot_grid_color"]
+        # Each may be `None` = "follow the theme". The swatches show
+        # `_effective()` so a color is still visible, but only a color
+        # actually PICKED is stored (see `_pick_color`/`results`).
+        self._color = settings.get("plot_color")
+        self._background = settings.get("plot_background")
+        self._grid_color = settings.get("plot_grid_color")
+        self._color_defaults = color_defaults or {}
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -628,21 +773,31 @@ class ChannelPlotSettingsDialog(QDialog):
 
         self._color_button = QPushButton()
         self._color_button.setFixedSize(24, 24)
-        self._update_swatch(self._color_button, self._color)
+        self._update_swatch(self._color_button, self._effective("plot_color"))
         self._color_button.clicked.connect(lambda: self._pick_color("color"))
         form.addRow(f"{t('plot_color')}:", self._color_button)
 
         self._bg_button = QPushButton()
         self._bg_button.setFixedSize(24, 24)
-        self._update_swatch(self._bg_button, self._background)
+        self._update_swatch(self._bg_button, self._effective("plot_background"))
         self._bg_button.clicked.connect(lambda: self._pick_color("background"))
         form.addRow(f"{t('plot_background')}:", self._bg_button)
 
         self._grid_button = QPushButton()
         self._grid_button.setFixedSize(24, 24)
-        self._update_swatch(self._grid_button, self._grid_color)
+        self._update_swatch(self._grid_button, self._effective("plot_grid_color"))
         self._grid_button.clicked.connect(lambda: self._pick_color("grid"))
         form.addRow(f"{t('plot_grid_color')}:", self._grid_button)
+        self._reset_colors_button = QPushButton(t("reset_colors_to_theme"))
+        self._reset_colors_button.setToolTip(t("reset_colors_to_theme_tooltip"))
+        self._reset_colors_button.clicked.connect(self._reset_colors_to_theme)
+        form.addRow("", self._reset_colors_button)
+        # Directly below the grid COLOR, which it belongs with: the color
+        # was configurable while the grid itself used to be hardwired on.
+        self._grid_check = QCheckBox(t("show_grid_checkbox"))
+        self._grid_check.setToolTip(t("show_grid_checkbox_tooltip"))
+        self._grid_check.setChecked(settings.get("plot_show_grid", True))
+        form.addRow("", self._grid_check)
 
         self._min_spin = PrecisionDoubleSpinBox()
         self._min_spin.setRange(-1e9, 1e9)
@@ -666,12 +821,78 @@ class ChannelPlotSettingsDialog(QDialog):
         self._time_window_spin.setValue(settings["plot_time_window_seconds"])
         form.addRow(f"{t('plot_time_window_seconds')}:", self._time_window_spin)
 
+        # Axis TITLES only, switchable per axis - ticks/numbers/grid are
+        # deliberately NOT affected (see `Channel.plot_show_x_label`).
+        # Separate checkboxes rather than one shared "axis labels": with
+        # several subplots stacked in one grid it is usually the X title
+        # ("Time [s]", identical on every subplot) that is redundant,
+        # while the Y title still names the channel.
+        self._x_label_check = QCheckBox(t("show_x_axis_label_checkbox"))
+        self._x_label_check.setToolTip(t("axis_label_checkbox_tooltip"))
+        self._x_label_check.setChecked(settings.get("plot_show_x_label", True))
+        form.addRow("", self._x_label_check)
+
+        self._y_label_check = QCheckBox(t("show_y_axis_label_checkbox"))
+        self._y_label_check.setToolTip(t("axis_label_checkbox_tooltip"))
+        self._y_label_check.setChecked(settings.get("plot_show_y_label", True))
+        form.addRow("", self._y_label_check)
+
+        self._line_width_spin = NoWheelDoubleSpinBox()
+        self._line_width_spin.setRange(0.5, 10.0)
+        self._line_width_spin.setDecimals(1)
+        self._line_width_spin.setSingleStep(0.5)
+        self._line_width_spin.setValue(
+            max(0.5, float(settings.get("plot_line_width", 1.5)))
+        )
+        self._line_width_spin.setToolTip(t("plot_line_width_tooltip"))
+        form.addRow(f"{t('plot_line_width')}:", self._line_width_spin)
+
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
+        # Applies these settings to EVERY channel instead of only the
+        # edited one - with a fully populated chassis, configuring 32
+        # channels one dialog at a time is not realistic. Deliberately a
+        # button rather than a checkbox: it accepts the dialog in the same
+        # click, so the scope of the action is decided at the moment of
+        # confirming rather than remembered as hidden state.
+        # `ResetRole` only for placement (left of OK/Cancel), the button
+        # does not reset anything.
+        apply_all_button = button_box.addButton(
+            t("apply_to_all_channels"), QDialogButtonBox.ButtonRole.ResetRole
+        )
+        apply_all_button.setToolTip(t("apply_to_all_channels_tooltip"))
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
         ok_button.clicked.connect(self.accept)
+        apply_all_button.clicked.connect(self._on_apply_to_all)
         cancel_button.clicked.connect(self.reject)
         layout.addWidget(button_box)
+
+    def _effective(self, key: str) -> str:
+        """The color to SHOW for `key`: the channel's own if it has one,
+        otherwise the current theme default.
+
+        Kept apart from what `results()` stores, so a swatch can display
+        a concrete color while the channel keeps following the theme."""
+        stored = {
+            "plot_color": self._color,
+            "plot_background": self._background,
+            "plot_grid_color": self._grid_color,
+        }[key]
+        return stored or self._color_defaults.get(key, "#808080")
+
+    def _reset_colors_to_theme(self) -> None:
+        """Drops this channel's own colors so it follows the theme again.
+
+        The only way back: once a color was set it stayed, and a
+        configuration carrying the other theme's colors - a black grid on
+        a dark background, say - could not be repaired from the dialog at
+        all."""
+        self._color = None
+        self._background = None
+        self._grid_color = None
+        self._update_swatch(self._color_button, self._effective("plot_color"))
+        self._update_swatch(self._bg_button, self._effective("plot_background"))
+        self._update_swatch(self._grid_button, self._effective("plot_grid_color"))
 
     def _pick_color(self, which: str) -> None:
         current = {
@@ -696,8 +917,39 @@ class ChannelPlotSettingsDialog(QDialog):
     def _update_swatch(button: QPushButton, hex_color: str) -> None:
         button.setStyleSheet(f"background-color: {hex_color}; border: 1px solid #888888;")
 
+    def _on_apply_to_all(self) -> None:
+        """Asks for confirmation, then marks the result as "for every
+        channel" and accepts.
+
+        `ChannelDisplayDialog` reads `apply_to_all()` after `exec()` and
+        then writes `results()` into every channel rather than one.
+
+        Confirmed first because the action silently discards whatever was
+        configured on all the OTHER channels, which are not visible from
+        here - and it sits right next to OK, where a misclick is easy.
+        """
+        answer = QMessageBox.question(
+            self,
+            t("apply_to_all_confirm_title"),
+            t("apply_to_all_confirm_body", count=self._channel_count),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._apply_to_all = True
+        self.accept()
+
+    def apply_to_all(self) -> bool:
+        """Whether the user confirmed via "apply to all" instead of plain
+        OK (see `_on_apply_to_all`)."""
+        return self._apply_to_all
+
     def results(self) -> dict:
         return {
+            # May each be `None` = follow the theme. Deliberately NOT filled
+            # in with the current theme default - that is exactly what used
+            # to freeze the colors on a plain OK (see `__init__`).
             "plot_color": self._color,
             "plot_background": self._background,
             "plot_grid_color": self._grid_color,
@@ -705,18 +957,31 @@ class ChannelPlotSettingsDialog(QDialog):
             "plot_y_max": self._max_spin.value(),
             "plot_autoscale": self._autoscale_check.isChecked(),
             "plot_time_window_seconds": self._time_window_spin.value(),
+            "plot_show_x_label": self._x_label_check.isChecked(),
+            "plot_show_y_label": self._y_label_check.isChecked(),
+            "plot_show_grid": self._grid_check.isChecked(),
+            "plot_line_width": self._line_width_spin.value(),
         }
 
 
 class ChannelValueSettingsDialog(QDialog):
-    """Fine-grained setting for the value display of ONE channel (number
-    format) - opened via the "Value" button in `ChannelDisplayDialog`."""
+    """Fine-grained settings for the value display of ONE channel (number
+    format, refresh rate) - opened via the "Value" button in
+    `ChannelDisplayDialog`."""
 
     def __init__(
-        self, channel_name: str, settings: dict, parent: QWidget | None = None
+        self,
+        channel_name: str,
+        settings: dict,
+        parent: QWidget | None = None,
+        channel_count: int = 1,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"{t('value_settings_dialog_title')} - {channel_name}")
+        self._apply_to_all = False
+        # Only for the confirmation prompt in `_on_apply_to_all`,
+        # which names how many channels are about to be overwritten.
+        self._channel_count = channel_count
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
@@ -736,18 +1001,80 @@ class ChannelValueSettingsDialog(QDialog):
         self._value_format_edit.setToolTip(t("plot_value_integer_digits_tooltip"))
         form.addRow(f"{t('plot_value_integer_digits')}:", self._value_format_edit)
 
+        # Refresh rate of the READOUT, decoupled from the view's tick
+        # rate (see `Channel.plot_value_refresh_hz`). Capped at the tick
+        # rate itself - anything above that could not be honored.
+        self._refresh_hz_spin = NoWheelDoubleSpinBox()
+        # Upper bound rounded DOWN to the spin box's own precision: with
+        # one decimal, a maximum of 66.666... would be displayed - and
+        # returned - as 66.7, i.e. minimally ABOVE the tick rate it is
+        # supposed to cap.
+        self._refresh_hz_spin.setRange(0.1, math.floor(_MAX_VALUE_REFRESH_HZ * 10.0) / 10.0)
+        self._refresh_hz_spin.setDecimals(1)
+        self._refresh_hz_spin.setSingleStep(1.0)
+        self._refresh_hz_spin.setValue(
+            min(
+                _MAX_VALUE_REFRESH_HZ,
+                max(0.1, float(settings.get("plot_value_refresh_hz", 30.0))),
+            )
+        )
+        self._refresh_hz_spin.setToolTip(t("plot_value_refresh_hz_tooltip"))
+        form.addRow(f"{t('plot_value_refresh_hz')}:", self._refresh_hz_spin)
+
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
+        # Applies these settings to EVERY channel instead of only the
+        # edited one - with a fully populated chassis, configuring 32
+        # channels one dialog at a time is not realistic. Deliberately a
+        # button rather than a checkbox: it accepts the dialog in the same
+        # click, so the scope of the action is decided at the moment of
+        # confirming rather than remembered as hidden state.
+        # `ResetRole` only for placement (left of OK/Cancel), the button
+        # does not reset anything.
+        apply_all_button = button_box.addButton(
+            t("apply_to_all_channels"), QDialogButtonBox.ButtonRole.ResetRole
+        )
+        apply_all_button.setToolTip(t("apply_to_all_channels_tooltip"))
         cancel_button = button_box.addButton(t("cancel"), QDialogButtonBox.ButtonRole.RejectRole)
         ok_button.clicked.connect(self.accept)
+        apply_all_button.clicked.connect(self._on_apply_to_all)
         cancel_button.clicked.connect(self.reject)
         layout.addWidget(button_box)
+
+    def _on_apply_to_all(self) -> None:
+        """Asks for confirmation, then marks the result as "for every
+        channel" and accepts.
+
+        `ChannelDisplayDialog` reads `apply_to_all()` after `exec()` and
+        then writes `results()` into every channel rather than one.
+
+        Confirmed first because the action silently discards whatever was
+        configured on all the OTHER channels, which are not visible from
+        here - and it sits right next to OK, where a misclick is easy.
+        """
+        answer = QMessageBox.question(
+            self,
+            t("apply_to_all_confirm_title"),
+            t("apply_to_all_confirm_body", count=self._channel_count),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._apply_to_all = True
+        self.accept()
+
+    def apply_to_all(self) -> bool:
+        """Whether the user confirmed via "apply to all" instead of plain
+        OK (see `_on_apply_to_all`)."""
+        return self._apply_to_all
 
     def results(self) -> dict:
         integer_digits, decimal_digits = _parse_value_format(self._value_format_edit.text())
         return {
             "plot_value_integer_digits": integer_digits,
             "plot_value_decimal_digits": decimal_digits,
+            "plot_value_refresh_hz": self._refresh_hz_spin.value(),
         }
 
 
@@ -859,7 +1186,7 @@ class ChannelPopoutWindow(QWidget):
         self.plot_widget = pg.PlotWidget()
         self.plot_item = self.plot_widget.getPlotItem()
         self.plot_item.setTitle(title)
-        self.plot_item.showGrid(x=True, y=True, alpha=0.3)
+        self.plot_item.showGrid(x=channel.plot_show_grid, y=channel.plot_show_grid, alpha=_GRID_ALPHA)
         # `units=` NOT used: PyQtGraph always renders that internally in
         # round brackets - "[s]" is hardcoded in the text itself instead,
         # so the time unit is consistently shown in square brackets
@@ -869,7 +1196,7 @@ class ChannelPopoutWindow(QWidget):
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
 
-        self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
+        self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=channel.plot_line_width))
         # NO `autoDownsample`: the data already arrives pre-compressed
         # via `_downsample_for_display()` - PyQtGraph's own,
         # view-range-dependent variant would needlessly run over the
@@ -979,6 +1306,11 @@ class LiveView(QWidget):
     stop_requested = pyqtSignal()
     trigger_fired = pyqtSignal()
     trigger_arm_toggled = pyqtSignal(bool)
+    # Number of channels placed side by side changed in the display
+    # dialog - `gui/main_window.py` persists it (see
+    # `config/settings.py::AppSettings.live_view_plot_columns`); the
+    # live view itself has no access to the configuration manager.
+    plot_columns_changed = pyqtSignal(int)
 
     def __init__(self, controller: MeasurementController, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1075,6 +1407,18 @@ class LiveView(QWidget):
         self._value_unit_boxes: list = []
         self._value_unit_labels: list = []
 
+        # Averaging accumulator for the numeric readout, per CHANNEL
+        # INDEX (not per subplot position): main grid and own window show
+        # the same channel and must therefore show the same number at the
+        # same moment. Between two refreshes every incoming sample is
+        # summed here; on refresh the mean is displayed and the
+        # accumulator reset - see `Channel.plot_value_refresh_hz` and
+        # `_update_value_readouts`.
+        self._value_sum: dict[int, float] = {}
+        self._value_count: dict[int, int] = {}
+        # Monotonic deadline per channel index for the next refresh.
+        self._value_next_refresh_s: dict[int, float] = {}
+
         # Own windows of individual channels (see `ChannelPopoutWindow`,
         # `_on_popout_requested`), keyed by `_channel_display_key()`
         # (NOT `hardware_channel` alone - see there) - independent of
@@ -1084,6 +1428,10 @@ class LiveView(QWidget):
         # its main-grid subplot don't "cache away" each other's scaling.
         self._popout_windows: dict[tuple[str, str], ChannelPopoutWindow] = {}
         self._popout_y_auto_active: dict[tuple[str, str], bool] = {}
+
+        # Channels per row in the main grid (see `_rebuild_plots`). Set from
+        # the persisted setting at startup, see `set_plot_columns`.
+        self._plot_columns = 1
 
         # StorageWriter of the running measurement (None for "live view
         # only" AND during the armed phase of a threshold/serial
@@ -1357,6 +1705,7 @@ class LiveView(QWidget):
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
         self._channel_total_ticks_seen = {index: 0 for index in range(len(channels))}
+        self._reset_value_readout_state()
         self._timer.start()
 
         self.attach_storage_writer(storage_writer)
@@ -1561,10 +1910,37 @@ class LiveView(QWidget):
         self._set_trigger_arm_button_text()
         self._storage_group.setTitle(t("storage_buffer_group"))
 
-        for plot_item in self._plot_items:
+        # The X axis title is the ONLY translatable text on a plot -
+        # plot title, Y axis title and unit are all user data (channel
+        # name/unit, see `_channel_axis_label`).
+        #
+        # Deliberately WITHOUT `**_axis_label_style()`: `setLabel()`
+        # replaces `labelStyle` wholesale ONLY when style kwargs are
+        # passed (`if kwargs: self.labelStyle = kwargs`). Omitting them
+        # keeps both the enlarged font size AND the color that
+        # `style_plot_item()` put there at creation - passing them would
+        # drop the color (see `_axis_label_style`).
+        for pos, plot_item in enumerate(self._plot_items):
             # `units=` NOT used (see `ChannelPopoutWindow.__init__`) - time
             # unit consistently in square brackets everywhere.
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+            # `setLabel()` re-shows the title unconditionally (see
+            # `_apply_axis_label_visibility`) - without this, switching
+            # the language would bring back an X title turned off per
+            # channel.
+            if pos < len(self._curve_channel_indices):
+                channel = self._channels[self._curve_channel_indices[pos]]
+                _apply_axis_label_visibility(plot_item, channel)
+
+        # Own windows (see `ChannelPopoutWindow`) are NOT part of
+        # `self._plot_items` - without this loop their X title would keep
+        # the language the window was opened in until it is closed and
+        # reopened, while the main grid next to it already switched.
+        for key, window in self._popout_windows.items():
+            window.plot_item.setLabel("bottom", f"{t('axis_time')} [s]")
+            channel = self._find_channel_by_key(key)
+            if channel is not None:
+                _apply_axis_label_visibility(window.plot_item, channel)
 
         # Running duration/sample rate correct themselves on the next
         # timer tick - only the idle placeholder would otherwise stay
@@ -1687,6 +2063,25 @@ class LiveView(QWidget):
         if not self._trigger_arm_button.isChecked():
             self._trigger_arm_button.setEnabled(enabled)
 
+    def set_plot_columns(self, columns: int) -> None:
+        """Sets how many channels the main grid places side by side.
+
+        Rebuilds the plots only on an actual change - `_rebuild_plots()`
+        discards and recreates every subplot, which during a running
+        measurement is visible as a brief flicker.
+        """
+        columns = max(1, min(_MAX_PLOT_COLUMNS, int(columns)))
+        if columns == self._plot_columns:
+            return
+        self._plot_columns = columns
+        self._rebuild_plots()
+        self._apply_channel_appearance()
+        self._apply_y_range_mode()
+
+    def plot_columns(self) -> int:
+        """Current channels-per-row setting (see `set_plot_columns`)."""
+        return self._plot_columns
+
     def open_channel_display_dialog(
         self, channels: list[Channel] | None = None
     ) -> dict[tuple[str, str], dict] | None:
@@ -1722,10 +2117,20 @@ class LiveView(QWidget):
             )
             return None
         dialog = ChannelDisplayDialog(
-            channels, curve_color(), plot_background_color(), plot_foreground_color(), self
+            channels,
+            plot_background_color(),
+            plot_foreground_color(),
+            plot_columns=self._plot_columns,
+            parent=self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return None
+        # Column count BEFORE the per-channel settings: it triggers a full
+        # `_rebuild_plots()`, and applying the channel values first would
+        # only have them thrown away and reapplied again.
+        if dialog.column_count() != self._plot_columns:
+            self.set_plot_columns(dialog.column_count())
+            self.plot_columns_changed.emit(self._plot_columns)
         settings = dialog.results()
         self._apply_display_settings_to_live_channels(settings)
         return settings
@@ -1747,6 +2152,7 @@ class LiveView(QWidget):
         visibility_changed = False
         time_window_changed = False
         integer_digits_changed = False
+        refresh_rate_changed = False
         show_value_changed = False
         for channel in self._channels:
             values = settings.get(_channel_display_key(channel))
@@ -1758,6 +2164,16 @@ class LiveView(QWidget):
             channel.plot_y_min = values.get("plot_y_min")
             channel.plot_y_max = values.get("plot_y_max")
             channel.plot_autoscale = values.get("plot_autoscale", True)
+            # Applied by `_apply_channel_appearance()` at the end of this
+            # method (via `_apply_channel_curve_style`) - no rebuild
+            # needed, showing/hiding an axis title only re-lays out the
+            # plot item itself.
+            channel.plot_show_x_label = values.get("plot_show_x_label", True)
+            channel.plot_show_y_label = values.get("plot_show_y_label", True)
+            channel.plot_show_grid = values.get("plot_show_grid", True)
+            channel.plot_line_width = max(
+                0.1, float(values.get("plot_line_width", 1.5))
+            )
             new_time_window = max(
                 0.1, float(values.get("plot_time_window_seconds", 5.0))
             )
@@ -1794,6 +2210,12 @@ class LiveView(QWidget):
                 integer_digits_changed = True
             channel.plot_value_integer_digits = new_integer_digits
             channel.plot_value_decimal_digits = new_decimal_digits
+            new_refresh_hz = max(
+                0.1, float(values.get("plot_value_refresh_hz", 30.0))
+            )
+            if new_refresh_hz != channel.plot_value_refresh_hz:
+                refresh_rate_changed = True
+            channel.plot_value_refresh_hz = new_refresh_hz
             new_visible = values.get("plot_visible", True)
             new_popout = values.get("plot_popout", False)
             if new_visible != channel.plot_visible or new_popout != channel.plot_popout:
@@ -1801,6 +2223,11 @@ class LiveView(QWidget):
             channel.plot_visible = new_visible
             channel.plot_popout = new_popout
             changed = True
+        if refresh_rate_changed:
+            # Otherwise a rate just lowered would keep the OLD, already
+            # running deadline and the next refresh could come up to one
+            # old interval late (see `_reset_value_readout_state`).
+            self._reset_value_readout_state()
         if visibility_changed or time_window_changed or integer_digits_changed or show_value_changed:
             if time_window_changed:
                 # The buffer is sized to the widest time window across
@@ -1823,6 +2250,83 @@ class LiveView(QWidget):
         elif changed:
             self._apply_channel_appearance()
             self._apply_y_range_mode()
+
+    def _reset_value_readout_state(self) -> None:
+        """Clears the averaging accumulators and schedules the first
+        refresh of every channel for the next tick.
+
+        Called at measurement start and whenever the refresh rate is
+        changed in the dialog - without it, a rate that was just lowered
+        would keep the OLD deadline (up to the old interval too late),
+        and a remnant of the previous measurement could still be part of
+        the first mean shown.
+        """
+        self._value_sum = {index: 0.0 for index in range(len(self._channels))}
+        self._value_count = {index: 0 for index in range(len(self._channels))}
+        # 0.0 = due immediately, so the first reading appears on the very
+        # next tick rather than only after one full interval.
+        self._value_next_refresh_s = {index: 0.0 for index in range(len(self._channels))}
+
+    def _update_value_readouts(self, scaled: np.ndarray) -> dict[int, float]:
+        """Feeds the block just read into the per-channel accumulators
+        and returns, for every channel whose refresh is due NOW, the mean
+        over the elapsed interval.
+
+        Channels not in the returned dict keep their currently displayed
+        number - deliberately not rewritten with an interim value, that
+        is the whole point of the setting (see
+        `Channel.plot_value_refresh_hz`).
+
+        The mean rather than the last sample: at 1000 S/s and 4 Hz, one
+        interval covers ~250 readings: showing `values[-1]` would pick a
+        single arbitrary one of them and keep jumping, just less often.
+        """
+        now = time.monotonic()
+        due: dict[int, float] = {}
+        for index in range(len(self._channels)):
+            block = scaled[index]
+            if block.size:
+                self._value_sum[index] = self._value_sum.get(index, 0.0) + float(block.sum())
+                self._value_count[index] = self._value_count.get(index, 0) + int(block.size)
+            if now < self._value_next_refresh_s.get(index, 0.0):
+                continue
+            count = self._value_count.get(index, 0)
+            if count:
+                due[index] = self._value_sum[index] / count
+                self._value_sum[index] = 0.0
+                self._value_count[index] = 0
+            # Deadline advanced even without new data: otherwise a
+            # channel idle for a while would fire on every tick as soon
+            # as data resumes, until it has caught up.
+            #
+            # Advanced by a fixed grid step instead of `now + interval`:
+            # a refresh can only ever happen ON a tick (~66 Hz), so
+            # `now` already carries the overshoot past the deadline, and
+            # re-basing on it would accumulate that overshoot and
+            # quantize the rate DOWN - a requested 30 Hz would really
+            # run at ~22 Hz. Stepping the grid keeps the long-run
+            # average at the requested rate.
+            # Clamped on BOTH sides at the point of use, not just in
+            # the dialog: `Channel.plot_value_refresh_hz` also arrives
+            # from a stored configuration, which `Channel.from_dict`
+            # only guards against zero/negative (a division by zero
+            # here) - it cannot know the view's tick rate. An absurdly
+            # high stored rate would otherwise be capped only
+            # incidentally, by the re-base branch below; capping it here
+            # makes "never faster than the view ticks" the stated rule.
+            refresh_hz = min(
+                _MAX_VALUE_REFRESH_HZ,
+                max(0.1, self._channels[index].plot_value_refresh_hz),
+            )
+            interval = 1.0 / refresh_hz
+            deadline = self._value_next_refresh_s.get(index, 0.0) + interval
+            if deadline <= now:
+                # More than a full interval behind - the view was
+                # stopped, or the rate is faster than the tick rate.
+                # Re-base instead of firing on every tick to catch up.
+                deadline = now + interval
+            self._value_next_refresh_s[index] = deadline
+        return due
 
     def _find_channel_by_key(self, key: tuple[str, str]) -> Channel | None:
         """Finds a channel via `_channel_display_key()` - for popout-
@@ -1848,7 +2352,9 @@ class LiveView(QWidget):
             x_min + channel.plot_time_window_seconds,
             padding=0,
         )
-        self._apply_channel_curve_style(window.plot_item, window.curve, channel)
+        self._apply_channel_curve_style(
+            window.plot_item, window.curve, channel, channel_index
+        )
         self._apply_channel_y_range(window.plot_item, channel, None, self._popout_y_auto_active)
         # IMPORTANT: the closure holds `self` (LiveView) ONLY as a
         # `weakref`, not directly - otherwise a real reference cycle
@@ -2045,11 +2551,19 @@ class LiveView(QWidget):
         )
         value_unit_gap = _space_width_px(number_font)
 
-        row = 0
+        # Channels flow into a grid of `self._plot_columns` cells per row
+        # (see `set_plot_columns`). Each cell spans THREE layout columns:
+        # number, unit, plot - so cell c starts at layout column c * 3.
+        # With the default of one column this is exactly the previous
+        # one-channel-per-row layout.
+        columns = max(1, self._plot_columns)
+        position = 0
         for index, channel in enumerate(self._channels):
             if not channel.plot_visible or channel.plot_popout:
                 continue
             background = _channel_background_color(channel)
+            row, cell = divmod(position, columns)
+            col_base = cell * 3
 
             # Large value readout LEFT of the subplot (see
             # `Channel.plot_show_value`/`_on_timer_tick`) - number (column
@@ -2090,7 +2604,7 @@ class LiveView(QWidget):
             if channel.plot_show_value:
                 value_box, value_text = self._make_value_box(
                     row,
-                    0,
+                    col_base,
                     "--",
                     point_size=_VALUE_NUMBER_POINT_SIZE,
                     bold=True,
@@ -2101,7 +2615,7 @@ class LiveView(QWidget):
 
                 unit_box, unit_text = self._make_value_box(
                     row,
-                    1,
+                    col_base + 1,
                     channel.unit,
                     point_size=_VALUE_UNIT_POINT_SIZE,
                     bold=False,
@@ -2110,10 +2624,10 @@ class LiveView(QWidget):
                     margin_px=value_unit_gap,
                 )
                 unit_box.setBackgroundColor(plot_container_background_color())
-                plot_col, plot_colspan = 2, 1
+                plot_col, plot_colspan = col_base + 2, 1
             else:
                 value_box = value_text = unit_box = unit_text = None
-                plot_col, plot_colspan = 0, 3
+                plot_col, plot_colspan = col_base, 3
 
             unit_suffix = f" [{channel.unit}]" if channel.unit else ""
             plot_item = self._plot_widget.addPlot(
@@ -2122,7 +2636,7 @@ class LiveView(QWidget):
                 colspan=plot_colspan,
                 title=f"{channel.display_name}{unit_suffix}",
             )
-            plot_item.showGrid(x=True, y=True, alpha=0.3)
+            plot_item.showGrid(x=channel.plot_show_grid, y=channel.plot_show_grid, alpha=_GRID_ALPHA)
             # `units=` NOT used (see `ChannelPopoutWindow.__init__`) -
             # time unit consistently in square brackets everywhere.
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
@@ -2133,7 +2647,12 @@ class LiveView(QWidget):
             # (`Channel.plot_time_window_seconds`) - a linked X axis
             # would force the most recently set range onto all other
             # subplots and make the per-channel setting pointless.
-            curve = plot_item.plot(pen=pg.mkPen(color=curve_color(), width=1.5))
+            curve = plot_item.plot(
+                pen=pg.mkPen(
+                    color=channel.plot_color or channel_curve_color(index),
+                    width=channel.plot_line_width,
+                )
+            )
             # NO `autoDownsample` - see comment in `ChannelPopoutWindow.__init__`.
             curve.setClipToView(True)
             plot_item.getViewBox().setBackgroundColor(background)
@@ -2162,16 +2681,24 @@ class LiveView(QWidget):
             self._value_labels.append(value_text)
             self._value_unit_boxes.append(unit_box)
             self._value_unit_labels.append(unit_text)
-            row += 1
+            position += 1
 
         if self._plot_items:
             # Number/unit column fixed width - see comment above
             # (`number_field_width` already computed before the loop,
             # since it's needed there for right-aligned positioning). The
             # plot gets all of the remaining space.
-            self._plot_widget.ci.layout.setColumnFixedWidth(0, number_field_width)
-            self._plot_widget.ci.layout.setColumnFixedWidth(1, _VALUE_UNIT_WIDTH)
-            self._plot_widget.ci.layout.setColumnStretchFactor(2, 1)
+            # Repeated per CHANNEL column: the fixed widths apply to layout
+            # columns, and every channel column has its own number/unit pair.
+            for cell in range(columns):
+                col_base = cell * 3
+                self._plot_widget.ci.layout.setColumnFixedWidth(
+                    col_base, number_field_width
+                )
+                self._plot_widget.ci.layout.setColumnFixedWidth(
+                    col_base + 1, _VALUE_UNIT_WIDTH
+                )
+                self._plot_widget.ci.layout.setColumnStretchFactor(col_base + 2, 1)
 
         # Close own windows (see `ChannelPopoutWindow`) for channels that
         # no longer exist under this channel configuration, that have
@@ -2206,20 +2733,41 @@ class LiveView(QWidget):
         self._apply_y_range_mode()
 
     @staticmethod
-    def _apply_channel_curve_style(plot_item, curve, channel: Channel) -> None:
-        """Applies curve color, background color, and gridline color of a
-        SINGLE channel to its plot/curve pair - theme default if no own
-        color is configured. Shared by main-grid subplots
-        (`_apply_channel_appearance`) and own windows
+    def _apply_channel_curve_style(
+        plot_item, curve, channel: Channel, index: int = 0
+    ) -> None:
+        """Applies curve color and width, background color, gridline color
+        and grid visibility of a SINGLE channel to its plot/curve pair -
+        theme default if no own color is configured. Shared by main-grid
+        subplots (`_apply_channel_appearance`) and own windows
         (`_open_popout_window`)."""
-        color = channel.plot_color or curve_color()
-        curve.setPen(pg.mkPen(color=color, width=1.5))
+        # Falls back to the channel's PALETTE slot, not one shared color:
+        # every channel used to be drawn in the same blue, which made a grid
+        # of subplots hard to scan. Derived from the position on each
+        # repaint, never stored - a stored color would stop following the
+        # theme (see `channel_curve_color`).
+        color = channel.plot_color or channel_curve_color(index)
+        # Clamped like everywhere the width is read: a stored 0 would make
+        # the curve invisible with nothing in the dialog explaining why.
+        curve.setPen(pg.mkPen(color=color, width=max(0.1, channel.plot_line_width)))
         plot_item.getViewBox().setBackgroundColor(_channel_background_color(channel))
         grid_color = _channel_grid_color(channel)
         for axis_name in ("left", "bottom", "right", "top"):
             axis = plot_item.getAxis(axis_name)
             if axis is not None:
                 axis.setTickPen(grid_color)
+        # Axis titles on/off - here rather than only at creation time, so
+        # a change in the dialog takes effect without a full rebuild
+        # (this method is the shared update path for main-grid subplots
+        # and own windows alike, see `_apply_channel_appearance`).
+        _apply_axis_label_visibility(plot_item, channel)
+        # Grid on/off, same reasoning - the grid COLOR above was already
+        # per channel while the grid itself used to be hardwired on.
+        # `alpha` stays at the previous fixed value: it is a rendering
+        # detail, not something worth a second control next to the switch.
+        plot_item.showGrid(
+            x=channel.plot_show_grid, y=channel.plot_show_grid, alpha=_GRID_ALPHA
+        )
         plot_item.setVisible(channel.plot_show_graph)
 
     def _apply_channel_appearance(self) -> None:
@@ -2237,7 +2785,9 @@ class LiveView(QWidget):
         """
         for pos, (plot_item, curve) in enumerate(zip(self._plot_items, self._curves)):
             channel = self._channels[self._curve_channel_indices[pos]]
-            self._apply_channel_curve_style(plot_item, curve, channel)
+            self._apply_channel_curve_style(
+                plot_item, curve, channel, self._curve_channel_indices[pos]
+            )
             # Window background color, not the individual channel color -
             # see `_rebuild_plots` for the reasoning.
             if self._value_boxes[pos] is not None:
@@ -2247,7 +2797,12 @@ class LiveView(QWidget):
         for key, window in self._popout_windows.items():
             channel = self._find_channel_by_key(key)
             if channel is not None:
-                self._apply_channel_curve_style(window.plot_item, window.curve, channel)
+                self._apply_channel_curve_style(
+                    window.plot_item,
+                    window.curve,
+                    channel,
+                    self._channels.index(channel),
+                )
                 # Own window is a normal Qt layout (not a PyQtGraph
                 # `GraphicsLayout` with a fixed column width like in the
                 # main grid) - `setVisible()` on the `PlotWidget` itself
@@ -2434,6 +2989,11 @@ class LiveView(QWidget):
         self._check_threshold_trigger(scaled)
         self._check_stop_threshold_trigger(scaled)
         self._write_to_display_buffer(scaled)
+        # Numeric readout runs on its OWN, per-channel rate (see
+        # `Channel.plot_value_refresh_hz`) - computed once here for both
+        # the main grid and any own windows, so the same channel never
+        # shows two different numbers at the same moment.
+        due_values = self._update_value_readouts(scaled)
 
         channel_views = {
             index: self._get_channel_display_view(index)
@@ -2449,11 +3009,13 @@ class LiveView(QWidget):
                 times, values, self._channel_display_capacity(channel_index)
             )
             curve.setData(draw_times, draw_values)
-            if values.size and self._value_labels[pos] is not None:
+            if channel_index in due_values and self._value_labels[pos] is not None:
                 channel = self._channels[channel_index]
                 self._value_labels[pos].setText(
                     _format_channel_value(
-                        values[-1], channel.plot_value_integer_digits, channel.plot_value_decimal_digits
+                        due_values[channel_index],
+                        channel.plot_value_integer_digits,
+                        channel.plot_value_decimal_digits,
                     )
                 )
 
@@ -2480,10 +3042,12 @@ class LiveView(QWidget):
                     times, values, self._channel_display_capacity(index)
                 )
                 window.curve.setData(draw_times, draw_values)
-                if values.size:
+                if index in due_values:
                     window.value_label.setText(
                         _format_channel_value(
-                            values[-1], channel.plot_value_integer_digits, channel.plot_value_decimal_digits
+                            due_values[index],
+                            channel.plot_value_integer_digits,
+                            channel.plot_value_decimal_digits,
                         )
                     )
                 self._apply_channel_y_range(

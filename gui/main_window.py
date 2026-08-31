@@ -26,6 +26,7 @@ Thread safety:
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -38,13 +39,14 @@ from PyQt6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSizePolicy,
+    QGraphicsDropShadowEffect,
     QStackedWidget,
     QWidget,
 )
 
 from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
-from config.settings import get_resource_path
+from config.settings import APP_VERSION, get_resource_path
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
@@ -65,10 +67,13 @@ from gui.setup_view import NamingScheme, SetupView
 from gui.trigger_settings_dialog import TriggerSettingsDialog
 from gui.workers import BackgroundWorker
 from gui.theme import (
+    RECORD_ICON_COLOR,
     connect_theme_changed,
     draw_magnifier_icon,
     draw_gear_icon,
     draw_play_icon,
+    draw_record_icon,
+    nav_shadow_color,
     get_theme,
     is_position_on_screen,
     repolish,
@@ -115,6 +120,10 @@ class MainWindow(QMainWindow):
         # garbage-collect the QThread object prematurely.
         self._background_workers: list[BackgroundWorker] = []
         self._discovery_worker: BackgroundWorker | None = None
+        # Second stage of the device discovery, see
+        # `_start_connection_probe` - runs on its own so a slow probe
+        # never holds up the device list.
+        self._connection_probe_worker: BackgroundWorker | None = None
 
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
@@ -170,6 +179,13 @@ class MainWindow(QMainWindow):
         self._live_view.stop_requested.connect(self._on_stop_measurement)
         self._live_view.trigger_fired.connect(self._on_trigger_fired)
         self._live_view.trigger_arm_toggled.connect(self._on_trigger_arm_toggled)
+        self._live_view.plot_columns_changed.connect(
+            self._configuration_manager.update_live_view_plot_columns
+        )
+        # Restore the persisted grid layout before anything is displayed.
+        self._live_view.set_plot_columns(
+            self._configuration_manager.settings.live_view_plot_columns
+        )
 
         # Arm button (Setup AND live view) only visible if a trigger is
         # already configured/loaded at startup (see
@@ -201,33 +217,67 @@ class MainWindow(QMainWindow):
         nav_container.setFixedWidth(180)
         nav_container.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         nav_layout = QVBoxLayout(nav_container)
-        nav_layout.setContentsMargins(0, 0, 0, 0)
+        # Room for the tiles' drop shadows (see
+        # `_update_nav_tile_elevation`) - with zero margins the shadow
+        # is clipped at the column edges and the tiles look flat again.
+        nav_layout.setContentsMargins(7, 7, 7, 7)
         nav_layout.setSpacing(8)
-        # 3D bevel look: "outset"/light gradient in the normal state looks
-        # raised, "inset"/dark gradient in the checked state simulates
-        # being pressed in. Padding deliberately identical in BOTH states
-        # so icon+text always stay exactly centered (no shifting).
+        # A real, readable bevel - but built from 1px edges and palette tones
+        # instead of CSS's `outset`/`inset`, whose hard two-tone frame is what
+        # made the tiles look cheap. Three cues act together, so the state is
+        # unmistakable without a colored accent:
+        #
+        #   1. Edge direction. Raised: light on top/left, dark on bottom/right
+        #      - lit from the upper left. Pressed: exactly reversed.
+        #   2. Face brightness. A pressed face sits in its own shadow, so it is
+        #      DARKER than a resting one (palette(mid) vs palette(button):
+        #      200 vs 240 in the light theme, 40 vs 53 in the dark). Making it
+        #      brighter instead read as 'lit up', not as 'pushed in'.
+        #   3. Content offset. The pressed tile's icon and text sit 1px lower,
+        #      the way a real key travels. Deliberate and symmetric (the
+        #      bottom padding gives back what the top takes), so nothing
+        #      drifts as tiles are switched.
+        #
+        # The gradient stops sit in the outermost few percent: on tiles a third
+        # of the window tall, a full-height ramp reads as a glossy slab rather
+        # than as an edge catching light.
+        #
+        # Only palette(...) references, no baked hex - that is what lets
+        # `_retheme_nav_icons()` repolish them into the new theme.
         nav_container.setStyleSheet(
             "QToolButton {"
-            # palette(dark) instead of palette(mid): "mid" sits too close
-            # to the background in both themes (contrast difference
-            # ~13-40) so the border was barely visible - "dark" doubles
-            # the contrast (~33-80) and stays clearly visible in both
-            # themes without changing the 3D bevel look itself.
-            "   border: 2px outset palette(dark);"
-            "   border-radius: 8px;"
+            "   border: 1px solid palette(mid);"
+            "   border-top-color: palette(light);"
+            "   border-left-color: palette(light);"
+            "   border-bottom-color: palette(dark);"
+            "   border-right-color: palette(dark);"
+            "   border-radius: 10px;"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(light), stop:1 palette(button));"
+            "                                stop:0 palette(light),"
+            "                                stop:0.04 palette(button),"
+            "                                stop:0.96 palette(button),"
+            "                                stop:1 palette(mid));"
             "   padding: 8px;"
             "}"
             "QToolButton:hover:!checked {"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(light), stop:1 palette(midlight));"
+            "                                stop:0 palette(light),"
+            "                                stop:0.04 palette(midlight),"
+            "                                stop:0.96 palette(midlight),"
+            "                                stop:1 palette(mid));"
             "}"
             "QToolButton:checked {"
-            "   border: 2px inset palette(dark);"
+            "   border-top-color: palette(shadow);"
+            "   border-left-color: palette(shadow);"
+            "   border-bottom-color: palette(light);"
+            "   border-right-color: palette(light);"
             "   background: qlineargradient(x1:0, y1:0, x2:0, y2:1,"
-            "                                stop:0 palette(dark), stop:1 palette(midlight));"
+            "                                stop:0 palette(shadow),"
+            "                                stop:0.02 palette(dark),"
+            "                                stop:0.06 palette(mid),"
+            "                                stop:0.97 palette(mid),"
+            "                                stop:1 palette(midlight));"
+            "   padding: 9px 8px 7px 8px;"
             "}"
             # As soon as ANY ancestor carries a stylesheet, Qt renders
             # child QLabels through the CSS engine instead of purely from
@@ -253,6 +303,7 @@ class MainWindow(QMainWindow):
         self._nav_buttons: list[QToolButton] = []
         self._nav_icon_labels: list[QLabel] = []
         self._nav_text_labels: list[QLabel] = []
+        self._nav_shadows: list[QGraphicsDropShadowEffect] = []
         for index, key, icon in _NAV_ITEMS:
             button = QToolButton()
             button.setCheckable(True)
@@ -289,10 +340,16 @@ class MainWindow(QMainWindow):
             self._nav_buttons.append(button)
             self._nav_icon_labels.append(icon_label)
             self._nav_text_labels.append(text_label)
+            # One effect instance per widget - a QGraphicsEffect cannot
+            # be shared between widgets.
+            shadow = QGraphicsDropShadowEffect(button)
+            button.setGraphicsEffect(shadow)
+            self._nav_shadows.append(shadow)
             # stretch=1 on all three buttons -> they evenly share the full
             # height of the navigation column.
             nav_layout.addWidget(button, stretch=1)
 
+        self._update_nav_tile_elevation()
         self._retheme_nav_icons()
         self._nav_button_group.idClicked.connect(self._on_nav_changed)
         root_layout.addWidget(nav_container)
@@ -318,6 +375,33 @@ class MainWindow(QMainWindow):
         """
         self._nav_buttons[index].setChecked(True)
         self._workspace.setCurrentIndex(min(index, _VIEW_ANALYSIS))
+        self._update_nav_tile_elevation()
+
+    def _update_nav_tile_elevation(self) -> None:
+        """Raises the resting tiles and sinks the checked one.
+
+        Qt stylesheets have no `box-shadow`, so a border alone can only
+        hint at depth. A real drop shadow underneath is what makes a tile
+        look like it stands off the surface - and removing it on the
+        checked tile is what makes that one look pressed into it.
+
+        Called on every switch and after a theme change: the shadow color
+        differs per theme (see `gui/theme.py::nav_shadow_color`).
+        """
+        color = nav_shadow_color()
+        for button, shadow in zip(self._nav_buttons, self._nav_shadows):
+            shadow.setColor(color)
+            if button.isChecked():
+                # Pressed in: no cast shadow at all, otherwise the tile
+                # still floats however dark the face is.
+                shadow.setEnabled(False)
+            else:
+                shadow.setEnabled(True)
+                shadow.setBlurRadius(20)
+                shadow.setXOffset(0)
+                # Straight down - a light source overhead, matching the
+                # light edge the stylesheet puts on the top of each tile.
+                shadow.setYOffset(5)
 
     def _retheme_nav_icons(self) -> None:
         """Redraws the navigation icons and forces a re-polish of the
@@ -343,6 +427,7 @@ class MainWindow(QMainWindow):
         ]
         for widget in all_widgets:
             repolish(widget)
+        self._update_nav_tile_elevation()
 
     def _build_menu(self) -> None:
         menu_bar = self.menuBar()
@@ -517,8 +602,41 @@ class MainWindow(QMainWindow):
         self._live_view.set_trigger_arm_available(available)
 
     def _build_status_bar(self) -> None:
+        # Red dot to the LEFT of the text, shown only while data is
+        # actually being written. "Am I recording?" is the one question a
+        # measurement application has to answer at a glance, and the
+        # status text alone said the same thing for a recording and for a
+        # live-only run (see `_set_measurement_status`).
+        self._recording_indicator = QLabel()
+        self._recording_indicator.setPixmap(
+            draw_record_icon(12, color=RECORD_ICON_COLOR)
+        )
+        self._recording_indicator.setVisible(False)
+        self.statusBar().addWidget(self._recording_indicator)
         self._status_label = QLabel(t("ready"))
         self.statusBar().addWidget(self._status_label)
+
+    def _set_measurement_status(self, config: MeasurementConfig) -> None:
+        """Shows that a measurement is running, and WHETHER it is saved.
+
+        Both cases used to share one message, so a live-only run looked
+        exactly like a recording - leaving room to believe you are
+        recording when you are not, or the other way round."""
+        recording = config.save_to_disk
+        self._recording_indicator.setVisible(recording)
+        self._status_label.setText(
+            t(
+                "measurement_recording_named"
+                if recording
+                else "measurement_live_only_named",
+                name=config.name,
+            )
+        )
+
+    def _clear_measurement_status(self) -> None:
+        """Back to idle - the dot must not outlive the measurement."""
+        self._recording_indicator.setVisible(False)
+        self._status_label.setText(t("ready"))
 
     def retranslate_ui(self) -> None:
         """Updates all static texts of the main window after a language
@@ -552,7 +670,7 @@ class MainWindow(QMainWindow):
         # and corrects itself on the next event. Only the idle state
         # would otherwise remain stuck in the old language permanently.
         if not self._controller.is_running:
-            self._status_label.setText(t("ready"))
+            self._clear_measurement_status()
 
     # ------------------------------------------------------------------ #
     # Saved measurement configurations (File menu)
@@ -636,6 +754,7 @@ class MainWindow(QMainWindow):
 
     def _on_nav_changed(self, row: int) -> None:
         self._workspace.setCurrentIndex(min(row, _VIEW_ANALYSIS))
+        self._update_nav_tile_elevation()
         # Pre-populate the live view with the channels currently
         # configured in Setup as soon as we switch there (the plot
         # windows are then already in place instead of only appearing
@@ -646,6 +765,19 @@ class MainWindow(QMainWindow):
         if row == _VIEW_LIVE and not self._controller.is_running:
             channels = [ch for ch in self._setup_view.get_configured_channels() if ch.enabled]
             self._live_view.preview_channels(channels)
+        # Refresh the device list whenever the user comes back to Setup:
+        # the list is a snapshot of the moment it was taken, and a cable
+        # pulled in the meantime would otherwise keep showing as
+        # available until the user thinks to press "search devices"
+        # (see `hardware/nidaq_device.py::_is_device_connected`).
+        #
+        # NOT while a measurement is running: discovery now probes the
+        # hardware via `self_test_device()`, which must not be fired at a
+        # device that currently has a running task. Re-entry during an
+        # already pending discovery is handled by `_on_discover_hardware`
+        # itself.
+        if row == _VIEW_SETUP and not self._controller.is_running:
+            self._setup_view.discover_hardware_requested.emit()
 
     # ------------------------------------------------------------------ #
     # Storage location
@@ -669,8 +801,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_discover_hardware(self) -> None:
-        """Starts device discovery in the background (see
-        `gui/workers.py::BackgroundWorker`).
+        """Starts the FIRST stage of the device discovery in the
+        background (see `gui/workers.py::BackgroundWorker`).
 
         `nidaqmx.system.System.local()` plus channel iteration per device
         (`hardware/nidaq_device.py::discover_devices`) can take a
@@ -678,11 +810,20 @@ class MainWindow(QMainWindow):
         timeouts - it previously ran synchronously on the GUI thread and
         in doing so also blocked the automatic discovery run at program
         startup (see `__init__`).
+
+        Discovery is deliberately split in two: this stage reads the
+        NI-DAQmx configuration database only (`probe_connections=False`,
+        a matter of milliseconds), the hardware probe follows in
+        `_start_connection_probe`. Probing inside this call meant that a
+        configured but unreachable NETWORK cDAQ chassis made the user
+        wait out a driver network timeout before ANY device appeared -
+        on every refresh, and since the setup tab refreshes on entry, on
+        every visit to it.
         """
         if self._discovery_worker is not None:  # a request is already in progress
             return
         self._setup_view.set_discovery_in_progress(True)
-        worker = BackgroundWorker(self._controller.discover_hardware)
+        worker = BackgroundWorker(self._controller.discover_hardware, probe_connections=False)
         self._discovery_worker = worker
         worker.succeeded.connect(self._on_discover_hardware_succeeded)
         worker.failed.connect(self._on_discover_hardware_failed)
@@ -706,6 +847,82 @@ class MainWindow(QMainWindow):
         # actually configure as a channel is counted.
         usable_devices = [d for d in devices if d.num_channels > 0]
         self._status_label.setText(f"{len(usable_devices)} {t('devices_found')}")
+        self._start_connection_probe(devices)
+
+    def _start_connection_probe(self, devices: list[DeviceInfo]) -> None:
+        """Starts the SECOND stage of the device discovery: the hardware
+        probe for the devices just listed (see
+        `hardware/nidaq_device.py::probe_device_connections`).
+
+        Runs in its own worker, so the device list already on screen
+        stays usable while a network chassis runs into its timeout. The
+        result is applied in `_on_connection_probe_succeeded`.
+
+        Skipped while a measurement is running: the probe uses
+        `self_test_device()`, which must not be fired at a device that
+        currently has a running task. The tab-switch trigger checks the
+        same thing (see `_on_view_changed`), but the manual "search
+        devices" button does not, and a measurement can also be started
+        while stage one is still in flight.
+
+        Skipped as well while a probe is ALREADY running - it cannot be
+        cancelled (it sits in the driver waiting out a timeout), and its
+        result remains valid for the newer list anyway: reachability is a
+        property of the hardware, not of the discovery run that asked for
+        it, and it is applied per device NAME.
+        """
+        if self._connection_probe_worker is not None:
+            return
+        if not devices or self._controller.is_running:
+            return
+        worker = BackgroundWorker(self._controller.probe_hardware_connections, devices)
+        self._connection_probe_worker = worker
+        worker.succeeded.connect(self._on_connection_probe_succeeded)
+        worker.failed.connect(self._on_connection_probe_failed)
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_connection_probe_succeeded(self, connection_states: dict[str, bool]) -> None:
+        """Applies the probe result to the device list currently shown.
+
+        Deliberately applied to the CURRENT list, not to the one this
+        probe was started for: a refresh may have happened in the
+        meantime (switching to the setup tab triggers one), and the
+        reachability of a device does not depend on which run asked for
+        it. Devices the probe says nothing about - added by that newer
+        run, or gone from the driver in the meantime - keep their
+        unprobed state instead of being reported as disconnected.
+
+        An empty result means the probe could not be carried out at all
+        (no `nidaqmx`, driver error). The optimistic state from stage one
+        is then kept, see `probe_device_connections`.
+        """
+        self._connection_probe_worker = None
+        current_devices = self._setup_view.get_discovered_devices()
+        if not connection_states or not current_devices:
+            return
+        self._setup_view.set_discovered_devices(
+            [
+                replace(
+                    device,
+                    is_connected=connection_states[device.device_name],
+                    connection_probed=True,
+                )
+                if device.device_name in connection_states
+                else device
+                for device in current_devices
+            ]
+        )
+
+    def _on_connection_probe_failed(self, message: str) -> None:
+        # Only logged, deliberately without a dialog or a status bar
+        # message: the device list from stage one is on screen and
+        # usable, only the reachability marking is missing. Handling this
+        # like a failed discovery would replace a working list with an
+        # error message.
+        self._connection_probe_worker = None
+        logger.warning("Verbindungsprüfung der Geräte fehlgeschlagen: %s", message)
 
     def _on_discover_hardware_failed(self, message: str) -> None:
         self._discovery_worker = None
@@ -840,7 +1057,7 @@ class MainWindow(QMainWindow):
             self._live_view.mark_recording_started(0)
             self._maybe_start_stop_listener(config)
             self._set_nav_index(_VIEW_LIVE)
-            self._status_label.setText(t("measurement_running_named", name=config.name))
+            self._set_measurement_status(config)
             return
 
         # Threshold/serial START trigger: hardware acquisition + display
@@ -959,7 +1176,7 @@ class MainWindow(QMainWindow):
 
         self._maybe_start_stop_listener(config)
 
-        self._status_label.setText(t("measurement_running_named", name=config.name))
+        self._set_measurement_status(config)
 
     def _on_trigger_connection_failed(self, message: str) -> None:
         """The serial START trigger could not open the configured COM
@@ -985,7 +1202,7 @@ class MainWindow(QMainWindow):
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
-        self._status_label.setText(t("ready"))
+        self._clear_measurement_status()
         QMessageBox.warning(self, t("trigger_connection_failed_title"), message)
         self._set_nav_index(_VIEW_SETUP)
 
@@ -1165,7 +1382,7 @@ class MainWindow(QMainWindow):
                 )
             )
         else:
-            self._status_label.setText(t("ready"))
+            self._clear_measurement_status()
 
         self._recording_started = False
         self._setup_view.set_start_enabled(True, "")
@@ -1217,7 +1434,7 @@ class MainWindow(QMainWindow):
         self._setup_view.set_trigger_armed(False)
         self._live_view.set_trigger_armed(False)
         self._trigger_config.auto_rearm = False
-        self._status_label.setText(t("ready"))
+        self._clear_measurement_status()
         QMessageBox.critical(
             self,
             t("measurement_error"),
@@ -1230,7 +1447,7 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def _on_about(self) -> None:
-        QMessageBox.about(self, t("about_title"), t("about_body"))
+        QMessageBox.about(self, t("about_title"), t("about_body", version=APP_VERSION))
 
     def _restore_window_geometry(self) -> None:
         geom = self._configuration_manager.settings.window

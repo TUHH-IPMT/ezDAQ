@@ -120,6 +120,73 @@ Directories:
 - `doc/` – supplementary documentation (scripted/headless measurement
   usage, an Arduino sketch for testing the serial trigger)
 
+## Deployment (Windows executable)
+
+For rolling ezDAQ out to several lab PCs, it is packaged with
+PyInstaller so users do not need Python or a virtual environment.
+
+**The NI-DAQmx driver cannot be bundled.** It is a National Instruments
+system driver (administrator rights, usually a reboot); `nidaqmx` only
+loads its DLL at runtime. Every machine therefore needs the NI-DAQmx
+runtime installed separately, no matter how ezDAQ itself is packaged.
+Without it the application still starts and reports the missing driver
+in the device browser.
+
+### Building the bundle
+
+```
+py -3 -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+.venv\Scripts\python.exe -m PyInstaller --noconfirm --clean packaging\ezDAQ.spec
+```
+
+The result is `dist\ezDAQ\` (roughly 310 MB, dominated by pyarrow,
+PyQt6 and scipy) with `ezDAQ.exe` at its root.
+
+`packaging/ezDAQ.spec` uses **onedir**, not onefile: onefile unpacks the whole
+bundle into `%TEMP%` on every start, which costs seconds of startup time
+and is a pattern virus scanners regularly flag.
+`config/settings.py::get_resource_path` supports both modes.
+
+Build on the oldest Windows version that has to be supported - a bundle
+built on Windows 11 runs on Windows 10, but not necessarily the other
+way round.
+
+### Distributing it
+
+- **Simplest:** put `dist\ezDAQ\` on a network share and give users a
+  shortcut to `ezDAQ.exe`. No installation, and an update is a folder
+  replacement.
+- **Installer:** `packaging/ezDAQ.iss` builds one with
+  [Inno Setup](https://jrsoftware.org/isinfo.php) (free, must be
+  installed separately):
+
+  ```
+  "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" packaging\ezDAQ.iss
+  ```
+
+  This produces `dist\ezDAQ-Setup-<version>.exe` with a Start menu
+  entry and an uninstaller. At the start of the wizard the user chooses:
+
+  - **for all users** - elevates, installs into `Program Files`, one
+    copy shared by everyone. Right for a shared lab PC.
+  - **for me only** - **no administrator rights**, installs into
+    `%LOCALAPPDATA%\Programs\ezDAQ`. Right when the user does not have
+    admin on their own machine. Costs the full bundle size per user
+    profile.
+
+  Either way is safe because ezDAQ never writes next to its executable -
+  the configuration lives in `%APPDATA%\ezDAQ` and measurement data
+  wherever the user chose.
+
+  The NI-DAQmx driver always needs administrator rights, so a per-user
+  install only removes that requirement for ezDAQ itself, not for
+  getting a machine into a state where it can measure.
+
+Note that an unsigned executable triggers a SmartScreen "unknown
+publisher" warning on every machine. Either suppress it by policy or
+sign the build with a code-signing certificate.
+
 ## Important note on hardware testing
 
 The hardware layer (`hardware/nidaq_device.py`, `ni9215.py`, `ni9234.py`,

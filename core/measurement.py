@@ -118,7 +118,9 @@ def create_devices(
 
     Raises:
         MeasurementConfigError: if channels of the same device specify
-            different module types, or a module type is not supported.
+            different module types, a module type is not supported, or a
+            device was detected as NOT connected during discovery (see
+            `hardware/nidaq_device.py::_is_device_connected`).
     """
     discovered_by_name = {d.device_name: d for d in (discovered_devices or [])}
     groups = group_channels_by_device(channels)
@@ -140,12 +142,28 @@ def create_devices(
                 f"Modultyp {module_type} wird aktuell nicht unterstützt."
             )
 
+        # Falls back to a placeholder with `is_connected` at its default
+        # True when no discovery result is available: the check below is
+        # meant to report a POSITIVELY detected disconnect, not to block
+        # a measurement just because nothing has been probed (e.g. a
+        # configuration loaded without a preceding device search - there
+        # the driver reports the real cause at task creation).
         device_info = discovered_by_name.get(device_name) or DeviceInfo(
             device_name=device_name,
             product_type=module_type.value,
             module_type=module_type,
             num_channels=len(group_channels),
         )
+        if not device_info.is_connected:
+            # Without this, the driver would fail somewhere inside task
+            # creation with a generic DAQmx error, because the channels
+            # still exist in its configuration cache - see
+            # `hardware/nidaq_device.py::_is_device_connected`.
+            raise MeasurementConfigError(
+                f"Gerät '{device_name}' ({device_info.product_type}) ist im "
+                f"NI-DAQmx-Treiber konfiguriert, antwortet aber nicht. Bitte "
+                f"Verbindung prüfen und die Gerätesuche erneut ausführen."
+            )
 
         devices.append(device_class(device_info, group_channels))
         logger.debug(

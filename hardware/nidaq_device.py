@@ -9,7 +9,9 @@ measurement controller, and ring buffer know only `BaseDevice` from
 `hardware/base_device.py`.
 
 Also contains `discover_devices()` for detecting connected
-NI cDAQ modules for the setup view.
+NI cDAQ modules for the setup view, plus
+`probe_device_connections()` as the separately callable second stage
+of that discovery (see `gui/main_window.py::_on_discover_hardware`).
 
 Note on the development environment:
     `nidaqmx` (the Python package) can be imported even without an
@@ -29,6 +31,7 @@ from __future__ import annotations
 import logging
 import subprocess
 from abc import abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -46,6 +49,12 @@ _NI_MAX_FALLBACK_PATHS = (
     Path(r"C:\Program Files (x86)\National Instruments\MAX\NIMax.exe"),
     Path(r"C:\Program Files\National Instruments\MAX\NIMax.exe"),
 )
+
+# Upper bound for the concurrent connection probes of
+# `probe_device_connections()`. One thread per chassis, capped: the
+# threads spend their time waiting on the driver, but an unbounded pool
+# would spawn one thread per configured chassis for no further gain.
+_MAX_CONCURRENT_PROBES = 8
 
 try:
     import nidaqmx
@@ -73,16 +82,44 @@ except ImportError:  # pragma: no cover - only relevant without nidaqmx installe
     nidaqmx = None  # type: ignore[assignment]
 
 
-def discover_devices() -> list[DeviceInfo]:
+def discover_devices(probe_connections: bool = True) -> list[DeviceInfo]:
     """Detects connected NI cDAQ modules via the local NI-DAQmx system.
 
     Called by the setup view to show the user a list of
     available devices/modules to choose from.
 
+    Everything except `DeviceInfo.is_connected` is read from the
+    NI-DAQmx configuration database, NOT from the hardware. That
+    database keeps a once-configured device listed - with its full
+    channel tree - even after it has been physically disconnected; a
+    RESERVED network cDAQ chassis whose cable was pulled is the case
+    that motivated this. Each device is therefore additionally probed
+    for an actual hardware response - either as part of this call, or,
+    if `probe_connections` is False, by a separate
+    `probe_device_connections()` afterwards.
+
+    Args:
+        probe_connections: Whether this call also probes each device for
+            an actual hardware response. False returns the
+            CONFIGURATION DATABASE state alone - a matter of
+            milliseconds, but with `DeviceInfo.is_connected` left at its
+            optimistic default and `DeviceInfo.connection_probed` False.
+            The probe is by far the expensive part of a discovery run: a
+            configured but unplugged NETWORK cDAQ chassis only answers
+            it with a driver-side network timeout, which delayed the
+            whole device list back when both stages were one call. The
+            setup view therefore requests the list without a probe and
+            follows up with `probe_device_connections()` in the
+            background (see `gui/main_window.py::_on_discover_hardware`).
+
     Returns:
-        List of detected devices. Empty if the driver works fine but
-        simply no hardware is connected - that is a normal, not an
-        erroneous, result.
+        List of detected devices, INCLUDING those that are only
+        configured but currently unreachable (`is_connected is False`) -
+        deliberately not filtered out here, so the setup view can show
+        them as unavailable rather than letting them silently vanish
+        (see `gui/setup_view.py::set_discovered_devices`).
+        Empty if the driver works fine but simply no hardware is
+        configured - that is a normal, not an erroneous, result.
 
     Raises:
         RuntimeError: if `nidaqmx`/the NI-DAQmx driver is NOT available
@@ -105,6 +142,10 @@ def discover_devices() -> list[DeviceInfo]:
     devices: list[DeviceInfo] = []
     try:
         system = System.local()
+        # One probe result per PROBE TARGET (chassis resp. standalone
+        # device), reused across all modules of the same chassis - see
+        # `_probe_target_name`.
+        connection_probe_cache: dict[str, bool] = {}
         for device in system.devices:
             module_type = _map_product_type(device.product_type)
             try:
@@ -119,8 +160,18 @@ def discover_devices() -> list[DeviceInfo]:
                     product_type=device.product_type,
                     module_type=module_type,
                     num_channels=num_channels,
-                    has_any_channels=_has_any_channels(device),
+                    # Short-circuited on the analog input channels just
+                    # read: `_has_any_channels` would otherwise query
+                    # `ai_physical_chans` a second time for every
+                    # ordinary AI module, which is the common case.
+                    has_any_channels=num_channels > 0 or _has_any_channels(device),
                     physical_channels=phys_chs,
+                    is_connected=(
+                        _is_device_connected(device, connection_probe_cache)
+                        if probe_connections
+                        else True
+                    ),
+                    connection_probed=probe_connections,
                 )
             )
     except DaqmxError as exc:
@@ -134,6 +185,77 @@ def discover_devices() -> list[DeviceInfo]:
         raise RuntimeError(str(exc)) from exc
 
     return devices
+
+
+def probe_device_connections(devices: list[DeviceInfo]) -> dict[str, bool]:
+    """Probes the reachability of devices already found by
+    `discover_devices(probe_connections=False)`.
+
+    Second stage of the two-stage device discovery. Stage one delivers
+    the device list from the NI-DAQmx configuration database within
+    milliseconds; this call supplies the hardware truth for it
+    afterwards, so the user gets a device list immediately instead of
+    waiting out the probes (see
+    `gui/main_window.py::_on_discover_hardware`).
+
+    Probes run CONCURRENTLY, one per PROBE TARGET (chassis resp.
+    standalone device, see `_probe_target_name`) rather than one per
+    module. Concurrency is what keeps several unreachable chassis at ONE
+    network timeout instead of their sum - the serial probe inside the
+    discovery loop paid that sum. The NI-DAQmx C API is thread-safe and
+    each probe addresses a different device.
+
+    Note that a probe MUST NOT be fired at a device that currently has a
+    running task, so the caller only starts this stage while no
+    measurement is running (see
+    `gui/main_window.py::_on_discover_hardware_succeeded`).
+
+    Args:
+        devices: Result of stage one. Only `DeviceInfo.device_name` is
+            read; the chassis affiliation is looked up freshly, because
+            it comes from the configuration database and is cheap.
+
+    Returns:
+        `DeviceInfo.device_name` -> reachability, for every device that
+        could be resolved. Modules of the same chassis share its result.
+        Deliberately EMPTY rather than all-False if `nidaqmx` is
+        unavailable or the device lookup fails as a whole: the caller
+        then keeps stage one's optimistic state instead of declaring
+        every device disconnected on what is a driver problem.
+    """
+    if not NIDAQMX_AVAILABLE or not devices:
+        return {}
+
+    try:
+        system_devices = System.local().devices
+        target_by_device: dict[str, str] = {}
+        for info in devices:
+            try:
+                device = system_devices[info.device_name]
+            except (DaqmxError, KeyError):
+                # Gone from the configuration database between the two
+                # stages (e.g. removed in NI-MAX in the meantime).
+                # Left out of the result rather than reported as
+                # disconnected - the next discovery run drops it anyway.
+                continue
+            target_by_device[info.device_name] = _probe_target_name(device)
+    except DaqmxError as exc:
+        # DEBUG for the same reason as in `discover_devices`: an
+        # unavailable driver is reported once, where it is handled.
+        logger.debug("Verbindungsprüfung nicht möglich: %s", exc)
+        return {}
+
+    targets = sorted(set(target_by_device.values()))
+    if not targets:
+        return {}
+
+    with ThreadPoolExecutor(
+        max_workers=min(len(targets), _MAX_CONCURRENT_PROBES),
+        thread_name_prefix="daq-probe",
+    ) as pool:
+        connected_by_target = dict(zip(targets, pool.map(_probe_target, targets)))
+
+    return {name: connected_by_target[target] for name, target in target_by_device.items()}
 
 
 def find_ni_max_executable() -> Optional[Path]:
@@ -204,6 +326,95 @@ def _map_product_type(product_type: str) -> Optional[ModuleType]:
         if module_type.value in normalized:
             return module_type
     return None
+
+
+def _probe_target_name(device: "nidaqmx.system.Device") -> str:
+    """The device whose reachability decides `device`'s reachability.
+
+    For a cDAQ module that is its CHASSIS, not the module itself: the
+    modules of a chassis are only reachable through the chassis, so if
+    it doesn't answer, none of them do. Probing per chassis instead of
+    per module keeps the number of hardware round-trips at one per
+    chassis - discovery is already noticeably slow with several
+    chassis/modules (see `gui/setup_view.py::_on_discover_hardware`),
+    and a full self-test per module would multiply that.
+
+    Falls back to the device's own name for anything that is not a cDAQ
+    module (a chassis entry itself, a PXI or USB device, ...) - reading
+    `compact_daq_chassis_device` raises for those, and an empty string
+    is returned for a device that has no chassis.
+    """
+    try:
+        chassis_name = device.compact_daq_chassis_device.name
+    except DaqmxError:
+        return device.name
+    return chassis_name or device.name
+
+
+def _probe_target(target_name: str) -> bool:
+    """Fires the actual hardware probe at ONE probe target.
+
+    Shared by both discovery stages - the serial probe of
+    `discover_devices(probe_connections=True)` via
+    `_is_device_connected`, and the concurrent one of
+    `probe_device_connections`. Called from a worker thread there, so it
+    deliberately holds no state of its own.
+
+    `self_test_device()` is the probe because it is the only documented
+    NI-DAQmx call guaranteed to talk to the hardware ("Performs a brief
+    test of device resources"); it raises for an unreachable device
+    (e.g. -201252 NetworkTargetUnreachable, -201390
+    NetworkStatusConnectionLost, -88705 device not present). A cheaper
+    property read such as `serial_num` was deliberately NOT used: the
+    driver may answer it from the same cache that causes the problem in
+    the first place.
+    """
+    try:
+        System.local().devices[target_name].self_test_device()
+        return True
+    except DaqmxError as exc:
+        # DEBUG, not WARNING: a disconnected but still configured device
+        # is a normal state the user resolves in the UI (the device is
+        # shown as unavailable), not an application error.
+        logger.debug("Gerät '%s' antwortet nicht: %s", target_name, exc)
+        return False
+
+
+def _is_device_connected(
+    device: "nidaqmx.system.Device", probe_cache: dict[str, bool]
+) -> bool:
+    """Checks whether `device` ACTUALLY responds, rather than just being
+    present in the NI-DAQmx configuration database.
+
+    Everything else `discover_devices()` reads (`system.devices`,
+    `product_type`, `ai_physical_chans`, ...) comes from that database
+    and therefore survives a disconnect unchanged. A network cDAQ
+    chassis reserved in NI-MAX keeps being listed with its complete
+    channel tree after its cable has been pulled, and without this check
+    the setup view would offer its channels as selectable although no
+    measurement can be started with them.
+
+    The probe itself is `_probe_target`; `probe_cache` is keyed by
+    `_probe_target_name` and MUST be shared across one discovery run so
+    each chassis is probed only once.
+
+    This is the SERIAL path, used when a caller asks `discover_devices()`
+    for list and probe in one go. The setup view takes the two-stage
+    route instead, whose probes run concurrently - see
+    `probe_device_connections`.
+
+    Note that this can only ever be a snapshot - a cable pulled after
+    discovery is caught at measurement start (`NIDAQSharedTask`) resp.
+    during acquisition (`core/acquisition.py`), not here.
+    """
+    target_name = _probe_target_name(device)
+    cached = probe_cache.get(target_name)
+    if cached is not None:
+        return cached
+
+    connected = _probe_target(target_name)
+    probe_cache[target_name] = connected
+    return connected
 
 
 def _has_any_channels(device: "nidaqmx.system.Device") -> bool:

@@ -160,6 +160,48 @@ _translations = {
         "plot_background": "Hintergrund",
         "plot_grid_color": "Gitterlinien",
         "autoscale_checkbox": "Autoskalierung",
+        "show_x_axis_label_checkbox": "X-Achsenbeschriftung",
+        "show_y_axis_label_checkbox": "Y-Achsenbeschriftung",
+        "show_grid_checkbox": "Gitter anzeigen",
+        "reset_colors_to_theme": "Farben auf Theme-Standard",
+        "reset_colors_to_theme_tooltip": (
+            "Setzt Kurven-, Hintergrund- und Gitterfarbe dieses Kanals "
+            "zurück, sodass sie wieder dem hellen bzw. dunklen Theme folgen. "
+            "Nötig, wenn ein Kanal Farben des jeweils anderen Themes "
+            "eingefroren hat - etwa ein schwarzes Gitter auf dunklem Grund."
+        ),
+        "show_grid_checkbox_tooltip": (
+            "Blendet die Gitterlinien in der Plotfläche ein/aus. Die Gitterfarbe "
+            "oben gilt weiterhin, wenn das Gitter eingeschaltet ist."
+        ),
+        "plot_line_width": "Linienbreite [px]",
+        "plot_line_width_tooltip": (
+            "Stärke der Kurve. Höhere Werte sind auf Beamern und in "
+            "Berichts-Screenshots besser zu erkennen."
+        ),
+        "apply_to_all_channels": "Für alle Kanäle übernehmen",
+        "apply_to_all_channels_tooltip": (
+            "Übernimmt ALLE Einstellungen dieses Dialogs auf jeden Kanal, "
+            "nicht nur auf den gerade bearbeiteten. Wirkt wie OK."
+        ),
+        "apply_to_all_confirm_title": "Auf alle Kanäle übernehmen?",
+        "apply_to_all_confirm_body": (
+            "Die Einstellungen dieses Dialogs werden auf ALLE {count} Kanäle "
+            "übertragen und ersetzen dort die bisherigen Werte. Das lässt "
+            "sich nur über Abbrechen des übergeordneten Dialogs "
+            "zurücknehmen.\n\nFortfahren?"
+        ),
+        "plot_columns": "Spalten im Raster",
+        "plot_columns_tooltip": (
+            "Wie viele Kanäle die Live-Ansicht nebeneinander anordnet. "
+            "Mehr Spalten bedeuten weniger Zeilen und damit höhere "
+            "Diagramme - hilfreich bei vielen Kanälen."
+        ),
+        "axis_label_checkbox_tooltip": (
+            "Blendet nur den Achsentitel ein/aus - Teilstriche, Zahlen "
+            "und Gitter bleiben unverändert. Ausgeschaltet gibt der "
+            "Titel seinen Platz an die Plotfläche zurück."
+        ),
         "autoscale_checkbox_tooltip": (
             "Nutzt den festgelegten Bereich, solange die Messwerte darin "
             "liegen - überschreiten sie ihn, schaltet die Skalierung "
@@ -190,6 +232,14 @@ _translations = {
         "value_settings_button_tooltip": "Einstellungen für die Messwertanzeige: Zahlenformat.",
         "value_settings_dialog_title": "Zahlenwert-Einstellungen",
         "plot_value_integer_digits": "Zahlenformat",
+        "plot_value_refresh_hz": "Aktualisierungsrate [Hz]",
+        "plot_value_refresh_hz_tooltip": (
+            "Wie oft der Zahlenwert neu geschrieben wird. Betrifft nur die "
+            "Zahl - Kurve, Messung und gespeicherte Daten bleiben unverändert. "
+            "Zwischen zwei Aktualisierungen wird gemittelt, die Anzeige zeigt "
+            "also den Mittelwert über das Intervall statt eines zufälligen "
+            "Momentanwerts. Niedrigere Werte beruhigen ein verrauschtes Signal."
+        ),
         "plot_value_integer_digits_tooltip": (
             "Format der Messwertanzeige, z. B. \"000.0000\" (Nullen vor "
             "dem Punkt = Vorkommastellen, danach = Nachkommastellen - der "
@@ -230,6 +280,14 @@ _translations = {
         "analysis_layout_four": "4x1",
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
+        "analysis_category_tools": "Werkzeuge",
+        "analysis_cursor_button": "Messcursor",
+        "analysis_cursor_tooltip": (
+            "Blendet ein Fadenkreuz ein, das auf dem nächstgelegenen "
+            "Messpunkt einrastet und dessen x- und y-Wert anzeigt. Es "
+            "springt nur auf tatsächlich gemessene Punkte, nie auf eine "
+            "Stelle dazwischen."
+        ),
         "analysis_category_files": "Dateien und Kanäle",
         "analysis_category_spectral": "Spektralanalyse",
         "analysis_category_filter": "Filter",
@@ -328,11 +386,20 @@ _translations = {
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
         "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
+        "hw_channel_device_offline": "{channel} (Gerät nicht verbunden)",
         "device_module_unsupported": "nicht unterstützt",
+        "device_not_connected": "nicht verbunden",
         "unsupported_modules_title": "Nicht unterstützte Module",
         "unsupported_modules_body": (
             "Die folgenden Module werden derzeit nicht unterstützt und können "
             "keinem Kanal zugewiesen werden:\n\n{modules}"
+        ),
+        "disconnected_devices_title": "Nicht verbundene Geräte",
+        "disconnected_devices_body": (
+            "Die folgenden Geräte sind im NI-DAQmx-Treiber konfiguriert, "
+            "antworten aber nicht. Sie sind vermutlich ausgesteckt oder über "
+            "das Netzwerk nicht erreichbar und können keinem Kanal zugewiesen "
+            "werden:\n\n{devices}"
         ),
         "no_hw_channel_available": "Kein freier Hardwarekanal mehr verfügbar.",
         "all_channels_assigned_title": "Alle Kanäle belegt",
@@ -392,6 +459,8 @@ _translations = {
         "ready": "Bereit",
         "measurement_running": "Messung läuft ...",
         "measurement_running_named": "Messung '{name}' läuft ...",
+        "measurement_recording_named": "Aufnahme läuft: '{name}' - Daten werden gespeichert",
+        "measurement_live_only_named": "Live-Ansicht: '{name}' - es wird nichts gespeichert",
         "measurement_completed": "Messung abgeschlossen",
         "measurement_completed_named": "Messung '{name}' abgeschlossen ({duration} s)",
         "no_devices_found": "Keine Geräte gefunden (Treiber installiert? Hardware angeschlossen? Hardware im Treiber für diesen PC reserviert?)",
@@ -424,7 +493,7 @@ _translations = {
         "about_title": "Über ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 0.1\n\n"
+            "Version {version}\n\n"
             "Anwendung zur Messdatenerfassung, Live-Visualisierung und Analyse "
             "mit NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "Unterstützt kanalabhängige Skalierung und Kalibrierung, "
@@ -574,6 +643,47 @@ _translations = {
         "plot_background": "Background",
         "plot_grid_color": "Grid Lines",
         "autoscale_checkbox": "Autoscale",
+        "show_x_axis_label_checkbox": "X axis label",
+        "show_y_axis_label_checkbox": "Y axis label",
+        "show_grid_checkbox": "Show grid",
+        "reset_colors_to_theme": "Colors back to theme",
+        "reset_colors_to_theme_tooltip": (
+            "Clears this channel's curve, background and grid colors so "
+            "they follow the light or dark theme again. Needed when a "
+            "channel has frozen the colors of the other theme - a black "
+            "grid on a dark background, for instance."
+        ),
+        "show_grid_checkbox_tooltip": (
+            "Shows/hides the grid lines inside the plot area. The grid color "
+            "above still applies whenever the grid is switched on."
+        ),
+        "plot_line_width": "Line width [px]",
+        "plot_line_width_tooltip": (
+            "Thickness of the curve. Higher values read better on a "
+            "projector and in report screenshots."
+        ),
+        "apply_to_all_channels": "Apply to all channels",
+        "apply_to_all_channels_tooltip": (
+            "Applies EVERY setting in this dialog to all channels, not just "
+            "the one being edited. Acts like OK."
+        ),
+        "apply_to_all_confirm_title": "Apply to all channels?",
+        "apply_to_all_confirm_body": (
+            "The settings in this dialog will be copied to ALL {count} "
+            "channels, replacing their current values. This can only be "
+            "undone by cancelling the parent dialog.\n\nContinue?"
+        ),
+        "plot_columns": "Grid columns",
+        "plot_columns_tooltip": (
+            "How many channels the live view places side by side. More "
+            "columns mean fewer rows and therefore taller plots - helpful "
+            "with many channels."
+        ),
+        "axis_label_checkbox_tooltip": (
+            "Shows/hides the axis title only - tick marks, numbers and "
+            "grid stay unchanged. Switched off, the title gives its "
+            "space back to the plot area."
+        ),
         "autoscale_checkbox_tooltip": (
             "Uses the configured range as long as the measured values stay "
             "within it - if they exceed it, scaling automatically switches "
@@ -604,6 +714,14 @@ _translations = {
         "value_settings_button_tooltip": "Value display settings: number format.",
         "value_settings_dialog_title": "Value Display Settings",
         "plot_value_integer_digits": "Number Format",
+        "plot_value_refresh_hz": "Refresh Rate [Hz]",
+        "plot_value_refresh_hz_tooltip": (
+            "How often the numeric value is rewritten. Affects the number "
+            "only - curve, measurement and stored data stay unchanged. "
+            "Readings are averaged between two refreshes, so the display "
+            "shows the mean over the interval rather than a random "
+            "instantaneous sample. Lower values settle a noisy signal."
+        ),
         "plot_value_integer_digits_tooltip": (
             "Format of the value display, e.g. \"000.0000\" (zeros before "
             "the dot = integer digits, after = decimal digits - the dot "
@@ -644,6 +762,13 @@ _translations = {
         "analysis_layout_four": "4x1",
         "analysis_layout_four_square": "2x2",
         "analysis_category_layout": "Layout",
+        "analysis_category_tools": "Tools",
+        "analysis_cursor_button": "Readout cursor",
+        "analysis_cursor_tooltip": (
+            "Shows a crosshair that snaps to the nearest measured sample "
+            "and reports its x and y value. It only ever lands on samples "
+            "that were actually recorded, never in between."
+        ),
         "analysis_category_files": "Files and Channels",
         "analysis_category_spectral": "Spectral Analysis",
         "analysis_category_filter": "Filter",
@@ -742,11 +867,19 @@ _translations = {
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
         "hw_channel_unsupported_module": "{channel} (module not supported)",
+        "hw_channel_device_offline": "{channel} (device not connected)",
         "device_module_unsupported": "not supported",
+        "device_not_connected": "not connected",
         "unsupported_modules_title": "Unsupported Modules",
         "unsupported_modules_body": (
             "The following modules are currently not supported and cannot be "
             "assigned to a channel:\n\n{modules}"
+        ),
+        "disconnected_devices_title": "Disconnected Devices",
+        "disconnected_devices_body": (
+            "The following devices are configured in the NI-DAQmx driver but "
+            "do not respond. They are most likely unplugged or unreachable "
+            "over the network and cannot be assigned to a channel:\n\n{devices}"
         ),
         "no_hw_channel_available": "No free hardware channel available.",
         "all_channels_assigned_title": "All Channels Assigned",
@@ -806,6 +939,8 @@ _translations = {
         "ready": "Ready",
         "measurement_running": "Measurement running ...",
         "measurement_running_named": "Measurement '{name}' running ...",
+        "measurement_recording_named": "Recording: '{name}' - data is being saved",
+        "measurement_live_only_named": "Live view: '{name}' - nothing is being saved",
         "measurement_completed": "Measurement completed",
         "measurement_completed_named": "Measurement '{name}' completed ({duration} s)",
         "no_devices_found": "No devices found (Drivers installed? Hardware connected? Hardware reserved for this PC in the driver?)",
@@ -838,7 +973,7 @@ _translations = {
         "about_title": "About ezDAQ",
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
-            "Version 0.1\n\n"
+            "Version {version}\n\n"
             "Application for data acquisition, live visualization, and analysis "
             "with NI cDAQ (NI 9215 / NI 9234 / NI 9210 / NI 9213).\n\n"
             "Supports channel scaling and calibration, Parquet/CSV storage, "

@@ -763,6 +763,13 @@ class Channel:
             actual value range when `plot_y_min`/`plot_y_max` is
             exceeded/undershot - if `False`, the fixed range always
             stays active.
+        plot_show_x_label: Whether the X axis TITLE ("Time [s]") is
+            drawn on the plot. Only the title text - tick marks, tick
+            numbers and the grid stay untouched. Off gives the space
+            back to the plot area, which is what makes it worth having
+            with many subplots in one grid.
+        plot_show_y_label: Same for the Y axis title (channel name plus
+            unit, see `gui/live_view.py::_channel_axis_label`).
         plot_visible: Whether the channel is shown as its own subplot in
             the live view. Affects ONLY the display, not
             acquisition/storage - a channel with `plot_visible=False` is
@@ -800,6 +807,22 @@ class Channel:
     plot_y_max: Optional[float] = None
     plot_autoscale: bool = True
     plot_time_window_seconds: float = 5.0
+    # Axis TITLES ("Time [s]" / channel name + unit), switchable
+    # separately per axis - ticks and grid are unaffected. Default on,
+    # i.e. the previous appearance (see
+    # `gui/live_view.py::ChannelPlotSettingsDialog`).
+    plot_show_x_label: bool = True
+    plot_show_y_label: bool = True
+    # Grid lines inside the plot area. The grid COLOR was already
+    # configurable (`plot_grid_color`) while the grid itself was
+    # hardwired on - so a grid could be recolored but not switched
+    # off. Covers both axes together, unlike the axis titles above,
+    # which are useful separately (the X title repeats identically on
+    # every subplot, a half grid does not answer any similar need).
+    plot_show_grid: bool = True
+    # Width of the curve in pixels. Previously hardwired to 1.5,
+    # which is thin on a projector or in a report screenshot.
+    plot_line_width: float = 1.5
     # Whether the actual curve trace is shown (main grid AND own window) -
     # independent of `plot_show_value` below: both switched off together
     # shows nothing at all (see `plot_visible` for that). Default is ONLY
@@ -822,6 +845,16 @@ class Channel:
     plot_value_integer_digits: int = 3
     # Number of decimal digits - see `plot_value_integer_digits`.
     plot_value_decimal_digits: int = 3
+    # How often the numeric readout is refreshed, in Hz - deliberately
+    # DECOUPLED from the live view's tick rate (~66 Hz, see
+    # `gui/live_view.py::_UI_UPDATE_INTERVAL_MS`), which the curve needs
+    # but which makes a noisy reading an unreadable blur of digits.
+    # Between two refreshes the readings are AVERAGED rather than
+    # sampled: showing every n-th instantaneous value would only make
+    # the number jump less often, not settle down. Applies solely to the
+    # readout - curve, ring buffer and stored data are untouched. See
+    # `gui/live_view.py::ChannelValueSettingsDialog`.
+    plot_value_refresh_hz: float = 30.0
     plot_visible: bool = True
     # Shows the channel in its own window (instead of the live view's
     # main grid) (see `gui/live_view.py::ChannelPopoutWindow`) - not
@@ -878,10 +911,15 @@ class Channel:
             "plot_y_max": self.plot_y_max,
             "plot_autoscale": self.plot_autoscale,
             "plot_time_window_seconds": self.plot_time_window_seconds,
+            "plot_show_x_label": self.plot_show_x_label,
+            "plot_show_y_label": self.plot_show_y_label,
+            "plot_show_grid": self.plot_show_grid,
+            "plot_line_width": self.plot_line_width,
             "plot_show_graph": self.plot_show_graph,
             "plot_show_value": self.plot_show_value,
             "plot_value_integer_digits": self.plot_value_integer_digits,
             "plot_value_decimal_digits": self.plot_value_decimal_digits,
+            "plot_value_refresh_hz": self.plot_value_refresh_hz,
             "plot_visible": self.plot_visible,
             "plot_popout": self.plot_popout,
             "plot_popout_x": self.plot_popout_x,
@@ -923,6 +961,12 @@ class Channel:
             plot_time_window_seconds=max(
                 0.1, float(data.get("plot_time_window_seconds", 5.0))
             ),
+            plot_show_x_label=data.get("plot_show_x_label", True),
+            plot_show_y_label=data.get("plot_show_y_label", True),
+            plot_show_grid=data.get("plot_show_grid", True),
+            # Clamped: 0 or a negative width would make the curve
+            # invisible with no way to tell why from the dialog.
+            plot_line_width=max(0.1, float(data.get("plot_line_width", 1.5))),
             plot_show_graph=data.get("plot_show_graph", True),
             plot_show_value=data.get("plot_show_value", False),
             plot_value_integer_digits=max(
@@ -930,6 +974,9 @@ class Channel:
             ),
             plot_value_decimal_digits=max(
                 0, int(data.get("plot_value_decimal_digits", 3))
+            ),
+            plot_value_refresh_hz=max(
+                0.1, float(data.get("plot_value_refresh_hz", 30.0))
             ),
             plot_visible=data.get("plot_visible", True),
             plot_popout=data.get("plot_popout", False),
@@ -973,6 +1020,26 @@ class DeviceInfo:
             supported" despite `num_channels == 0`, instead of silently
             hiding them like an empty chassis entry (see
             `gui/setup_view.py::set_discovered_devices`).
+        is_connected: Whether the device actually responded to a
+            hardware probe during discovery - as opposed to merely being
+            present in the NI-DAQmx configuration database. Everything
+            else in this dataclass comes from that database, which keeps
+            a once-configured device (in particular a RESERVED network
+            cDAQ chassis) listed with its full channel tree even after
+            its cable has been pulled. Without this flag such a device
+            would keep showing up as selectable although no measurement
+            can be started with it (see
+            `hardware/nidaq_device.py::_is_device_connected`).
+        connection_probed: Whether `is_connected` actually reflects a
+            hardware probe, as opposed to just its optimistic default.
+            False during the first stage of the two-stage device
+            discovery, which lists the configuration database
+            immediately and only probes afterwards (see
+            `hardware/nidaq_device.py::probe_device_connections`) - the
+            setup view needs to tell "responds" apart from "not asked
+            yet" so it neither grays out a device prematurely nor
+            reports it as disconnected before anything was measured
+            (see `gui/setup_view.py::set_discovered_devices`).
     """
 
     device_name: str
@@ -982,6 +1049,11 @@ class DeviceInfo:
     has_any_channels: bool = False
     # List of physical channel names, e.g. ["cDAQ1Mod1/ai0", ...]
     physical_channels: list[str] = field(default_factory=list)
+    # Defaults to True so that callers constructing DeviceInfo without a
+    # hardware probe (tests, metadata) keep the previous behavior -
+    # `connection_probed` marks exactly that case.
+    is_connected: bool = True
+    connection_probed: bool = False
 
 
 @dataclass

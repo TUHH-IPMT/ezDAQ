@@ -61,15 +61,18 @@ from gui.dialogs import confirm_delete
 from gui.theme import (
     axis_tick_point_size,
     connect_theme_changed,
+    draw_crosshair_icon,
     draw_fft_icon,
     draw_highpass_icon,
     draw_lowpass_icon,
     draw_smoothing_icon,
     plot_background_color,
+    plot_foreground_color,
     repolish,
     style_plot_container,
     style_plot_item,
 )
+from gui.widgets.crosshair import SnappingCrosshair
 from gui.widgets.spinbox import NoWheelSpinBox, PrecisionDoubleSpinBox
 from gui.workers import BackgroundWorker
 
@@ -433,6 +436,27 @@ class AnalysisView(QWidget):
         controls_row.addWidget(self._layout_combo, stretch=1)
         left_layout.addLayout(controls_row)
 
+        # --- Tools ---
+        self._tools_category_label = QLabel(t("analysis_category_tools"))
+        left_layout.addWidget(self._tools_category_label)
+
+        # Checkable, and off by default: the cursor follows every mouse
+        # move over a plot, so it should only run when actually wanted.
+        self._cursor_button = QToolButton()
+        self._cursor_button.setCheckable(True)
+        self._cursor_button.setIcon(QIcon(draw_crosshair_icon(32)))
+        self._cursor_button.setIconSize(QSize(32, 32))
+        self._cursor_button.setFixedSize(56, 56)
+        self._cursor_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self._cursor_button.setToolTip(f"{t('analysis_cursor_button')} — {t('analysis_cursor_tooltip')}")
+        self._cursor_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._cursor_button.toggled.connect(self._on_cursor_toggled)
+        tools_row = QHBoxLayout()
+        tools_row.setContentsMargins(0, 0, 0, 0)
+        tools_row.addWidget(self._cursor_button)
+        tools_row.addStretch(1)
+        left_layout.addLayout(tools_row)
+
         for category_key, kinds in _FUNCTION_CATEGORIES:
             category_label = QLabel(t(category_key))
             left_layout.addWidget(category_label)
@@ -505,6 +529,27 @@ class AnalysisView(QWidget):
             # everywhere (see `_channel_background_color`).
             plot_widget.getPlotItem().getViewBox().setBackgroundColor(plot_background_color())
             plot_widget.channel_dropped.connect(self._on_channel_dropped_to_plot)
+        # One cursor per plot, created up front but idle - the items only
+        # enter the plot when the tool is switched on (see
+        # `gui/widgets/crosshair.py`).
+        self._crosshairs = [
+            SnappingCrosshair(
+                plot_widget,
+                plot_foreground_color(),
+                plot_foreground_color(),
+                plot_background_color(),
+            )
+            for plot_widget in self._plot_widgets
+        ]
+        for index, plot_widget in enumerate(self._plot_widgets):
+            # The scene signal, not a widget event: PyQtGraph delivers mouse
+            # moves over the plot through the scene, and it is the only
+            # place that sees them without stealing them from the view box's
+            # own pan/zoom handling.
+            plot_widget.scene().sigMouseMoved.connect(
+                lambda pos, i=index: self._on_plot_mouse_moved(i, pos)
+            )
+
         content_row.addWidget(self._plot_area, stretch=1)
 
         # Right: categorized side panel (files/channels)
@@ -562,6 +607,7 @@ class AnalysisView(QWidget):
         self._layout_category_label.setFont(category_font)
         for category_label in self._function_category_labels.values():
             category_label.setFont(category_font)
+        self._tools_category_label.setFont(category_font)
         self._files_category_label.setFont(category_font)
 
         self._populate_layout_combo()
@@ -588,13 +634,46 @@ class AnalysisView(QWidget):
             if button is not None:
                 button.setIcon(QIcon(icon_fn(32)))
 
+        # Same for the readout cursor: its icon AND the colors of its lines,
+        # marker and label box are all captured when they are set.
+        self._cursor_button.setIcon(QIcon(draw_crosshair_icon(32)))
+        for crosshair in self._crosshairs:
+            crosshair.restyle(
+                plot_foreground_color(),
+                plot_foreground_color(),
+                plot_background_color(),
+            )
+
         self._tree.retheme_empty_hint()
+
+    def _on_cursor_toggled(self, enabled: bool) -> None:
+        """Switches the readout cursor on all plots at once.
+
+        Not per plot: the tool answers 'what does this sample say', and
+        having to arm each of up to four plots separately would be busy
+        work for no gain."""
+        for crosshair in self._crosshairs:
+            crosshair.set_enabled(enabled)
+
+    def _on_plot_mouse_moved(self, plot_index: int, scene_pos) -> None:
+        """Moves the cursor of plot `plot_index` to the nearest sample.
+
+        The scene signal fires for every mouse move over the plot even
+        while the tool is off, so the disabled case returns immediately -
+        `SnappingCrosshair.move_to` does that itself, this only spares
+        the lookup."""
+        if not self._cursor_button.isChecked():
+            return
+        if 0 <= plot_index < len(self._crosshairs):
+            self._crosshairs[plot_index].move_to(scene_pos)
 
     def retranslate_ui(self) -> None:
         """Updates all static texts after a language change."""
         self._layout_category_label.setText(t("analysis_category_layout"))
         for category_key, category_label in self._function_category_labels.items():
             category_label.setText(t(category_key))
+        self._tools_category_label.setText(t("analysis_category_tools"))
+        self._cursor_button.setToolTip(f"{t('analysis_cursor_button')} — {t('analysis_cursor_tooltip')}")
         self._files_category_label.setText(t("analysis_category_files"))
         self._tree.set_empty_hint_text(t("drag_drop_files"))
         self._tree_search_edit.setPlaceholderText(t("search_files_placeholder"))

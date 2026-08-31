@@ -37,6 +37,7 @@ from PyQt6.QtGui import (
     QPixmap,
     QPolygonF,
 )
+from PyQt6.QtWidgets import QProxyStyle, QStyle
 
 _current_theme = "light"
 
@@ -99,6 +100,16 @@ def _action_button_font_size_pt() -> int:
 # has been created - but `gui/theme.py` is sometimes imported before that
 # (see the `gui/i18n.py` comment on the same issue). Callers therefore use
 # `action_button_style()` instead of a module-level constant.
+# NOTE: neither style below sets `color` in the plain `QPushButton {}`
+# block, on purpose. A stylesheet color there applies in EVERY state
+# and overrides Qt's automatic `QPalette.ColorGroup.Disabled`
+# handling - a disabled play/record/stop button then keeps its
+# full-strength label and looks perfectly clickable. Measured as text
+# contrast against the button background: with the line, disabled was
+# identical to enabled (195 light / 202 dark); without it, it drops to
+# 97 and 74 respectively, i.e. Qt grays it out by itself in both
+# themes. `palette(button-text)` was the default for the enabled state
+# anyway, so nothing is lost.
 def action_button_style() -> str:
     size = _action_button_font_size_pt()
     return (
@@ -107,7 +118,6 @@ def action_button_style() -> str:
         "   border-radius: 4px;"
         "   padding: 8px 18px;"
         "   background-color: palette(button);"
-        "   color: palette(button-text);"
         f"   font-size: {size}pt;"
         "}"
         "QPushButton:hover { background-color: palette(midlight); }"
@@ -129,7 +139,6 @@ def trigger_arm_button_style() -> str:
         "   border-radius: 4px;"
         "   padding: 8px 18px;"
         "   background-color: palette(button);"
-        "   color: palette(button-text);"
         f"   font-size: {size}pt;"
         "}"
         "QPushButton:hover:!checked { background-color: palette(midlight); }"
@@ -217,6 +226,50 @@ def _build_dark_palette() -> QPalette:
 _PALETTES = {"light": _build_light_palette, "dark": _build_dark_palette}
 
 
+# Outline drawn around every check box indicator, per theme. Chosen
+# for contrast against the field it sits in (Base): 4.0:1 on the light
+# theme's white, 3.4:1 on the dark theme's #232323.
+_CHECKBOX_OUTLINE_COLORS = {"light": "#7f7f7f", "dark": "#8a8a8a"}
+
+
+def checkbox_outline_color() -> QColor:
+    """Border color for check box indicators in the current theme."""
+    return QColor(_CHECKBOX_OUTLINE_COLORS[_current_theme])
+
+
+class _CheckBoxOutlineStyle(QProxyStyle):
+    """Fusion, plus a visible border around check box indicators.
+
+    Fusion derives that border from the palette's Window color and
+    LIGHTENS it. On the dark theme that yields a readable gray; on the
+    light theme #f0f0f0 lightens to white and the box disappears into
+    its own white fill - measured: of the pixels Fusion painted for an
+    unchecked box, none were anything but the fill or the background.
+    Only the check mark of a ticked box was visible, and an unticked
+    one looked like an empty cell.
+
+    Fixed here rather than per widget: the color is derived inside the
+    style from a role the application needs for other things, so no
+    palette tweak reaches it, and a helper called at each of the 13
+    construction sites would be forgotten by the fourteenth.
+    """
+
+    def drawPrimitive(self, element, option, painter, widget=None) -> None:
+        super().drawPrimitive(element, option, painter, widget)
+        if element != QStyle.PrimitiveElement.PE_IndicatorCheckBox:
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(checkbox_outline_color(), 1))
+        # Half-pixel inset so the 1px stroke lands ON the pixel grid
+        # instead of straddling two rows and rendering as a soft gray.
+        painter.drawRoundedRect(
+            QRectF(option.rect).adjusted(0.5, 0.5, -0.5, -0.5), 2.0, 2.0
+        )
+        painter.restore()
+
+
 def init_theme(app) -> None:
     """Must be called once at app startup (after `QApplication(...)`,
     before the first window is created).
@@ -225,7 +278,8 @@ def init_theme(app) -> None:
     reliably on all platforms (the native Windows style ignores a custom
     `QPalette` for many widgets).
     """
-    app.setStyle("Fusion")
+    # Fusion with one correction, see `_CheckBoxOutlineStyle`.
+    app.setStyle(_CheckBoxOutlineStyle("Fusion"))
     app.setPalette(_PALETTES[_current_theme]())
     # Global PyQtGraph default for newly created widgets, BEFORE
     # `style_plot_container()` applies explicitly - window background
@@ -237,6 +291,56 @@ def init_theme(app) -> None:
 def get_theme() -> str:
     """Returns the current theme ("light" or "dark")."""
     return _current_theme
+
+
+# Categorical palette for the channel curves. Without it every channel
+# was drawn in the same `curve` color above, so a grid of six subplots
+# showed six identical blue traces.
+#
+# Values are the documented default palette of the data-viz guidance,
+# taken unchanged - re-stepping them by hand would invalidate the
+# checks they passed. Verified against ezDAQ's ACTUAL plot surfaces
+# (#ffffff / #232323) rather than the reference ones, on the adjacent
+# pairlist, in both modes:
+#
+#   lightness band, chroma floor          PASS
+#   CVD separation  worst dE 9.1 / 8.4    PASS (target >= 8)
+#   normal vision   worst dE 19.6 / 19.3  PASS (floor >= 15)
+#   contrast        3 light slots < 3:1   WARN
+#
+# The contrast warning carries an obligation to label the marks
+# directly - which the live view does by construction: every subplot
+# is titled with its channel name and unit and carries its own axis
+# labels.
+#
+# That direct labelling is also why the palette is used at its full
+# length rather than the three-slot cap the guidance puts on
+# all-pairs forms: color here is a scanning aid, not the key to which
+# channel is which. Beyond eight channels the order repeats, for the
+# same reason.
+_CHANNEL_CURVE_COLORS = {
+    "light": (
+        "#2a78d6", "#eb6834", "#1baf7a", "#eda100",
+        "#e87ba4", "#008300", "#4a3aa7", "#e34948",
+    ),
+    "dark": (
+        "#3987e5", "#d95926", "#199e70", "#c98500",
+        "#d55181", "#008300", "#9085e9", "#e66767",
+    ),
+}
+
+
+def channel_curve_color(index: int) -> str:
+    """Default curve color for the channel at position `index`.
+
+    Derived from the position on every repaint rather than stored on the
+    channel: a stored color would stop following the theme, which is the
+    exact defect `gui/live_view.py::ChannelPlotSettingsDialog` was fixed
+    for. A channel that HAS its own color keeps it - see
+    `_apply_channel_curve_style`.
+    """
+    palette = _CHANNEL_CURVE_COLORS[_current_theme]
+    return palette[max(0, index) % len(palette)]
 
 
 def curve_color() -> str:
@@ -391,6 +495,18 @@ def nav_icon_color() -> QColor:
     if app is not None:
         return app.palette().color(QPalette.ColorRole.WindowText)
     return QColor(0, 0, 0)
+
+
+def nav_shadow_color() -> QColor:
+    """Drop-shadow color for the raised navigation tiles.
+
+    Qt stylesheets have no `box-shadow`, so the elevation is a real
+    `QGraphicsDropShadowEffect` (see
+    `gui/main_window.py::_update_nav_tile_elevation`). Denser in the
+    dark theme: a shadow has to be darker than its background to be
+    seen at all, and the dark surface is already close to black.
+    """
+    return QColor(0, 0, 0, 160 if _current_theme == "dark" else 100)
 
 
 def disabled_text_color() -> QColor:
@@ -548,6 +664,51 @@ def draw_trigger_icon(size: int = 36, y_offset: float = 0.0, color: QColor | Non
         ]
     )
     painter.drawPolygon(bolt)
+    painter.end()
+    return pixmap
+
+
+def draw_crosshair_icon(size: int = 36) -> QPixmap:
+    """Crosshair over a sample point (analysis cursor).
+
+    Deliberately shows the reticle CENTERED ON A DOT rather than a bare
+    cross: the cursor snaps to measured samples, and the icon should
+    say so.
+    """
+    pixmap, painter = _new_icon_pixmap(size)
+    color = nav_icon_color()
+
+    center = QPointF(size * 0.5, size * 0.5)
+    reach = size * 0.42
+    gap = size * 0.13
+
+    pen = QPen(color)
+    pen.setWidthF(size * 0.07)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    # Four arms with a gap in the middle, so the sample dot stays
+    # readable instead of being crossed out.
+    painter.drawLine(
+        QPointF(center.x() - reach, center.y()),
+        QPointF(center.x() - gap, center.y()),
+    )
+    painter.drawLine(
+        QPointF(center.x() + gap, center.y()),
+        QPointF(center.x() + reach, center.y()),
+    )
+    painter.drawLine(
+        QPointF(center.x(), center.y() - reach),
+        QPointF(center.x(), center.y() - gap),
+    )
+    painter.drawLine(
+        QPointF(center.x(), center.y() + gap),
+        QPointF(center.x(), center.y() + reach),
+    )
+
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawEllipse(center, size * 0.09, size * 0.09)
+
     painter.end()
     return pixmap
 
