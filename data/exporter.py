@@ -122,6 +122,7 @@ class StorageWriter:
         self._last_error: Optional[Exception] = None
 
         self._total_samples_written = 0
+        self._lost_samples = 0
         self._parquet_writer: Optional[pq.ParquetWriter] = None
         self._csv_header_written = False
 
@@ -157,6 +158,27 @@ class StorageWriter:
         """
         return self._ring_buffer.available_samples(self._reader_id)
 
+    @property
+    def lost_samples(self) -> int:
+        """Number of samples that never reached the file.
+
+        Above 0 means the ring buffer overran (see
+        `core/ringbuffer.py::lost_samples`): the DAQ thread was faster
+        than this writer, and the missing samples cannot be recovered.
+        The resulting file does NOT look damaged - the time column is
+        built from the samples actually written and closes over the gap
+        seamlessly - so this is the only way to find out.
+        """
+        try:
+            self._lost_samples = self._ring_buffer.lost_samples(self._reader_id)
+        except KeyError:
+            # Reader already unregistered (after `stop()`) - `stop()` read
+            # the final value before doing so, and that is what stays
+            # available here. A caller checking the outcome of a finished
+            # measurement is the main consumer of this property.
+            pass
+        return self._lost_samples
+
     def start(self) -> None:
         """Starts the storage-writer thread.
 
@@ -188,12 +210,43 @@ class StorageWriter:
                     timeout,
                 )
         self._close_writer()
+
+        # Verluste und Fehler VOR dem Abmelden des Readers ablesen - danach
+        # ist der Zaehler weg.
+        lost = self.lost_samples
         self._ring_buffer.unregister_reader(self._reader_id)
+
         logger.info(
             "StorageWriter gestoppt, %d Samples in %s gespeichert.",
             self._total_samples_written,
             self._output_path,
         )
+
+        # Die drei Faelle, in denen die Messung NICHT vollstaendig auf der
+        # Platte steht. Bisher endeten alle drei still - der Aufrufer sah nur
+        # die Erfolgsmeldung oben und hielt die Messung fuer gelungen.
+        if self._last_error is not None:
+            logger.error(
+                "StorageWriter wurde durch einen Fehler beendet, %s enthaelt "
+                "nur die Daten bis zum letzten erfolgreichen Block: %s",
+                self._output_path,
+                self._last_error,
+            )
+        if lost > 0:
+            logger.error(
+                "%d Samples fehlen in %s (Ring Buffer Overrun). Die Datei "
+                "sieht dabei unauffaellig aus: die Zeitspalte wird aus den "
+                "geschriebenen Samples berechnet und schliesst die Luecke "
+                "nahtlos. Die Messung ist unvollstaendig.",
+                lost,
+                self._output_path,
+            )
+        if self._total_samples_written == 0:
+            logger.error(
+                "Es wurden keine Samples geschrieben, %s wurde daher gar "
+                "nicht erst angelegt.",
+                self._output_path,
+            )
 
     def _run(self) -> None:
         try:
