@@ -160,7 +160,14 @@ class ConfigurationManager:
         include_date: bool,
         include_time: bool,
     ) -> None:
-        """Remembers the last selected naming scheme for new measurements."""
+        """Remembers the last selected naming scheme for new measurements.
+
+        Seeds the setup view's checkboxes when no configuration has been
+        loaded. NOT a source for the naming actually applied - that
+        comes from `MeasurementConfig.naming` (see `data/models.py`), so
+        that a configuration always names its files the same way, no
+        matter which machine or user it runs on.
+        """
         self._settings.name_use_number_suffix = use_number_suffix
         self._settings.name_number_suffix_digits = number_suffix_digits
         self._settings.name_include_date = include_date

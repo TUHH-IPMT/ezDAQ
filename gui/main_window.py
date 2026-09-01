@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, pyqtSignal, Qt
@@ -58,6 +57,12 @@ from data.models import (
     TriggerConfig,
     TriggerKind,
     resolve_rate_groups,
+)
+from data.naming import (
+    MeasurementNameConflict,
+    measurement_data_path,
+    measurement_metadata_path,
+    resolve_measurement_name,
 )
 from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
@@ -968,10 +973,13 @@ class MainWindow(QMainWindow):
                 )
                 return
 
+            # Aus der Config, nicht mehr aus den Bedienelementen:
+            # `build_current_config` legt das Schema dort ab, und eine
+            # geladene Konfiguration bringt ihr eigenes mit.
             resolved_name = self._resolve_measurement_name(
                 base_name=config.name,
                 storage_format=config.storage_format,
-                naming=self._setup_view.get_naming_scheme(),
+                naming=config.naming,
             )
             if resolved_name is None:
                 return
@@ -1030,8 +1038,9 @@ class MainWindow(QMainWindow):
             # started IMMEDIATELY (previous behavior unchanged).
             if config.save_to_disk:
                 ring_buffer = self._controller.get_ring_buffer()
-                extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
-                data_path = self._storage_path / f"{config.name}{extension}"
+                data_path = measurement_data_path(
+                    self._storage_path, config.name, config.storage_format
+                )
                 self._storage_writer = StorageWriter(
                     ring_buffer=ring_buffer,
                     channels=self._controller.active_channels,
@@ -1145,8 +1154,9 @@ class MainWindow(QMainWindow):
 
         if config.save_to_disk and self._storage_path is not None:
             ring_buffer_for_writer = self._controller.get_ring_buffer()
-            extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
-            data_path = self._storage_path / f"{config.name}{extension}"
+            data_path = measurement_data_path(
+                self._storage_path, config.name, config.storage_format
+            )
             self._storage_writer = StorageWriter(
                 ring_buffer=ring_buffer_for_writer,
                 channels=self._controller.active_channels,
@@ -1282,11 +1292,11 @@ class MainWindow(QMainWindow):
         """Builds the file/measurement name actually to be used from the
         entered measurement name, according to `naming`.
 
-        Order of the optional components: Name_Date_Time_Number. If no
-        number suffix is active and the resolved name already exists, the
-        measurement is aborted with an error message - automatic
-        overwriting of existing measurement data deliberately does not
-        happen.
+        Thin GUI wrapper around
+        `data/naming.py::resolve_measurement_name` - the rules live
+        there so that a headless script gets exactly the same names and,
+        above all, the same overwrite protection. All this adds is the
+        error message in the setup view.
 
         Returns:
             The resolved name, or None if the measurement should be
@@ -1295,41 +1305,16 @@ class MainWindow(QMainWindow):
         if self._storage_path is None:
             return base_name
 
-        now = datetime.now()
-        parts = [base_name]
-        if naming.include_date:
-            parts.append(now.strftime("%Y%m%d"))
-        if naming.include_time:
-            parts.append(now.strftime("%H%M%S"))
-
-        extension = ".parquet" if storage_format == StorageFormat.PARQUET else ".csv"
-
-        def data_path(name: str) -> Path:
-            return self._storage_path / f"{name}{extension}"
-
-        def metadata_path(name: str) -> Path:
-            return self._storage_path / f"{name}_info.json"
-
-        def name_conflicts(name: str) -> bool:
-            return data_path(name).exists() or metadata_path(name).exists()
-
-        if naming.use_number_suffix:
-            digits = max(1, naming.number_suffix_digits)
-            for index in range(1, 10**digits):
-                candidate = "_".join(parts + [f"{index:0{digits}d}"])
-                if not name_conflicts(candidate):
-                    return candidate
-            raise RuntimeError(
-                "Konnte keinen eindeutigen Messnamen finden "
-                f"(Basisname '{base_name}')."
+        try:
+            return resolve_measurement_name(
+                base_name=base_name,
+                storage_dir=self._storage_path,
+                storage_format=storage_format,
+                naming=naming,
             )
-
-        candidate = "_".join(parts)
-        if not name_conflicts(candidate):
-            return candidate
-
-        self._setup_view.show_error(t("error_name_conflict", name=candidate))
-        return None
+        except MeasurementNameConflict as exc:
+            self._setup_view.show_error(t("error_name_conflict", name=exc.name))
+            return None
 
     def _on_stop_measurement(self) -> None:
         # Still-running serial trigger listeners (start AND stop) must be
@@ -1412,7 +1397,9 @@ class MainWindow(QMainWindow):
         assert self._storage_path is not None
         try:
             metadata = build_measurement_metadata(session, device_infos)
-            metadata_path = self._storage_path / f"{session.config.name}_info.json"
+            metadata_path = measurement_metadata_path(
+                self._storage_path, session.config.name
+            )
             save_measurement_metadata(metadata_path, metadata)
         except Exception:
             logger.exception("Metadaten konnten nicht gespeichert werden")

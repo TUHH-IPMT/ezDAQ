@@ -19,7 +19,6 @@ hardware details directly.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 from PyQt6.QtCore import QLocale, QSize, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QIcon
@@ -50,6 +49,7 @@ from data.models import (
     DeviceInfo,
     MeasurementConfig,
     ModuleType,
+    NamingScheme,
     RecordingStopUnit,
     StorageFormat,
     is_valid_grid_sample_rate,
@@ -113,23 +113,12 @@ _ADC_TIMING_MODE_LABEL_KEYS: dict[str, str] = {
 }
 
 
-@dataclass
-class NamingScheme:
-    """Controls how `gui/main_window.py` builds the actual file/measurement
-    name from the entered measurement name.
-
-    Attributes:
-        use_number_suffix: Whether a number suffix (e.g. "_001") is
-            appended to automatically resolve name conflicts.
-        number_suffix_digits: Digit count of the number suffix.
-        include_date: Whether the current date (YYYYMMDD) is appended.
-        include_time: Whether the current time (HHMMSS) is appended.
-    """
-
-    use_number_suffix: bool
-    number_suffix_digits: int
-    include_date: bool
-    include_time: bool
+# `NamingScheme` used to be defined here. It is now a field of
+# `MeasurementConfig` in `data/models.py` - naming is a storage option
+# and belongs in the saved configuration, next to `save_to_disk` and
+# `storage_format`, so that a configuration carries its own naming
+# wherever it goes. Re-exported under the old name because
+# `gui/main_window.py` imports it from here.
 
 
 class SetupView(QWidget):
@@ -529,6 +518,21 @@ class SetupView(QWidget):
             include_date=self._naming_date_checkbox.isChecked(),
             include_time=self._naming_time_checkbox.isChecked(),
         )
+
+    def set_naming_scheme(self, naming: NamingScheme) -> None:
+        """Transfers a naming scheme from a loaded configuration into the UI.
+
+        Counterpart to `get_naming_scheme`. Called by `apply_config`, so
+        that loading a configuration restores its naming too - otherwise
+        the loaded configuration and the visible checkboxes would drift
+        apart, and the next measurement would be named by the checkboxes
+        rather than by what was loaded.
+        """
+        self._naming_number_checkbox.setChecked(naming.use_number_suffix)
+        self._naming_digits_spin.setValue(max(1, naming.number_suffix_digits))
+        self._naming_date_checkbox.setChecked(naming.include_date)
+        self._naming_time_checkbox.setChecked(naming.include_time)
+        self._naming_digits_spin.setEnabled(naming.use_number_suffix)
 
     def _populate_storage_format_combo(self, selected_value: str) -> None:
         """Populates the storage format combo box with translated labels.
@@ -1000,6 +1004,11 @@ class SetupView(QWidget):
             recording_unlimited=self._recording_unlimited_checkbox.isChecked(),
             recording_stop_value=float(self._recording_stop_spin.value()),
             recording_stop_unit=RecordingStopUnit(self._recording_stop_unit_combo.currentData()),
+            # The naming scheme travels WITH the configuration: it is a
+            # storage option like `storage_format`, and only this way
+            # does a saved configuration - or one handed to a script -
+            # produce the same file names as the GUI it came from.
+            naming=self.get_naming_scheme(),
             # trigger deliberately NOT set (default `TriggerConfig()`,
             # i.e. no trigger) - since the generalization to start AND
             # stop, the actually active trigger configuration lives in
@@ -1027,6 +1036,7 @@ class SetupView(QWidget):
         self._recording_stop_spin.setValue(max(1, int(config.recording_stop_value)))
         self._populate_recording_stop_unit_combo(config.recording_stop_unit.value)
         self._on_recording_unlimited_toggled(self._recording_unlimited_checkbox.isChecked())
+        self.set_naming_scheme(config.naming)
         self._channel_table.set_channels(config.channels)
         self._update_resolved_rate_preview()
         # config.trigger is NOT applied here - `gui/main_window.py` reads

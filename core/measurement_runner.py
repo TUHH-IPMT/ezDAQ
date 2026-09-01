@@ -10,21 +10,28 @@ Background:
     stopping a `StorageWriter` as well as writing the metadata file is
     the GUI's job in `gui/main_window.py`. For a standalone script that
     would be the same manual work all over again - but `MeasurementConfig`
-    (`save_to_disk`, `storage_format`) already fully states WHETHER and
-    HOW to store the data. `MeasurementRunner` extracts exactly that
-    orchestration, so a script only has to call `start()`/`stop()`.
+    (`save_to_disk`, `storage_format`, `naming`) already fully states
+    WHETHER, HOW and UNDER WHICH NAME to store the data.
+    `MeasurementRunner` extracts exactly that orchestration, so a script
+    only has to call `start()`/`stop()`.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from core.controller import MeasurementController
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
-from data.models import DeviceInfo, MeasurementConfig, MeasurementSession, StorageFormat
+from data.models import DeviceInfo, MeasurementConfig, MeasurementSession
+from data.naming import (
+    measurement_data_path,
+    measurement_metadata_path,
+    resolve_measurement_name,
+)
 
 if TYPE_CHECKING:
     from gui.live_view import LiveView
@@ -88,8 +95,16 @@ class MeasurementRunner:
         """Starts a measurement and - if `config.save_to_disk` is set -
         automatically the matching `StorageWriter`.
 
+        `config.name` is first resolved through `config.naming` (see
+        `data/naming.py`) - BEFORE the hardware is touched, so that a
+        name conflict aborts without a half-started measurement. The
+        session returned then carries the resolved name, and so does the
+        metadata file written by `stop()`. `config.name` is therefore
+        the BASE name; what ends up on disk is the resolved one.
+
         Args:
-            config: Complete measurement configuration.
+            config: Complete measurement configuration. Not modified -
+                a resolved name goes into a copy.
             discovered_devices: See `MeasurementController.start_measurement`.
 
         Returns:
@@ -98,6 +113,8 @@ class MeasurementRunner:
         Raises:
             ValueError: if `config.save_to_disk=True` but no
                 `storage_dir` was given in the constructor.
+            MeasurementNameConflict: if the resolved name is taken and
+                `config.naming` has no number suffix to resolve it with.
             MeasurementConfigError, AcquisitionError, RuntimeError: see
                 `MeasurementController.start_measurement`.
         """
@@ -107,11 +124,28 @@ class MeasurementRunner:
                 "wurde ohne storage_dir erzeugt."
             )
 
+        # Only relevant when actually storing: without a file on disk
+        # there is nothing that could be overwritten, and the name is
+        # then merely a label on the session.
+        if config.save_to_disk:
+            resolved_name = resolve_measurement_name(
+                base_name=config.name,
+                storage_dir=self._storage_dir,
+                storage_format=config.storage_format,
+                naming=config.naming,
+            )
+            if resolved_name != config.name:
+                logger.info(
+                    "Messname '%s' aufgeloest zu '%s'.", config.name, resolved_name
+                )
+                config = replace(config, name=resolved_name)
+
         session = self._controller.start_measurement(config, discovered_devices)
 
         if config.save_to_disk:
-            extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
-            output_path = self._storage_dir / f"{config.name}{extension}"
+            output_path = measurement_data_path(
+                self._storage_dir, config.name, config.storage_format
+            )
             self._storage_writer = StorageWriter(
                 ring_buffer=self._controller.get_ring_buffer(),
                 channels=self._controller.active_channels,
@@ -164,7 +198,9 @@ class MeasurementRunner:
             if write_metadata and session is not None and self._storage_dir is not None:
                 try:
                     metadata = build_measurement_metadata(session, device_infos)
-                    metadata_path = self._storage_dir / f"{session.config.name}_info.json"
+                    metadata_path = measurement_metadata_path(
+                        self._storage_dir, session.config.name
+                    )
                     save_measurement_metadata(metadata_path, metadata)
                 except OSError:
                     logger.exception("Metadaten konnten nicht gespeichert werden")

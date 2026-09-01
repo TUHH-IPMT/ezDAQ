@@ -1057,6 +1057,60 @@ class DeviceInfo:
 
 
 @dataclass
+class NamingScheme:
+    """How the file/measurement name is built from the entered name.
+
+    Part of `MeasurementConfig`, and therefore of the saved
+    configuration file: naming is a storage option, and storage options
+    belong to the configuration, not to per-user application settings. A
+    configuration handed to a colleague or to a script thus carries its
+    own naming with it. The resolution itself lives in `data/naming.py`.
+
+    The defaults match `config/settings.py::AppSettings`, which seeds the
+    setup view's widgets for a fresh configuration.
+
+    Attributes:
+        use_number_suffix: Whether a number suffix (e.g. "_001") is
+            appended to automatically resolve name conflicts.
+        number_suffix_digits: Digit count of the number suffix.
+        include_date: Whether the current date (YYYYMMDD) is appended.
+        include_time: Whether the current time (HHMMSS) is appended.
+    """
+
+    use_number_suffix: bool = True
+    number_suffix_digits: int = 3
+    include_date: bool = False
+    include_time: bool = False
+
+    def to_dict(self) -> dict:
+        """Serializes the scheme into a JSON-compatible dictionary."""
+        return {
+            "use_number_suffix": self.use_number_suffix,
+            "number_suffix_digits": self.number_suffix_digits,
+            "include_date": self.include_date,
+            "include_time": self.include_time,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "NamingScheme":
+        """Creates a NamingScheme from a dictionary (e.g. from JSON).
+
+        A configuration file written before naming became part of the
+        configuration has no such section - the defaults then apply, so
+        an old file keeps behaving sensibly and, above all, keeps the
+        overwrite protection.
+        """
+        return cls(
+            use_number_suffix=data.get("use_number_suffix", True),
+            # Clamped: 0 digits would make the suffix disappear and every
+            # measurement collide with the previous one.
+            number_suffix_digits=max(1, int(data.get("number_suffix_digits", 3))),
+            include_date=data.get("include_date", False),
+            include_time=data.get("include_time", False),
+        )
+
+
+@dataclass
 class MeasurementConfig:
     """Configuration for a single measurement/recording.
 
@@ -1077,6 +1131,12 @@ class MeasurementConfig:
         recording_stop_value: Limit in the unit `recording_stop_unit` -
             only relevant if `recording_unlimited` is False.
         recording_stop_unit: Unit of the limit (samples or time).
+        naming: How the file name is built from `name` - number suffix,
+            optional date/time (see `NamingScheme` and
+            `data/naming.py::resolve_measurement_name`). Together with
+            `save_to_disk` and `storage_format` this makes the
+            configuration the single, complete statement of whether, how
+            and under which name data is stored.
         trigger: Configuration for automatic measurement start AND/OR
             stop (see `TriggerConfig`) - the recording limit above
             continues to apply independently and in addition (whichever
@@ -1093,6 +1153,7 @@ class MeasurementConfig:
     recording_unlimited: bool = True
     recording_stop_value: float = 0.0
     recording_stop_unit: RecordingStopUnit = RecordingStopUnit.SAMPLES
+    naming: NamingScheme = field(default_factory=NamingScheme)
     trigger: TriggerConfig = field(default_factory=TriggerConfig)
 
     def __post_init__(self) -> None:
@@ -1152,6 +1213,7 @@ class MeasurementConfig:
             "recording_unlimited": self.recording_unlimited,
             "recording_stop_value": self.recording_stop_value,
             "recording_stop_unit": self.recording_stop_unit.value,
+            "naming": self.naming.to_dict(),
             "trigger": self.trigger.to_dict(),
         }
 
@@ -1173,6 +1235,7 @@ class MeasurementConfig:
             recording_stop_unit=RecordingStopUnit(
                 data.get("recording_stop_unit", RecordingStopUnit.SAMPLES.value)
             ),
+            naming=NamingScheme.from_dict(data.get("naming", {})),
             trigger=TriggerConfig.from_dict(data.get("trigger", {})),
         )
 
