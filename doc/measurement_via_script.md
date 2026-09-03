@@ -53,7 +53,37 @@ Also works entirely without a saved configuration - just build a
 `MeasurementConfig` object from `data/models.py` yourself (fields: `name`,
 `sample_rate_hz`, `channels`, ...).
 
-## 3. Start/Stop
+## 3. File naming
+
+File naming lives in the configuration, not in the script: `naming` belongs
+to `MeasurementConfig` just like `save_to_disk` and `storage_format`. A
+configuration saved in the GUI therefore carries its naming scheme with it,
+and `runner.start()` applies it by itself - there is nothing to pass in.
+
+`config.name` is thus only the base name: `"probe"` becomes `probe_001`, the
+next start `probe_002`, and so on. `runner.start()` resolves the name before
+touching the hardware and puts it into the returned session and the metadata
+file.
+
+Without a saved configuration the scheme can be set directly:
+
+```python
+from data.models import NamingScheme
+
+config.naming = NamingScheme(
+    use_number_suffix=True,
+    number_suffix_digits=3,
+    include_date=True,
+    include_time=False,
+)
+```
+
+An existing measurement is never overwritten. If the name is taken and no
+number suffix can free one up, `runner.start()` raises
+`MeasurementNameConflict` from `data/naming.py` - the hardware has not been
+started at that point, so the measurement is cleanly aborted.
+
+## 4. Start/Stop
 
 From here on it doesn't matter whether a live display is involved or not -
 `runner` handles that internally:
@@ -79,7 +109,7 @@ while time.monotonic() < deadline:
     time.sleep(0.01)
 ```
 
-## 4. Starting/stopping repeatedly
+## 5. Starting/stopping repeatedly
 
 `controller` and `runner` (and an optional `live_view`) are reusable - just
 keep using the same objects in a loop, nothing needs to be recreated:
@@ -93,6 +123,27 @@ for config in configurations:
 
 ## Good to know
 
+- **Whether the measurement actually made it to disk** is answered by the
+  `StorageWriter` after `runner.stop()` - it does not raise, it reports:
+
+  ```python
+  writer = runner.storage_writer      # grab it BEFORE runner.stop()
+  runner.stop()
+
+  writer.last_error            # writing aborted (disk full etc.)
+  writer.lost_samples          # ring buffer overrun: samples are missing
+  writer.total_samples_written # 0 = no file was created at all
+  ```
+
+  `lost_samples` is the important one: after an overrun the file looks
+  perfectly fine, because the time column is derived from the samples
+  actually written and closes over the gap seamlessly.
+- **Hardware errors during a measurement** do not surface as an exception
+  from `start()`/`stop()` but through
+  `controller.add_error_listener(callback)`. Without such a listener the
+  measurement ends silently and the next start proceeds as if nothing had
+  happened. The callback runs IN THE DAQ THREAD - only record there,
+  evaluate in your own thread.
 - Only **one measurement at a time** can run - otherwise `runner.start()`
   raises `RuntimeError`.
 - For reading live data without a visible window, custom error handling, or

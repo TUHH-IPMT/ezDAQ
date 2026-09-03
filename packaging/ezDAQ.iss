@@ -27,7 +27,7 @@
 ; Must match config/settings.py::APP_VERSION, which the About dialog
 ; shows. Inno Setup cannot import Python, so the value is duplicated
 ; here - tests/test_version.py fails if the two drift apart.
-#define AppVersion "0.5.0"
+#define AppVersion "0.6.0"
 #define AppPublisher "TUHH - Institut fuer Produktionsmanagement und -technik"
 #define AppURL "https://github.com/TUHH-IPMT/ezDAQ"
 #define AppExeName "ezDAQ.exe"

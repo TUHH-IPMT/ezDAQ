@@ -32,6 +32,7 @@ _translations = {
         "menu_settings": "Optionen",
         "menu_quit": "Beenden",
         "menu_help": "Hilfe",
+        "menu_check_updates": "Nach Updates suchen",
         "menu_about": "Über...",
         "menu_save_config": "Konfiguration speichern",
         "menu_load_config": "Konfiguration laden",
@@ -491,6 +492,18 @@ _translations = {
         # About
         "window_title": "ezDAQ - Easy Data Acquisition",
         "about_title": "Über ezDAQ",
+        "update_check_title": "Softwareupdate",
+        "update_available_body": (
+            "Eine neue Version von ezDAQ ist verfügbar: v{latest}\n"
+            "(aktuell installiert: v{current}).\n\n"
+            "Die Release-Seite mit Änderungen und Installer im Browser öffnen?"
+        ),
+        "update_open_download_page": "Release-Seite öffnen",
+        "update_up_to_date_body": "ezDAQ ist aktuell (Version {version}).",
+        "update_check_failed_body": (
+            "Die Update-Prüfung ist fehlgeschlagen:\n{error}\n\n"
+            "Besteht eine Internetverbindung?"
+        ),
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
             "Version {version}\n\n"
@@ -515,6 +528,7 @@ _translations = {
         "menu_settings": "Options",
         "menu_quit": "Quit",
         "menu_help": "Help",
+        "menu_check_updates": "Check for Updates",
         "menu_about": "About...",
         "menu_save_config": "Save Configuration",
         "menu_load_config": "Load Configuration",
@@ -971,6 +985,18 @@ _translations = {
         # About
         "window_title": "ezDAQ - Easy Data Acquisition",
         "about_title": "About ezDAQ",
+        "update_check_title": "Software Update",
+        "update_available_body": (
+            "A new version of ezDAQ is available: v{latest}\n"
+            "(currently installed: v{current}).\n\n"
+            "Open the release page with the changelog and installer in your browser?"
+        ),
+        "update_open_download_page": "Open Release Page",
+        "update_up_to_date_body": "ezDAQ is up to date (version {version}).",
+        "update_check_failed_body": (
+            "The update check failed:\n{error}\n\n"
+            "Is there an internet connection?"
+        ),
         "about_body": (
             "ezDAQ - Easy Data Acquisition\n"
             "Version {version}\n\n"

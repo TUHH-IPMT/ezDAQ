@@ -83,6 +83,13 @@ class RingBuffer:
         self._total_written = 0
 
         self._readers: dict[int, int] = {}
+        # Pro Reader die Zahl der Samples, die ueberschrieben wurden, bevor
+        # er sie lesen konnte. Ohne diesen Zaehler bleibt ein Overrun nach
+        # der Messung unsichtbar: `_check_overruns_locked` zieht den Reader
+        # stillschweigend nach, und die Zeitspalte in der Messdatei wird aus
+        # der Zahl der GESCHRIEBENEN Samples berechnet - eine Luecke schliesst
+        # sich darin also nahtlos, statt als Luecke aufzufallen.
+        self._lost: dict[int, int] = {}
         self._next_reader_id = 0
 
     @property
@@ -127,6 +134,7 @@ class RingBuffer:
             oldest_valid = max(0, self._total_written - self._capacity)
             start_count = max(oldest_valid, self._total_written - max(0, back_samples))
             self._readers[reader_id] = start_count
+            self._lost[reader_id] = 0
             logger.debug(
                 "Reader %d registriert (start_count=%d, back_samples=%d)",
                 reader_id,
@@ -139,6 +147,7 @@ class RingBuffer:
         """Removes a reader (e.g. when the live view is closed)."""
         with self._lock:
             self._readers.pop(reader_id, None)
+            self._lost.pop(reader_id, None)
             logger.debug("Reader %d entfernt", reader_id)
 
     # ------------------------------------------------------------------ #
@@ -209,6 +218,7 @@ class RingBuffer:
                     self._capacity,
                 )
                 self._readers[reader_id] = self._total_written - self._capacity
+                self._lost[reader_id] = self._lost.get(reader_id, 0) + lost
 
     # ------------------------------------------------------------------ #
     # Reading
@@ -275,6 +285,26 @@ class RingBuffer:
                 raise KeyError(f"Unbekannte reader_id: {reader_id}")
             return max(0, self._total_written - self._readers[reader_id])
 
+    def lost_samples(self, reader_id: int) -> int:
+        """Number of samples lost to overruns for this reader so far.
+
+        Anything above 0 means a gap in that reader's data stream: the
+        DAQ thread overwrote samples before the reader had fetched them
+        (see `_check_overruns_locked`). For the live view that is
+        harmless and intended; for the `StorageWriter` it means the
+        stored measurement is incomplete - and, because the time column
+        is derived from the number of samples actually written, it is
+        incomplete WITHOUT the file showing a gap. Which is exactly why
+        the count has to be asked for explicitly.
+
+        Raises:
+            KeyError: if `reader_id` is not (or no longer) registered.
+        """
+        with self._lock:
+            if reader_id not in self._readers:
+                raise KeyError(f"Unbekannte reader_id: {reader_id}")
+            return self._lost.get(reader_id, 0)
+
     def reset(self) -> None:
         """Resets the buffer and all read pointers (e.g. on measurement start)."""
         with self._lock:
@@ -283,4 +313,5 @@ class RingBuffer:
             self._total_written = 0
             for reader_id in self._readers:
                 self._readers[reader_id] = 0
+                self._lost[reader_id] = 0
             logger.debug("Ring Buffer zurueckgesetzt")

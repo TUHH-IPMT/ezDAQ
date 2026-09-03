@@ -27,11 +27,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, pyqtSignal, Qt
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
+from PyQt6.QtCore import QSize, QUrl, pyqtSignal, Qt
+from PyQt6.QtGui import QAction, QActionGroup, QDesktopServices, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -48,6 +47,7 @@ from config.configuration_manager import ConfigurationManager
 from config.sensor_database import SensorDatabaseManager
 from config.settings import APP_VERSION, get_resource_path
 from core.controller import MeasurementController
+from core.update_checker import UpdateCheckResult, check_for_update
 from data.exporter import StorageWriter
 from data.metadata import build_measurement_metadata, save_measurement_metadata
 from data.models import (
@@ -58,6 +58,12 @@ from data.models import (
     TriggerConfig,
     TriggerKind,
     resolve_rate_groups,
+)
+from data.naming import (
+    MeasurementNameConflict,
+    measurement_data_path,
+    measurement_metadata_path,
+    resolve_measurement_name,
 )
 from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
@@ -124,6 +130,13 @@ class MainWindow(QMainWindow):
         # `_start_connection_probe` - runs on its own so a slow probe
         # never holds up the device list.
         self._connection_probe_worker: BackgroundWorker | None = None
+        # Update check (see `_start_update_check`) - one worker shared by
+        # the automatic once-per-startup run and the manual "Nach
+        # Updates suchen..." menu action; `_update_check_silent` records
+        # which of the two is currently in flight, so the right handler
+        # behavior (silent log vs. dialog) is picked once it completes.
+        self._update_check_worker: BackgroundWorker | None = None
+        self._update_check_silent: bool = True
 
         self._storage_writer: StorageWriter | None = None
         last_storage = self._configuration_manager.settings.last_storage_path
@@ -199,6 +212,13 @@ class MainWindow(QMainWindow):
 
         # Automatically scan for devices once on startup
         self._setup_view.discover_hardware_requested.emit()
+
+        # Automatically check for a newer release once on startup - silent
+        # unless an update is actually available (see
+        # `_on_update_check_succeeded`/`_on_update_check_failed`), so a
+        # machine without internet access or a GitHub outage never
+        # interrupts the start with an error dialog.
+        self._start_update_check(silent=True)
 
         connect_language_changed(self.retranslate_ui)
         connect_theme_changed(self._retheme_nav_icons)
@@ -496,6 +516,9 @@ class MainWindow(QMainWindow):
         self._trigger_settings_action.triggered.connect(self._on_open_trigger_settings_dialog)
 
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
+        self._check_updates_action = self._help_menu.addAction(f"{t('menu_check_updates')}...")
+        self._check_updates_action.triggered.connect(self._on_check_updates_action_triggered)
+        self._help_menu.addSeparator()
         self._about_action = self._help_menu.addAction(t("menu_about"))
         self._about_action.triggered.connect(self._on_about)
 
@@ -664,6 +687,7 @@ class MainWindow(QMainWindow):
         self._trigger_settings_action.setText(t("menu_trigger_settings"))
 
         self._help_menu.setTitle(f"&{t('menu_help')}")
+        self._check_updates_action.setText(f"{t('menu_check_updates')}...")
         self._about_action.setText(t("menu_about"))
 
         # The status text is usually a one-off event (start/stop/error)
@@ -968,10 +992,13 @@ class MainWindow(QMainWindow):
                 )
                 return
 
+            # Aus der Config, nicht mehr aus den Bedienelementen:
+            # `build_current_config` legt das Schema dort ab, und eine
+            # geladene Konfiguration bringt ihr eigenes mit.
             resolved_name = self._resolve_measurement_name(
                 base_name=config.name,
                 storage_format=config.storage_format,
-                naming=self._setup_view.get_naming_scheme(),
+                naming=config.naming,
             )
             if resolved_name is None:
                 return
@@ -1030,8 +1057,9 @@ class MainWindow(QMainWindow):
             # started IMMEDIATELY (previous behavior unchanged).
             if config.save_to_disk:
                 ring_buffer = self._controller.get_ring_buffer()
-                extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
-                data_path = self._storage_path / f"{config.name}{extension}"
+                data_path = measurement_data_path(
+                    self._storage_path, config.name, config.storage_format
+                )
                 self._storage_writer = StorageWriter(
                     ring_buffer=ring_buffer,
                     channels=self._controller.active_channels,
@@ -1145,8 +1173,9 @@ class MainWindow(QMainWindow):
 
         if config.save_to_disk and self._storage_path is not None:
             ring_buffer_for_writer = self._controller.get_ring_buffer()
-            extension = ".parquet" if config.storage_format == StorageFormat.PARQUET else ".csv"
-            data_path = self._storage_path / f"{config.name}{extension}"
+            data_path = measurement_data_path(
+                self._storage_path, config.name, config.storage_format
+            )
             self._storage_writer = StorageWriter(
                 ring_buffer=ring_buffer_for_writer,
                 channels=self._controller.active_channels,
@@ -1282,11 +1311,11 @@ class MainWindow(QMainWindow):
         """Builds the file/measurement name actually to be used from the
         entered measurement name, according to `naming`.
 
-        Order of the optional components: Name_Date_Time_Number. If no
-        number suffix is active and the resolved name already exists, the
-        measurement is aborted with an error message - automatic
-        overwriting of existing measurement data deliberately does not
-        happen.
+        Thin GUI wrapper around
+        `data/naming.py::resolve_measurement_name` - the rules live
+        there so that a headless script gets exactly the same names and,
+        above all, the same overwrite protection. All this adds is the
+        error message in the setup view.
 
         Returns:
             The resolved name, or None if the measurement should be
@@ -1295,41 +1324,16 @@ class MainWindow(QMainWindow):
         if self._storage_path is None:
             return base_name
 
-        now = datetime.now()
-        parts = [base_name]
-        if naming.include_date:
-            parts.append(now.strftime("%Y%m%d"))
-        if naming.include_time:
-            parts.append(now.strftime("%H%M%S"))
-
-        extension = ".parquet" if storage_format == StorageFormat.PARQUET else ".csv"
-
-        def data_path(name: str) -> Path:
-            return self._storage_path / f"{name}{extension}"
-
-        def metadata_path(name: str) -> Path:
-            return self._storage_path / f"{name}_info.json"
-
-        def name_conflicts(name: str) -> bool:
-            return data_path(name).exists() or metadata_path(name).exists()
-
-        if naming.use_number_suffix:
-            digits = max(1, naming.number_suffix_digits)
-            for index in range(1, 10**digits):
-                candidate = "_".join(parts + [f"{index:0{digits}d}"])
-                if not name_conflicts(candidate):
-                    return candidate
-            raise RuntimeError(
-                "Konnte keinen eindeutigen Messnamen finden "
-                f"(Basisname '{base_name}')."
+        try:
+            return resolve_measurement_name(
+                base_name=base_name,
+                storage_dir=self._storage_path,
+                storage_format=storage_format,
+                naming=naming,
             )
-
-        candidate = "_".join(parts)
-        if not name_conflicts(candidate):
-            return candidate
-
-        self._setup_view.show_error(t("error_name_conflict", name=candidate))
-        return None
+        except MeasurementNameConflict as exc:
+            self._setup_view.show_error(t("error_name_conflict", name=exc.name))
+            return None
 
     def _on_stop_measurement(self) -> None:
         # Still-running serial trigger listeners (start AND stop) must be
@@ -1412,7 +1416,9 @@ class MainWindow(QMainWindow):
         assert self._storage_path is not None
         try:
             metadata = build_measurement_metadata(session, device_infos)
-            metadata_path = self._storage_path / f"{session.config.name}_info.json"
+            metadata_path = measurement_metadata_path(
+                self._storage_path, session.config.name
+            )
             save_measurement_metadata(metadata_path, metadata)
         except Exception:
             logger.exception("Metadaten konnten nicht gespeichert werden")
@@ -1448,6 +1454,92 @@ class MainWindow(QMainWindow):
 
     def _on_about(self) -> None:
         QMessageBox.about(self, t("about_title"), t("about_body", version=APP_VERSION))
+
+    def _on_check_updates_action_triggered(self) -> None:
+        self._start_update_check(silent=False)
+
+    def _start_update_check(self, silent: bool) -> None:
+        """Starts an update check in the background (see
+        `core/update_checker.py::check_for_update`).
+
+        `silent=True` (automatic startup check) only surfaces a dialog if
+        an update is actually available - a missing internet connection
+        or a GitHub outage must not interrupt every single start with an
+        error. `silent=False` (manual "Nach Updates suchen..." menu
+        action) always reports the outcome, including failures, since a
+        user who explicitly asked for the check needs to know it did not
+        work rather than see nothing happen.
+
+        Only one check ever runs at a time. If the automatic startup
+        check is still in flight when the menu action is used, no second
+        request is started - instead `_update_check_silent` is upgraded
+        to `False`, so the ALREADY-running check's result is still shown
+        once it arrives, rather than the manual click being silently
+        dropped.
+        """
+        if self._update_check_worker is not None:
+            if not silent:
+                self._update_check_silent = False
+            return
+        self._update_check_silent = silent
+        worker = BackgroundWorker(check_for_update)
+        self._update_check_worker = worker
+        worker.succeeded.connect(self._on_update_check_succeeded)
+        worker.failed.connect(self._on_update_check_failed)
+        worker.finished.connect(lambda: self._forget_background_worker(worker))
+        self._background_workers.append(worker)
+        worker.start()
+
+    def _on_update_check_succeeded(self, result: UpdateCheckResult) -> None:
+        silent = self._update_check_silent
+        self._update_check_worker = None
+        if not result.update_available:
+            if not silent:
+                QMessageBox.information(
+                    self,
+                    t("update_check_title"),
+                    t("update_up_to_date_body", version=result.current_version),
+                )
+            return
+        self._show_update_available_dialog(result)
+
+    def _on_update_check_failed(self, message: str) -> None:
+        silent = self._update_check_silent
+        self._update_check_worker = None
+        if silent:
+            # Not surfaced to the user - see `_start_update_check` - but
+            # kept in the log, since a persistently failing check (e.g. a
+            # firewall blocking github.com) is still worth being able to
+            # diagnose.
+            logger.warning("Automatische Update-Pruefung fehlgeschlagen: %s", message)
+            return
+        QMessageBox.warning(
+            self, t("update_check_title"), t("update_check_failed_body", error=message)
+        )
+
+    def _show_update_available_dialog(self, result: UpdateCheckResult) -> None:
+        """Informs about an available update and offers to open its
+        GitHub release page (changelog + installer download) in the
+        default browser - not an in-app download/installer, ezDAQ has
+        neither an auto-updater nor a way to replace its own running
+        executable."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setWindowTitle(t("update_check_title"))
+        box.setText(
+            t(
+                "update_available_body",
+                latest=result.latest_version,
+                current=result.current_version,
+            )
+        )
+        download_button = box.addButton(
+            t("update_open_download_page"), QMessageBox.ButtonRole.AcceptRole
+        )
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+        if box.clickedButton() is download_button:
+            QDesktopServices.openUrl(QUrl(result.release_url))
 
     def _restore_window_geometry(self) -> None:
         geom = self._configuration_manager.settings.window
