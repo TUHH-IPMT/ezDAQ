@@ -27,6 +27,7 @@ from data.models import (
     MeasurementConfig,
     MeasurementSession,
     ModuleType,
+    NI9210_MAX_SAMPLE_RATE_HZ,
     RateGroup,
     TriggerCondition,
     TriggerConfig,
@@ -236,42 +237,55 @@ class TriggerModelTests(unittest.TestCase):
 
         MeasurementConfig("Unlimited", 1000.0, recording_stop_value=0.0)
 
-    def test_ni9210_alone_ignores_target_rate_and_resolves_to_14hz(self) -> None:
-        # A standalone NI9210 has no "other" group that would need to
-        # satisfy the target rate - resolve_rate_groups() always resolves
-        # it to its fixed 14 S/s, regardless of the target value.
+    def test_ni9210_alone_follows_a_target_rate_below_its_maximum(self) -> None:
+        # The NI9210 rate is a CEILING, not a fixed value: DAQmx accepts
+        # any lower rate verbatim (verified against the module itself),
+        # so a requested 1 S/s must really end up as 1 S/s instead of
+        # being silently raised to the module maximum.
         channels = [
-            Channel(
-                "cDAQ1Mod1/ai0",
-                "Temperature",
-                module_type=ModuleType.NI9210,
-            )
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210)
+        ]
+
+        config = MeasurementConfig("Slow logging", 1.0, channels=channels)
+        groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, 1.0)
+
+    def test_ni9210_alone_is_capped_at_its_maximum_rate(self) -> None:
+        # Above the ceiling the module cannot follow, and a standalone
+        # NI9210 has no "other" group that would need to satisfy the
+        # target rate - it gets its own group at its maximum instead.
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210)
         ]
 
         config = MeasurementConfig("NI9210 only", 1000.0, channels=channels)
         groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
         self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0].resolved_sample_rate_hz, 14.0)
+        self.assertEqual(groups[0].resolved_sample_rate_hz, NI9210_MAX_SAMPLE_RATE_HZ)
 
-        MeasurementConfig("Valid NI9210", 14.0, channels=channels)
+        MeasurementConfig("Valid NI9210", NI9210_MAX_SAMPLE_RATE_HZ, channels=channels)
 
-    def test_ni9210_joins_shared_group_when_target_rate_matches_its_fixed_rate(self) -> None:
-        # If the target rate happens to exactly match the fixed NI9210
-        # rate (14 S/s), there is no rate conflict - the NI9210 then
-        # stays in the same task as other, compatible modules (here
-        # NI9215, which has no rate restriction), instead of unnecessarily
-        # getting its own merge group.
+    def test_ni9210_joins_shared_group_when_target_rate_is_within_its_maximum(self) -> None:
+        # As long as the target rate stays at or below the NI9210
+        # ceiling there is no rate conflict - the NI9210 then stays in
+        # the same task as other, compatible modules (here NI9215, which
+        # has no rate restriction), instead of unnecessarily getting its
+        # own merge group.
         channels = [
             Channel("cDAQ1Mod1/ai0", "Temperature", module_type=ModuleType.NI9210),
             Channel("cDAQ1Mod2/ai0", "Voltage", module_type=ModuleType.NI9215),
         ]
 
-        config = MeasurementConfig("Matching fixed rate", 14.0, channels=channels)
-        groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
+        for target_rate in (5.0, NI9210_MAX_SAMPLE_RATE_HZ):
+            with self.subTest(target_rate=target_rate):
+                config = MeasurementConfig("Within ceiling", target_rate, channels=channels)
+                groups = resolve_rate_groups(config.active_channels(), config.sample_rate_hz)
 
-        self.assertEqual(len(groups), 1)
-        self.assertEqual(groups[0].resolved_sample_rate_hz, 14.0)
-        self.assertEqual(len(groups[0].channels), 2)
+                self.assertEqual(len(groups), 1)
+                self.assertEqual(groups[0].resolved_sample_rate_hz, target_rate)
+                self.assertEqual(len(groups[0].channels), 2)
 
     def test_ni9210_combined_with_faster_module_yields_two_rate_groups(self) -> None:
         # Core behavior of phase A: NI9210 + a faster module is no
@@ -288,7 +302,7 @@ class TriggerModelTests(unittest.TestCase):
 
         self.assertEqual(len(groups), 2)
         self.assertEqual(groups[0].resolved_sample_rate_hz, target_rate)
-        self.assertEqual(groups[1].resolved_sample_rate_hz, 14.0)
+        self.assertEqual(groups[1].resolved_sample_rate_hz, NI9210_MAX_SAMPLE_RATE_HZ)
 
     def test_metadata_reflects_actual_tick_rate_and_native_rate_per_channel(self) -> None:
         # Phase B: metadata must carry the ACTUAL tick rate (not the raw
@@ -310,7 +324,7 @@ class TriggerModelTests(unittest.TestCase):
         self.assertEqual(len(metadata["rate_groups"]), 2)
 
         native_rates = {ch["hardware_channel"]: ch["native_sample_rate_hz"] for ch in metadata["channels"]}
-        self.assertEqual(native_rates["cDAQ1Mod1/ai0"], 14.0)
+        self.assertEqual(native_rates["cDAQ1Mod1/ai0"], NI9210_MAX_SAMPLE_RATE_HZ)
         self.assertEqual(native_rates["cDAQ1Mod2/ai0"], target_rate)
 
     def test_native_samples_removes_consecutive_duplicates(self) -> None:
@@ -551,12 +565,12 @@ class LiveViewStopTriggerTests(unittest.TestCase):
             ),
             RateGroup(
                 channels=[Channel("cDAQ1Mod2/ai0", "Temp", module_type=ModuleType.NI9210)],
-                resolved_sample_rate_hz=14.0,
-                reason="NI9210 (feste 14.0 S/s)",
+                resolved_sample_rate_hz=NI9210_MAX_SAMPLE_RATE_HZ,
+                reason="NI9210 (max. 14.3 S/s)",
             ),
         ]
 
-        self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz (+ NI9210 @ 14.0 Hz)")
+        self.assertEqual(live_view._format_sample_rate_label_value(), "1651.6 Hz (+ NI9210 @ 14.3 Hz)")
 
     def test_write_to_display_buffer_fast_channel_writes_every_row_unchanged(self) -> None:
         # Regression protection: a channel at the tick rate itself must

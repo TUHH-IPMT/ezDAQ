@@ -72,8 +72,8 @@ def build_measurement_metadata(
     for ch in config.active_channels():
         channel_dict = ch.to_dict()
         # Native rate per channel (can differ from "sample_rate_hz", e.g.
-        # for the NI9210: its own 14 S/s rate despite a faster file tick
-        # rate) - basis for rate-aware FFT/filtering in
+        # for a rate-capped NI9210: its own ceiling rate despite a
+        # faster file tick rate) - basis for rate-aware FFT/filtering in
         # `analysis/basic_analysis.py`, which would otherwise mistakenly
         # treat repeated values from a forward-filled channel as genuine
         # new samples.

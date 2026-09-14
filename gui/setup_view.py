@@ -975,9 +975,9 @@ class SetupView(QWidget):
 
         active_channels = [ch for ch in channels if ch.enabled]
         # Ring buffer size/block size must be based on the ACTUAL tick
-        # rate (= fastest rate group), not the raw target rate: with a
-        # standalone NI9210, for example, the target rate is irrelevant
-        # (always 14 S/s) - block sizes computed from the raw target rate
+        # rate (= fastest rate group), not the raw target rate: an
+        # NI9210 asked to go above its ceiling, for example, runs slower
+        # than requested - block sizes computed from the raw target rate
         # would be far too large there and would cause the first read
         # cycle to time out.
         try:
@@ -1202,7 +1202,7 @@ class SetupView(QWidget):
         thereby scaling dynamically with the sample rate: at a high rate,
         many samples per block (keeps the call frequency of
         `device.read()` consistently low, see `__init__`), at a low rate
-        (e.g. NI9210 at 14 S/s) correspondingly few - this keeps the live
+        (e.g. NI9210 at its 14.3 S/s ceiling) correspondingly few - this keeps the live
         view fluid even there, instead of updating in rare but large
         bursts. Capped from above by `_max_samples_per_read`, floored at
         a minimum of 1 sample.

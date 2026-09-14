@@ -142,10 +142,9 @@ class BaseDevice(ABC):
 
         Intended for callers that want to decide for themselves how many
         samples they can read WITHOUT blocking (see
-        `core/rate_merge.py::RateMerger` - prevents a slow,
-        hardware-fixed sample rate like the NI9210's from blocking the
-        acquisition thread while a faster group keeps running in
-        parallel).
+        `core/rate_merge.py::RateMerger` - prevents a slow rate group
+        like a rate-capped NI9210's from blocking the acquisition
+        thread while a faster group keeps running in parallel).
         """
 
     def close(self) -> None:

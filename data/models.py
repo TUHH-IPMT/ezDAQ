@@ -36,7 +36,12 @@ class ModuleType(str, Enum):
     NI9235 = "NI9235"
 
 
-NI9210_FIXED_SAMPLE_RATE_HZ = 14.0
+# Rate CEILING of the NI9210 - deliberately not a fixed rate: measured
+# on the module itself, `ai_max_single_chan_rate` ==
+# `ai_max_multi_chan_rate` == 100/7 S/s while `ai_min_rate` is ~2.3e-05
+# S/s, and every lower requested rate (10/7/5/2/1/0.5/0.1 S/s) was
+# configured by DAQmx exactly as asked, on one channel and on all four.
+NI9210_MAX_SAMPLE_RATE_HZ = 100.0 / 7.0
 
 # Unlike the SAR ADC of the NI9215, the NI9234 has a delta-sigma ADC:
 # the sample rate is not freely selectable, only as an integer divider
@@ -241,8 +246,8 @@ THERMOCOUPLE_TEMPERATURE_RANGES_C: dict[str, tuple[float, float]] = {
 
 # ADC timing modes that control the trade-off between speed and
 # effective resolution - available in hardware ONLY on the NI9213, NOT
-# on the NI9210 (which has a fixed sample rate of 14 S/s with no
-# configurable timing mode). Values correspond directly to the member
+# on the NI9210 (which has no configurable timing mode; its rate is
+# merely capped, see `NI9210_MAX_SAMPLE_RATE_HZ`). Values correspond directly to the member
 # names of `nidaqmx.constants.ADCTimingMode`, see `hardware/ni9213.py`.
 # The full DAQmx driver additionally knows "AUTOMATIC",
 # "BEST_50_HZ_REJECTION", "BEST_60_HZ_REJECTION", and "CUSTOM" -
@@ -315,8 +320,11 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
     return min(NI9213_MAX_SAMPLE_RATE_HZ, 1.0 / (conversion_time_s * len(channels_on_device)))
 
 
-# Module types with a hardware-side FIXED sample rate that cannot be
-# adapted to a shared target rate (currently only the NI9210 at 14 S/s).
+# Module types with a hardware-side rate CEILING that a HIGHER shared
+# target rate cannot be adapted to (currently only the NI9210 at
+# 100/7 S/s). Such a module follows the target rate as long as the
+# target stays at or below its ceiling, and only gets its own group
+# once the target exceeds it.
 # NI9234/NI9235 (grid modules, see `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`
 # above) and NI9213 (max. achievable rate depends on channel count/timing
 # mode) are deliberately excluded here: all three can satisfy ONE shared
@@ -324,17 +332,17 @@ def max_ni9213_sample_rate_hz(channels_on_device: list["Channel"]) -> float:
 # maximum - they therefore fundamentally stay in the shared "target rate"
 # group (exception: two grid modules present AT THE SAME TIME with rates
 # that snap differently for the target rate, see `resolve_rate_groups()`).
-# A future module with a similarly rigid SINGLE rate only needs to be
-# added here - `resolve_rate_groups()` automatically forms its own group
-# from it, without the grouping logic itself needing to be adjusted.
-_FIXED_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
-    ModuleType.NI9210: NI9210_FIXED_SAMPLE_RATE_HZ,
+# A future module with a similar hard ceiling only needs to be added
+# here - `resolve_rate_groups()` automatically forms its own group from
+# it, without the grouping logic itself needing to be adjusted.
+_MAX_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
+    ModuleType.NI9210: NI9210_MAX_SAMPLE_RATE_HZ,
 }
 
-# Tolerance for comparing "fixed module rate == target rate" - covers
+# Tolerance for comparing "module ceiling >= target rate" - covers
 # rounding of the GUI input (see `is_valid_ni9234_sample_rate` for the
 # same tolerance used elsewhere).
-_FIXED_RATE_TOLERANCE_HZ = 0.05
+_MAX_RATE_TOLERANCE_HZ = 0.05
 
 
 @dataclass
@@ -344,9 +352,9 @@ class RateGroup:
     task with true sample-clock synchronicity.
 
     Multiple `RateGroup`s in one measurement arise ONLY when (a) a
-    module has a hardware-fixed rate that's incompatible with the other
-    channels (see `_FIXED_SAMPLE_RATE_HZ_BY_MODULE`, currently: NI9210,
-    fixed 14 S/s), or (b) two grid modules present at the same time (see
+    module's rate ceiling lies below the target rate (see
+    `_MAX_SAMPLE_RATE_HZ_BY_MODULE`, currently: NI9210, max 100/7 S/s),
+    or (b) two grid modules present at the same time (see
     `_GRID_SAMPLE_RATE_SPEC_BY_MODULE`, currently NI9234/NI9235) snap to
     different rates for the target rate - this is the exception, not the
     default case. See `resolve_rate_groups`.
@@ -362,15 +370,14 @@ def resolve_rate_groups(
 ) -> list[RateGroup]:
     """Splits active channels into groups with a jointly usable sample rate.
 
-    A channel from a module in `_FIXED_SAMPLE_RATE_HZ_BY_MODULE` (a fixed
-    rate that is NOT adaptable to a target rate) only gets its own group
-    if its fixed rate differs from `target_sample_rate_hz` - if the
-    target rate happens to exactly match the fixed rate (e.g. an NI9210
-    at a target rate of exactly 14 S/s), there's no conflict and the
-    channel stays in the shared "target rate" group. Multiple actually
-    differing fixed rates are grouped BY THEIR RESPECTIVE RATE (not by
+    A channel from a module in `_MAX_SAMPLE_RATE_HZ_BY_MODULE` (a hard
+    rate ceiling) only gets its own group if `target_sample_rate_hz`
+    EXCEEDS that ceiling - at or below it the module simply follows the
+    target rate (an NI9210 at a target rate of 1 S/s really does sample
+    at 1 S/s) and stays in the shared "target rate" group. Channels
+    pushed out this way are grouped BY THEIR RESPECTIVE CEILING (not by
     module type) - two different modules that happen to share the same
-    fixed rate end up in the same group this way. All other modules
+    ceiling end up in the same group this way. All other modules
     (adaptable to a target rate) ALWAYS stay in the shared "target rate"
     group (the preferred, truly synchronized case) - this group is never
     split for convenience.
@@ -393,16 +400,16 @@ def resolve_rate_groups(
             the measurement, so it's NOT a "sharing" problem but a
             genuine misconfiguration.
     """
-    fixed_channels: list[Channel] = []
+    capped_channels: list[Channel] = []
     adaptive_channels: list[Channel] = []
     for ch in channels:
-        fixed_rate = _FIXED_SAMPLE_RATE_HZ_BY_MODULE.get(ch.module_type)
-        if fixed_rate is not None and abs(target_sample_rate_hz - fixed_rate) > _FIXED_RATE_TOLERANCE_HZ:
-            fixed_channels.append(ch)
+        max_rate = _MAX_SAMPLE_RATE_HZ_BY_MODULE.get(ch.module_type)
+        if max_rate is not None and target_sample_rate_hz > max_rate + _MAX_RATE_TOLERANCE_HZ:
+            capped_channels.append(ch)
         else:
-            # No conflict: either no module with a fixed rate, or the
-            # fixed rate already matches the target rate - the channel
-            # can stay in the shared task (see docstring above).
+            # No conflict: either no module with a ceiling, or the target
+            # rate is at or below it and the module can simply follow it
+            # - the channel stays in the shared task (see docstring above).
             adaptive_channels.append(ch)
 
     groups: list[RateGroup] = []
@@ -457,7 +464,7 @@ def resolve_rate_groups(
             # generally only be "valid" for AT MOST one of the two
             # grids. Unlike the single-module case, this is NOT a
             # configuration error but the default case here (exactly
-            # like the NI9210 fixed-rate case: each module simply gets
+            # like the NI9210 ceiling case: each module simply gets
             # the rate nearest to it on its own grid, without an error
             # message) - hence NO `_is_valid_grid_sample_rate` gate here,
             # just unconditional snapping.
@@ -518,17 +525,17 @@ def resolve_rate_groups(
                     )
                 )
 
-    fixed_groups: dict[float, list[Channel]] = {}
-    for ch in fixed_channels:
-        fixed_groups.setdefault(_FIXED_SAMPLE_RATE_HZ_BY_MODULE[ch.module_type], []).append(ch)
+    capped_groups: dict[float, list[Channel]] = {}
+    for ch in capped_channels:
+        capped_groups.setdefault(_MAX_SAMPLE_RATE_HZ_BY_MODULE[ch.module_type], []).append(ch)
 
-    for rate, group_channels in fixed_groups.items():
+    for rate, group_channels in capped_groups.items():
         module_names = sorted({ch.module_type.value for ch in group_channels})
         groups.append(
             RateGroup(
                 channels=group_channels,
                 resolved_sample_rate_hz=rate,
-                reason=f"{'/'.join(module_names)} (feste {rate:.1f} S/s)",
+                reason=f"{'/'.join(module_names)} (max. {rate:.1f} S/s)",
             )
         )
 
@@ -740,8 +747,8 @@ class Channel:
         cal_point2_measured / cal_point2_reference: Second reference
             point of the 2-point calibration, e.g. boiling point 100 °C.
         adc_timing_mode: ADC timing mode (see `ADC_TIMING_MODES`), ONLY
-            available in hardware on the NI9213 (NI9210 has a fixed
-            sample rate). Per nidaqmx, must be identical for all channels
+            available in hardware on the NI9213 (the NI9210 offers no
+            such option). Per nidaqmx, must be identical for all channels
             of the same physical module - the channel table therefore
             automatically propagates a change to all channels of the same
             module, see `gui/widgets/channel_table.py`.
@@ -1117,8 +1124,8 @@ class MeasurementConfig:
     Attributes:
         name: Identifier of the measurement, e.g. "measurement_001".
         sample_rate_hz: Target rate in Hz. Applies directly to all
-            channels except the NI9210 (fixed 14 S/s, see
-            `resolve_rate_groups`).
+            channels, including the NI9210 as long as the rate stays at
+            or below its ceiling (see `resolve_rate_groups`).
         channels: List of active channels for this measurement.
         storage_format: Chosen storage format (Parquet/CSV).
         samples_per_read: Block size per read from the DAQ device.
@@ -1162,9 +1169,9 @@ class MeasurementConfig:
                 "recording_stop_value muss bei begrenzten Messungen größer als 0 sein."
             )
         # Only raises ValueError for intrinsically unreachable rates
-        # (NI9234 grid, NI9213 maximum rate) - an NI9210 combined with
-        # faster modules is NO LONGER an error, it results in two
-        # separate sampling groups (see `resolve_rate_groups` and
+        # (NI9234 grid, NI9213 maximum rate) - an NI9210 below a faster
+        # target rate is NOT an error, it results in two separate
+        # sampling groups (see `resolve_rate_groups` and
         # `core/controller.py::start_measurement`).
         resolve_rate_groups(self.active_channels(), self.sample_rate_hz)
 
