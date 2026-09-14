@@ -345,6 +345,23 @@ _MAX_SAMPLE_RATE_HZ_BY_MODULE: dict[ModuleType, float] = {
 _MAX_RATE_TOLERANCE_HZ = 0.05
 
 
+def max_sample_rate_hz(module_type: ModuleType) -> float | None:
+    """Hardware rate ceiling of a module type, `None` if it has none.
+
+    Lets the GUI tell a genuine CEILING apart from a grid snap (see
+    `gui/setup_view.py::_update_resolved_rate_preview`): both can land
+    below the requested rate, but only the ceiling means "this module
+    cannot go any faster".
+    """
+    return _MAX_SAMPLE_RATE_HZ_BY_MODULE.get(module_type)
+
+
+def exceeds_max_sample_rate(module_type: ModuleType, target_sample_rate_hz: float) -> bool:
+    """Whether `target_sample_rate_hz` is above this module's ceiling."""
+    ceiling = max_sample_rate_hz(module_type)
+    return ceiling is not None and target_sample_rate_hz > ceiling + _MAX_RATE_TOLERANCE_HZ
+
+
 @dataclass
 class RateGroup:
     """A set of active channels that can share the same sample rate in

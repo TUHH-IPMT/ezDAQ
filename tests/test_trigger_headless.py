@@ -711,5 +711,82 @@ class CalculateSamplesPerReadTests(unittest.TestCase):
         self.assertEqual(setup_view._calculate_samples_per_read(100_000.0), 2000)
 
 
+class ResolvedRatePreviewTests(unittest.TestCase):
+    """`SetupView._update_resolved_rate_preview` - the non-blocking hint
+    shown when the requested rate is not the rate the hardware will run
+    at. Built via `__new__` with stub widgets, like
+    `CalculateSamplesPerReadTests`, so no Qt widget tree is needed.
+    """
+
+    class _Label:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def setText(self, value: str) -> None:
+            self.text = value
+
+    class _Spin:
+        def __init__(self, value: float) -> None:
+            self._value = value
+
+        def value(self) -> float:
+            return self._value
+
+    class _Table:
+        def __init__(self, channels: list[Channel]) -> None:
+            self._channels = channels
+
+        def get_channels(self) -> list[Channel]:
+            return self._channels
+
+    def _preview_text(self, channels: list[Channel], sample_rate: float) -> str:
+        setup_view = SetupView.__new__(SetupView)
+        setup_view._channel_table = self._Table(channels)
+        setup_view._sample_rate_spin = self._Spin(sample_rate)
+        setup_view._resolved_rate_preview_label = self._Label()
+        setup_view._update_resolved_rate_preview()
+        return setup_view._resolved_rate_preview_label.text
+
+    def test_lone_capped_module_above_its_ceiling_is_reported(self) -> None:
+        # The case that used to stay silent: a standalone NI9210 forms
+        # exactly ONE rate group, so the old "more than one group" gate
+        # never fired - the user asked for 1000 S/s, got 14.3 S/s and was
+        # told nothing.
+        channels = [Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)]
+
+        text = self._preview_text(channels, 1000.0)
+
+        self.assertIn("NI9210", text)
+        self.assertIn("14.3", text)
+
+    def test_lone_capped_module_at_or_below_its_ceiling_stays_silent(self) -> None:
+        # At or below the ceiling the requested rate is actually applied,
+        # so there is nothing to warn about.
+        channels = [Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210)]
+
+        for rate in (1.0, NI9210_MAX_SAMPLE_RATE_HZ):
+            with self.subTest(rate=rate):
+                self.assertEqual(self._preview_text(channels, rate), "")
+
+    def test_module_without_a_ceiling_stays_silent(self) -> None:
+        channels = [Channel("cDAQ1Mod1/ai0", "Voltage", module_type=ModuleType.NI9215)]
+
+        self.assertEqual(self._preview_text(channels, 1000.0), "")
+
+    def test_mixed_groups_list_both_the_target_rate_and_the_capped_one(self) -> None:
+        # Here the target rate IS reached - by the NI9234 - so the
+        # per-group listing stays the right form of feedback.
+        channels = [
+            Channel("cDAQ1Mod1/ai0", "Temp", module_type=ModuleType.NI9210),
+            Channel("cDAQ1Mod2/ai0", "Vib", module_type=ModuleType.NI9234),
+        ]
+
+        text = self._preview_text(channels, 51_200.0 / 31)
+
+        self.assertIn("1651.6", text)
+        self.assertIn("14.3", text)
+        self.assertIn("NI9210", text)
+
+
 if __name__ == "__main__":
     unittest.main()

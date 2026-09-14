@@ -52,6 +52,7 @@ from data.models import (
     NamingScheme,
     RecordingStopUnit,
     StorageFormat,
+    exceeds_max_sample_rate,
     is_valid_grid_sample_rate,
     is_valid_ni9234_sample_rate,
     max_ni9213_sample_rate_hz,
@@ -1173,10 +1174,29 @@ class SetupView(QWidget):
             self._resolved_rate_preview_label.setText("")
             return
 
-        if len(rate_groups) <= 1:
-            # Normal case: exactly one group, target rate == actual
-            # rate - no extra info needed, label stays empty/invisible.
-            self._resolved_rate_preview_label.setText("")
+        if len(rate_groups) == 1:
+            # One group does NOT imply the target rate is reached: a
+            # lone rate-capped module (e.g. an NI9210 above its ceiling)
+            # forms a single group that still runs slower than requested.
+            # Say so outright here - listing it against a target rate no
+            # channel will actually run at would only mislead.
+            group = rate_groups[0]
+            limited_modules = sorted(
+                {
+                    ch.module_type.value
+                    for ch in group.channels
+                    if exceeds_max_sample_rate(ch.module_type, sample_rate)
+                }
+            )
+            self._resolved_rate_preview_label.setText(
+                t(
+                    "resolved_rate_preview_limited",
+                    modules="/".join(limited_modules),
+                    rate=f"{group.resolved_sample_rate_hz:.1f}",
+                )
+                if limited_modules
+                else ""
+            )
             return
 
         parts = []
@@ -1187,7 +1207,7 @@ class SetupView(QWidget):
                 module_names = sorted({ch.module_type.value for ch in group.channels})
                 parts.append(
                     t(
-                        "resolved_rate_preview_fixed",
+                        "resolved_rate_preview_capped",
                         modules="/".join(module_names),
                         rate=f"{group.resolved_sample_rate_hz:.1f}",
                     )

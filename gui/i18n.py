@@ -126,7 +126,8 @@ _translations = {
             "maximal {max_rate} S/s."
         ),
         "resolved_rate_preview_target": "Zielrate: {rate} S/s",
-        "resolved_rate_preview_fixed": "{modules} (fest): {rate} S/s",
+        "resolved_rate_preview_capped": "{modules} (max.): {rate} S/s",
+        "resolved_rate_preview_limited": "{modules}: Abtastrate über dem Limit, gemessen wird mit dem Höchstwert {rate} S/s.",
         "error_channel_missing_hw_channel": (
             "Folgende(r) aktive Kanal/Kanäle hat/haben noch keinen Hardwarekanal "
             "zugewiesen: {names}. Bitte über \"Kanal zuweisen...\" einen echten "
@@ -621,7 +622,8 @@ _translations = {
             "channel count."
         ),
         "resolved_rate_preview_target": "Target rate: {rate} S/s",
-        "resolved_rate_preview_fixed": "{modules} (fixed): {rate} S/s",
+        "resolved_rate_preview_capped": "{modules} (max.): {rate} S/s",
+        "resolved_rate_preview_limited": "{modules}: sample rate above the limit, measuring at the maximum of {rate} S/s.",
         "error_channel_missing_hw_channel": (
             "The following active channel(s) have no hardware channel assigned "
             "yet: {names}. Please use \"Assign channel...\" to pick a real "
