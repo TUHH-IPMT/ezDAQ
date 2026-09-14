@@ -456,7 +456,7 @@ class ChannelParameterDialog(QDialog):
     type for thermocouple, gage factor/bridge type/lead wire resistance
     for strain) - for voltage, this extra field is omitted entirely. The
     ADC timing mode is additionally shown only if the row's module is an
-    NI9213 (the NI9210 has a fixed sample rate without this option).
+    NI9213 (the NI9210 offers no such option).
 
     Replaces the previous, always-visible columns (scale/offset/
     sensitivity/thermocouple type): with a growing number of modules
@@ -527,9 +527,8 @@ class ChannelParameterDialog(QDialog):
             self._thermocouple_combo.setCurrentIndex(index if index >= 0 else 0)
             form.addRow(t("param_thermocouple_type_label"), self._thermocouple_combo)
 
-            # ADC timing mode available only on the NI9213 (the NI9210 has
-            # a fixed sample rate without this option) - see
-            # hardware/ni9213.py.
+            # ADC timing mode available only on the NI9213 (the NI9210
+            # offers no such option) - see hardware/ni9213.py.
             if module_type == ModuleType.NI9213:
                 self._adc_timing_combo = QComboBox()
                 for mode in ADC_TIMING_MODES:

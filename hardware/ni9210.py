@@ -59,10 +59,12 @@ class NI9210(NIDAQDevice):
     `THERMOCOUPLE_TEMPERATURE_RANGES_C` based on
     `channel.thermocouple_type`.
 
-    NOTE ON ADC TIMING MODE: unlike the NI9213, the NI9210 has a fixed
-    sample rate (14 S/s total) with no configurable ADC timing mode;
-    `channel.adc_timing_mode` is therefore deliberately NOT evaluated
-    here (see `hardware/ni9213.py`, where it is).
+    NOTE ON ADC TIMING MODE: unlike the NI9213, the NI9210 has no
+    configurable ADC timing mode; `channel.adc_timing_mode` is
+    therefore deliberately NOT evaluated here (see
+    `hardware/ni9213.py`, where it is). Its sample rate is not fixed
+    either, only capped - see
+    `data/models.py::NI9210_MAX_SAMPLE_RATE_HZ`.
     """
 
     # Overridden by `NI9213` (see hardware/ni9213.py) - controls both the

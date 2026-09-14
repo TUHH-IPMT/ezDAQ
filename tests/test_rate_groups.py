@@ -130,7 +130,7 @@ class MixedGridModuleTests(unittest.TestCase):
         # valid for EITHER grid must NOT raise an error when >=2 grid-
         # constrained modules are present at the same time - each module
         # simply gets its own closest achievable rate (exactly like the
-        # existing NI9210 fixed-rate case).
+        # existing NI9210 ceiling case).
         groups = resolve_rate_groups([_ni9234_channel(), _ni9235_channel()], 1000.0)
         self.assertEqual(len(groups), 2)
 

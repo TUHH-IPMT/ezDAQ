@@ -13,8 +13,8 @@ automatically from the physical channels reported by the hardware, see
 
 There is one real difference in the ADC timing mode: ONLY the NI9213
 supports a hardware-configurable trade-off between speed and effective
-resolution (the NI9210 has a fixed sample rate of 14 S/s with no such
-option) - hence set here in addition to the inherited channel creation.
+resolution (the NI9210 offers no such option; its rate is merely
+capped at 100/7 S/s) - hence set here in addition to the inherited channel creation.
 """
 
 from __future__ import annotations
