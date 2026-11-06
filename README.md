@@ -47,8 +47,8 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
   OpenGL-accelerated)
 - Freely configurable channel display (curve color, background, Y range,
   hybrid autoscaling) – part of the saved configuration
-- Several channels in one shared plot (plot groups, with legend and a
-  shared Y axis) – also as a popout window
+- Several channels in one shared plot (same plot group, with legend and
+  a shared Y axis) – also as a popout window
 - Preview of configured channels before a measurement is even started
 
 **Analysis View**

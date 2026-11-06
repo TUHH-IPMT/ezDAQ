@@ -1646,7 +1646,7 @@ class ChannelTableWidget(QWidget):
             "plot_popout_y": channel.plot_popout_y,
             "plot_popout_width": channel.plot_popout_width,
             "plot_popout_height": channel.plot_popout_height,
-            "plot_group": channel.plot_group,
+            "plot_number": channel.plot_number,
         }
 
     def _on_name_edited(self, edit: QLineEdit) -> None:
@@ -1746,7 +1746,7 @@ class ChannelTableWidget(QWidget):
             plot_popout_y=display_settings.get("plot_popout_y"),
             plot_popout_width=display_settings.get("plot_popout_width"),
             plot_popout_height=display_settings.get("plot_popout_height"),
-            plot_group=str(display_settings.get("plot_group") or "").strip(),
+            plot_number=Channel._optional_plot_number(display_settings.get("plot_number")),
         )
 
     def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:

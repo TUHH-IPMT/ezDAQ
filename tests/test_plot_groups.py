@@ -1,8 +1,8 @@
 """
 tests/test_plot_groups.py
 
-Tests for several channels in ONE live view plot (`Channel.plot_group`,
-see `gui/live_view.py::_plot_slots`):
+Tests for several channels in ONE live view plot (`Channel.plot_number`:
+same number = shared plot, see `gui/live_view.py::_plot_slots`):
 
     - the model/persistence round trip (old configurations without the
       field keep one plot per channel),
@@ -47,22 +47,29 @@ def _channels() -> list[Channel]:
 
 
 def _grouped() -> list[Channel]:
-    """X, Y, Z in plot A, Force on its own."""
+    """X, Y, Z in plot 1, Force in plot 2."""
     channels = _channels()
-    for index in (0, 1, 3):
-        channels[index].plot_group = "A"
+    for index, number in enumerate((1, 1, 2, 1)):
+        channels[index].plot_number = number
     return channels
 
 
 class ModelTest(unittest.TestCase):
     def test_round_trip(self) -> None:
-        channel = Channel("ai0", "X", plot_group="A")
-        self.assertEqual(Channel.from_dict(channel.to_dict()).plot_group, "A")
+        channel = Channel("ai0", "X", plot_number=3)
+        self.assertEqual(Channel.from_dict(channel.to_dict()).plot_number, 3)
 
-    def test_old_configuration_has_no_group(self) -> None:
+    def test_old_configuration_has_no_number(self) -> None:
         data = Channel("ai0", "X").to_dict()
-        del data["plot_group"]
-        self.assertEqual(Channel.from_dict(data).plot_group, "")
+        del data["plot_number"]
+        self.assertIsNone(Channel.from_dict(data).plot_number)
+
+    def test_invalid_numbers_are_ignored(self) -> None:
+        data = Channel("ai0", "X").to_dict()
+        for bad in ("A", 0, -2, None):
+            with self.subTest(stored=bad):
+                data["plot_number"] = bad
+                self.assertIsNone(Channel.from_dict(data).plot_number)
 
     def test_channel_table_keeps_the_group(self) -> None:
         from gui.widgets.channel_table import ChannelTableWidget
@@ -70,18 +77,35 @@ class ModelTest(unittest.TestCase):
         _app()
         table = ChannelTableWidget()
         table.set_channels(_grouped())
-        self.assertEqual([c.plot_group for c in table.get_channels()], ["A", "A", "", "A"])
+        self.assertEqual([c.plot_number for c in table.get_channels()], [1, 1, 2, 1])
         table.deleteLater()
 
 
 class SlotTest(unittest.TestCase):
-    def test_group_sits_at_its_first_member(self) -> None:
+    def test_same_number_shares_a_plot(self) -> None:
         from gui.live_view import _plot_slots
 
         slots = _plot_slots(_grouped())
         self.assertEqual([s.indices for s in slots], [(0, 1, 3), (2,)])
 
-    def test_no_groups_is_one_plot_per_channel(self) -> None:
+    def test_plots_are_ordered_by_number(self) -> None:
+        from gui.live_view import _plot_slots
+
+        channels = _channels()
+        for index, number in enumerate((5, 5, 1, 9)):
+            channels[index].plot_number = number
+        self.assertEqual([s.indices for s in _plot_slots(channels)], [(2,), (0, 1), (3,)])
+
+    def test_channels_without_a_number_count_on_from_the_highest(self) -> None:
+        from gui.live_view import effective_plot_numbers
+
+        channels = _channels()
+        channels[1].plot_number = 3
+        channels[3].plot_number = 1
+        # A new channel (None) must not silently join plot 1 or 3.
+        self.assertEqual(effective_plot_numbers(channels), [4, 3, 5, 1])
+
+    def test_no_numbers_is_one_plot_per_channel(self) -> None:
         from gui.live_view import _plot_slots
 
         self.assertEqual([s.indices for s in _plot_slots(_channels())], [(0,), (1,), (2,), (3,)])
@@ -264,7 +288,7 @@ class LiveViewGroupTest(unittest.TestCase):
         old = next(iter(self.view._popout_windows.values()))
 
         # Acc Y leaves the group while the window is open.
-        settings = {("cDAQ1Mod1/ai1", "Acc Y"): {**self.channels[1].to_dict(), "plot_group": ""}}
+        settings = {("cDAQ1Mod1/ai1", "Acc Y"): {**self.channels[1].to_dict(), "plot_number": 7}}
         self.view._apply_display_settings_to_live_channels(settings)
         _app().processEvents()
 
@@ -290,7 +314,6 @@ class DialogTest(unittest.TestCase):
 
         _app()
         channels = _channels()
-        channels[0].plot_group = "A"
         channels[0].plot_time_window_seconds = 2.0
         self.channels = channels
         self.dialog = ChannelDisplayDialog(channels, "#000000", "#cccccc")
@@ -300,25 +323,22 @@ class DialogTest(unittest.TestCase):
         self.dialog.deleteLater()
         _app().processEvents()
 
-    def _set_group(self, index: int, name: str) -> None:
-        combo = self.dialog._rows[self.keys[index]]["group"]
-        combo.setCurrentIndex(combo.findData(name))
+    def _set_group(self, index: int, number: int) -> None:
+        self.dialog._rows[self.keys[index]]["group"].setValue(number)
 
-    def test_offers_own_plot_and_named_plots(self) -> None:
-        combo = self.dialog._rows[self.keys[1]]["group"]
-        self.assertEqual(combo.itemData(0), "")
-        self.assertEqual(combo.itemData(1), "A")
-        self.assertEqual(combo.currentData(), "")
-        self.assertEqual(self.dialog._rows[self.keys[0]]["group"].currentData(), "A")
+    def test_prefilled_with_one_plot_per_channel(self) -> None:
+        values = [self.dialog._rows[k]["group"].value() for k in self.keys]
+        self.assertEqual(values, [1, 2, 3, 4])
+        self.assertEqual([r["plot_number"] for r in self.dialog.results().values()], [1, 2, 3, 4])
 
     def test_joining_member_takes_over_the_group_settings(self) -> None:
-        self._set_group(1, "A")
+        self._set_group(1, 1)
         results = self.dialog.results()
-        self.assertEqual(results[self.keys[1]]["plot_group"], "A")
+        self.assertEqual(results[self.keys[1]]["plot_number"], 1)
         self.assertEqual(results[self.keys[1]]["plot_time_window_seconds"], 2.0)
 
     def test_own_window_click_applies_to_the_whole_group(self) -> None:
-        self._set_group(1, "A")
+        self._set_group(1, 1)
         self.dialog._rows[self.keys[1]]["popout"].click()
         results = self.dialog.results()
         self.assertTrue(results[self.keys[0]]["plot_popout"])
@@ -326,7 +346,7 @@ class DialogTest(unittest.TestCase):
         self.assertFalse(results[self.keys[2]]["plot_popout"])
 
     def test_results_keep_curve_settings_per_channel(self) -> None:
-        self._set_group(1, "A")
+        self._set_group(1, 1)
         self.dialog._plot_settings[self.keys[1]]["plot_color"] = "#00ff00"
         self.dialog._plot_settings[self.keys[1]]["plot_time_window_seconds"] = 9.0
         results = self.dialog.results()

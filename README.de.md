@@ -42,8 +42,8 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Echtzeit-Visualisierung mehrerer Kanäle (PyQtGraph, OpenGL-beschleunigt)
 - Kanal-Darstellung frei konfigurierbar (Kurvenfarbe, Hintergrund,
   Y-Bereich, hybride Autoskalierung) – Teil der gespeicherten Konfiguration
-- Mehrere Kanäle in einem gemeinsamen Plot (Plot-Gruppen, mit Legende und
-  gemeinsamer Y-Achse) – auch als eigenes Fenster
+- Mehrere Kanäle in einem gemeinsamen Plot (gleiche Plotgruppe, mit
+  Legende und gemeinsamer Y-Achse) – auch als eigenes Fenster
 - Vorschau der konfigurierten Kanäle bereits vor Messstart
 
 **Analyse-Ansicht**

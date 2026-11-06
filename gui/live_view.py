@@ -67,7 +67,6 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QRegularExpressionVa
 from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -275,7 +274,7 @@ def _channel_display_key(channel: Channel) -> tuple[str, str]:
 
 
 # Plot-wide settings: with several channels in ONE plot (see
-# `Channel.plot_group`/`_plot_slots`) these exist only once per plot - one
+# `Channel.plot_number`/`_plot_slots`) these exist only once per plot - one
 # X axis means one time window, one plot area one background/grid/Y range.
 # They are therefore kept identical across the visible members of a group
 # (see `sync_plot_groups`); everything else (curve color/width, value
@@ -298,8 +297,8 @@ PLOT_LEVEL_FIELDS = (
     "plot_popout_height",
 )
 
-# Selectable group names in the channel display dialog ("Plot A", ...).
-PLOT_GROUP_NAMES = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+# Highest plot number selectable in the channel display dialog.
+MAX_PLOT_NUMBER = 99
 
 
 @dataclass(frozen=True)
@@ -321,26 +320,33 @@ class _PlotSlot:
         return len(self.indices) > 1
 
 
+def effective_plot_numbers(channels: list[Channel]) -> list[int]:
+    """Plot number of every channel (see `Channel.plot_number`): the set
+    one, or - for channels without one - the next free numbers after all
+    set ones, in channel order. With no numbers set at all that is
+    simply 1, 2, 3, ... i.e. one plot per channel, as before. Counting on
+    from the HIGHEST set number (instead of filling gaps) means a new
+    channel can never silently land in an existing shared plot."""
+    numbers = [c.plot_number for c in channels]
+    next_free = max((n for n in numbers if n is not None), default=0) + 1
+    result: list[int] = []
+    for number in numbers:
+        if number is None:
+            number = next_free
+            next_free += 1
+        result.append(number)
+    return result
+
+
 def _plot_slots(channels: list[Channel]) -> list[_PlotSlot]:
-    """Groups the VISIBLE channels (`Channel.plot_visible`) into plots:
-    every channel without `plot_group` gets its own plot (previous
-    behavior), channels with the same `plot_group` share one. A plot sits
-    at the position of its first member, the order is otherwise the
-    channel order."""
-    slots: list[list[int]] = []
-    by_group: dict[str, list[int]] = {}
-    for index, channel in enumerate(channels):
-        if not channel.plot_visible:
-            continue
-        group = (channel.plot_group or "").strip()
-        if not group:
-            slots.append([index])
-        elif group in by_group:
-            by_group[group].append(index)
-        else:
-            by_group[group] = [index]
-            slots.append(by_group[group])
-    return [_PlotSlot(tuple(indices)) for indices in slots]
+    """Groups the VISIBLE channels (`Channel.plot_visible`) into plots by
+    plot number (see `effective_plot_numbers`): same number = one shared
+    plot, members in channel order. The plots are ordered by number."""
+    by_number: dict[int, list[int]] = {}
+    for index, (channel, number) in enumerate(zip(channels, effective_plot_numbers(channels))):
+        if channel.plot_visible:
+            by_number.setdefault(number, []).append(index)
+    return [_PlotSlot(tuple(by_number[number])) for number in sorted(by_number)]
 
 
 def sync_plot_groups(channels: list[Channel]) -> None:
@@ -696,8 +702,8 @@ class ChannelDisplayDialog(QDialog):
     This also makes e.g. "value only, no chart" possible (plot checkbox
     off, value checkbox on).
 
-    The "Plot" selection puts several channels into ONE shared plot (see
-    `Channel.plot_group`). The plot-wide settings (`PLOT_LEVEL_FIELDS`:
+    The "Plot" number puts channels with the same number into ONE shared
+    plot (see `Channel.plot_number`); plots are ordered by number. The plot-wide settings (`PLOT_LEVEL_FIELDS`:
     own window, plot on/off, background/grid, Y range, time span, axis
     titles) are kept identical within a group right here in the dialog:
     changing them for one member changes them for all, and a channel
@@ -778,6 +784,7 @@ class ChannelDisplayDialog(QDialog):
         form = QFormLayout()
         layout.addLayout(form)
 
+        plot_numbers = effective_plot_numbers(channels)
         for index, channel in enumerate(channels):
             if index > 0:
                 # Subtle separator line between channels - `addRow()`
@@ -836,24 +843,22 @@ class ChannelDisplayDialog(QDialog):
             visible_check.setChecked(channel.plot_visible)
             row.addWidget(visible_check)
 
-            # Shared plot (see `Channel.plot_group`) - right after
+            # Plot number (see `Channel.plot_number`) - right after
             # "active": like "own window", it decides WHERE the channel
-            # appears, not what of it.
-            group_combo = QComboBox()
-            group_combo.setToolTip(t("plot_group_tooltip"))
-            group_combo.addItem(t("plot_group_own"), "")
-            for name in PLOT_GROUP_NAMES[: max(1, min(len(PLOT_GROUP_NAMES), len(channels)))]:
-                group_combo.addItem(t("plot_group_item", name=name), name)
-            current_group = (channel.plot_group or "").strip()
-            if current_group and group_combo.findData(current_group) < 0:
-                # A stored name outside the offered range (e.g. more
-                # channels before) - keep it selectable instead of losing it.
-                group_combo.addItem(t("plot_group_item", name=current_group), current_group)
-            group_combo.setCurrentIndex(max(0, group_combo.findData(current_group)))
-            group_combo.currentIndexChanged.connect(
-                lambda _index, k=key: self._on_group_changed(k)
-            )
-            row.addWidget(group_combo)
+            # appears, not what of it. Pre-filled with the EFFECTIVE number
+            # (1, 2, 3, ... if none is set yet), so after OK every channel
+            # has an explicit one.
+            row.addWidget(QLabel(f"{t('plot_number_label')}:"))
+            group_spin = NoWheelSpinBox()
+            group_spin.setRange(1, MAX_PLOT_NUMBER)
+            group_spin.setToolTip(t("plot_number_tooltip"))
+            group_spin.setValue(min(MAX_PLOT_NUMBER, plot_numbers[index]))
+            # Only on Enter/focus loss/arrow click, not per keystroke:
+            # typing "12" must not first join the channel to plot 1 and
+            # take over that plot's settings on the way.
+            group_spin.setKeyboardTracking(False)
+            group_spin.valueChanged.connect(lambda _value, k=key: self._on_group_changed(k))
+            row.addWidget(group_spin)
 
             # Takes effect (like "active") only after OK via `results()`
             # - see class docstring above. Right after "active", BEFORE
@@ -914,7 +919,7 @@ class ChannelDisplayDialog(QDialog):
             # of only disabling the popout checkbox (previous behavior),
             # now the ENTIRE remaining row is grayed out.
             row_widgets = [
-                group_combo, popout_check, graph_check, graph_button, value_check, value_button
+                group_spin, popout_check, graph_check, graph_button, value_check, value_button
             ]
 
             def _on_visible_toggled(
@@ -943,7 +948,7 @@ class ChannelDisplayDialog(QDialog):
             form.addRow(channel.display_name, row)
             self._rows[key] = {
                 "visible": visible_check,
-                "group": group_combo,
+                "group": group_spin,
                 "popout": popout_check,
                 "graph": graph_check,
                 "value": value_check,
@@ -969,14 +974,12 @@ class ChannelDisplayDialog(QDialog):
         # many channels there are (see the scroll area above).
         outer_layout.addWidget(button_box)
 
-    def _group_of(self, key: tuple[str, str]) -> str:
-        return self._rows[key]["group"].currentData() or ""
+    def _group_of(self, key: tuple[str, str]) -> int:
+        return self._rows[key]["group"].value()
 
     def _group_members(self, key: tuple[str, str]) -> list[tuple[str, str]]:
-        """Other channels of `key`'s plot group (in channel order)."""
+        """Other channels with the same plot number (in channel order)."""
         group = self._group_of(key)
-        if not group:
-            return []
         return [k for k in self._order if k != key and self._group_of(k) == group]
 
     def _propagate_checkbox(self, key: tuple[str, str], name: str, checked: bool) -> None:
@@ -1081,16 +1084,16 @@ class ChannelDisplayDialog(QDialog):
                 "plot_show_value": row["value"].isChecked(),
                 "plot_visible": row["visible"].isChecked(),
                 "plot_popout": row["popout"].isChecked(),
-                "plot_group": row["group"].currentData() or "",
+                "plot_number": row["group"].value(),
             }
         # Safety net on top of the live syncing above: the first ACTIVE
         # member of each group (= the plot's lead, see `_plot_slots`)
         # decides the plot-wide values for all active members.
-        leads: dict[str, tuple[str, str]] = {}
+        leads: dict[int, tuple[str, str]] = {}
         for key in self._order:
             values = results[key]
-            group = values["plot_group"]
-            if not group or not values["plot_visible"]:
+            group = values["plot_number"]
+            if not values["plot_visible"]:
                 continue
             lead = leads.setdefault(group, key)
             if lead != key:
@@ -1442,7 +1445,7 @@ class ChannelValueSettingsDialog(QDialog):
 
 class ChannelPopoutWindow(QWidget):
     """Standalone window with the live plot of ONE plot slot - a single
-    channel or a plot group (see `Channel.plot_group`/`_PlotSlot`).
+    channel or a shared plot (see `Channel.plot_number`/`_PlotSlot`).
 
     Opened when the "own window" checkbox in the channel display dialog
     was applied via OK (see `LiveView._rebuild_plots`/
@@ -1820,7 +1823,7 @@ class LiveView(QWidget):
         self._plot_widget = pg.GraphicsLayoutWidget()
         # One entry per PLOT of the main grid: `self._plot_items[p]` shows
         # the channels `self._plot_slots[p].indices` (one, or several for
-        # a plot group, see `Channel.plot_group`/`_plot_slots`).
+        # a shared plot, see `Channel.plot_number`/`_plot_slots`).
         self._plot_items: list = []
         self._plot_slots: list[_PlotSlot] = []
         # One entry per CURVE (= per displayed channel):
@@ -2677,10 +2680,12 @@ class LiveView(QWidget):
                 visibility_changed = True
             channel.plot_visible = new_visible
             channel.plot_popout = new_popout
-            new_group = str(values.get("plot_group", channel.plot_group) or "").strip()
-            if new_group != channel.plot_group:
+            new_number = Channel._optional_plot_number(
+                values.get("plot_number", channel.plot_number)
+            )
+            if new_number != channel.plot_number:
                 visibility_changed = True
-            channel.plot_group = new_group
+            channel.plot_number = new_number
             changed = True
         # Plot-wide settings identical within each group (see
         # `sync_plot_groups`) - may change a member's time window, which
@@ -3036,7 +3041,7 @@ class LiveView(QWidget):
         """Creates one subplot per PLOT of the main grid (with an
         independent X axis, see `Channel.plot_time_window_seconds`) - a
         single channel, or several channels of the same plot group as
-        several curves with a legend (see `Channel.plot_group`/
+        several curves with a legend (see `Channel.plot_number`/
         `_plot_slots`).
 
         A channel does NOT appear here if it is either completely
