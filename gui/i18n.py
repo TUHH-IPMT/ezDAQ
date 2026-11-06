@@ -32,6 +32,16 @@ _translations = {
         "menu_settings": "Optionen",
         "menu_quit": "Beenden",
         "menu_help": "Hilfe",
+        "menu_manual": "Handbuch (PDF)",
+        "manual_missing_title": "Handbuch nicht gefunden",
+        "manual_missing_body": (
+            "Das Handbuch ist in dieser Installation nicht enthalten:\n{path}"
+        ),
+        "manual_open_failed_title": "Handbuch konnte nicht geöffnet werden",
+        "manual_open_failed_body": (
+            "Für PDF-Dateien ist kein Programm eingerichtet. Das Handbuch "
+            "liegt hier:\n{path}"
+        ),
         "menu_check_updates": "Nach Updates suchen",
         "menu_about": "Über...",
         "menu_save_config": "Konfiguration speichern",
@@ -547,6 +557,16 @@ _translations = {
         "menu_settings": "Options",
         "menu_quit": "Quit",
         "menu_help": "Help",
+        "menu_manual": "User Manual (PDF)",
+        "manual_missing_title": "User Manual Not Found",
+        "manual_missing_body": (
+            "The user manual is not included in this installation:\n{path}"
+        ),
+        "manual_open_failed_title": "Could Not Open the User Manual",
+        "manual_open_failed_body": (
+            "No program is set up to open PDF files. The manual is located "
+            "here:\n{path}"
+        ),
         "menu_check_updates": "Check for Updates",
         "menu_about": "About...",
         "menu_save_config": "Save Configuration",

@@ -58,6 +58,8 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 **Sonstiges**
 - Mehrsprachig (Deutsch/Englisch) und Hell/Dunkel-Theme, beides zur
   Laufzeit umschaltbar
+- Benutzerhandbuch als PDF (Deutsch/Englisch) unter *Hilfe → Handbuch* bzw.
+  F1 (`doc/manual/`)
 - Projektverwaltung (ein Projekt gleichzeitig) mit `project.json`,
   `measurements/` und `metadata/`
 - Persistente Anwendungseinstellungen (Fenstergeometrie, zuletzt

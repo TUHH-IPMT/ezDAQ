@@ -35,6 +35,18 @@ CHANNEL_CONFIG_FILE_NAME = "last_channel_configuration.json"
 SENSOR_DATABASE_FILE_NAME = "sensor_database.json"
 
 
+def get_app_path(*parts: str) -> Path:
+    """Path of a file shipped WITH the application, relative to the
+    project root in development and to the bundle root in a PyInstaller
+    build (see `get_resource_path` for the two bundle modes) - e.g. the
+    user manual under `doc/manual/` (see `gui/manual.py`)."""
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", None) or Path(sys.executable).parent)
+    else:
+        base = Path(__file__).resolve().parent.parent
+    return base.joinpath(*parts)
+
+
 def get_resource_path(*parts: str) -> Path:
     """Returns the path to a bundled resource file (e.g. an icon).
 

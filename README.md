@@ -63,6 +63,8 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 **Other**
 - Multilingual (German/English) and light/dark theme, both switchable at
   runtime
+- User manual as PDF (German/English) under *Help → User Manual* or F1
+  (`doc/manual/`)
 - Project management (one project at a time) with `project.json`,
   `measurements/`, and `metadata/`
 - Persistent application settings (window geometry, last-used
