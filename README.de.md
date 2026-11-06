@@ -30,6 +30,9 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Speicherung während der Messung als Parquet (bevorzugt) oder CSV,
   inklusive `metadata`-JSON (Startzeit, Abtastrate, Hardware, Kanäle,
   Skalierungen, Einheiten)
+- Parquet-Dateien mit großen Row Groups (max. 64 MB bzw. 10 s Messzeit)
+  für schnelles Einlesen; ältere Messdateien mit vielen kleinen Row Groups
+  lassen sich mit `tools/rewrite_parquet.py` verlustfrei umschreiben
 - Kanalparameter je nach Signaltyp (Skalierung, Offset, Sensitivität,
   Thermoelement-Typ, Gage-Faktor/Brückentyp bei Dehnung) über einen
   eigenen Einstellungsdialog pro Kanal, inklusive 2-Punkt-Kalibrierung
@@ -114,6 +117,8 @@ Verzeichnisse:
 - `config/` – persistente Konfiguration
 - `resources/` – Anwendungs-Icon (`icon.png`/`icon.ico`), Zugriff zur
   Laufzeit über `config.settings.get_resource_path()`
+- `tools/` – Hilfsskripte (`rewrite_parquet.py`: alte Parquet-Dateien
+  mit großen Row Groups neu schreiben)
 - `doc/` – ergänzende Dokumentation (Messung per Skript steuern, ein
   Arduino-Sketch zum Testen des seriellen Triggers)
 
