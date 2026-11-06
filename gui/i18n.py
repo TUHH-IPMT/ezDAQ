@@ -395,6 +395,15 @@ _translations = {
             "\"Angeschlossene Geräte\" auf \"Geräte suchen\" klicken."
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
+        "hw_channel_used_by": "{channel}  (belegt von \"{name}\" - wird getauscht)",
+        "hw_channel_swap_hint": (
+            "Bereits belegte Kanäle können ebenfalls gewählt werden - die "
+            "beiden Zeilen tauschen dann ihre Hardwarekanäle."
+        ),
+        "move_channel_up_button": "Nach oben",
+        "move_channel_down_button": "Nach unten",
+        "move_channel_up_tooltip": "Ausgewählte Kanäle eine Zeile nach oben verschieben",
+        "move_channel_down_tooltip": "Ausgewählte Kanäle eine Zeile nach unten verschieben",
         "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
         "hw_channel_device_offline": "{channel} (Gerät nicht verbunden)",
         "device_module_unsupported": "nicht unterstützt",
@@ -898,6 +907,15 @@ _translations = {
             "the \"Connected Devices\" section first."
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
+        "hw_channel_used_by": "{channel}  (assigned to \"{name}\" - will be swapped)",
+        "hw_channel_swap_hint": (
+            "Channels that are already assigned can be chosen too - the two "
+            "rows then swap their hardware channels."
+        ),
+        "move_channel_up_button": "Move Up",
+        "move_channel_down_button": "Move Down",
+        "move_channel_up_tooltip": "Move the selected channels up one row",
+        "move_channel_down_tooltip": "Move the selected channels down one row",
         "hw_channel_unsupported_module": "{channel} (module not supported)",
         "hw_channel_device_offline": "{channel} (device not connected)",
         "device_module_unsupported": "not supported",

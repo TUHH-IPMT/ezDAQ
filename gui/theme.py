@@ -808,6 +808,25 @@ def draw_minus_icon(size: int = 16) -> QPixmap:
     return pixmap
 
 
+def draw_chevron_icon(size: int = 16, up: bool = True) -> QPixmap:
+    """Chevron (up/down) for the move buttons of the channel table (see
+    `gui/widgets/channel_table.py::ChannelTableWidget`) - same stroke as
+    the plus/minus icons next to them."""
+    pixmap, painter = _new_icon_pixmap(size)
+    pen = QPen(nav_icon_color())
+    pen.setWidthF(max(1.8, size * 0.14))
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    m = size * 0.24
+    top, bottom = size * 0.36, size * 0.64
+    tip, base = (top, bottom) if up else (bottom, top)
+    painter.drawLine(QPointF(m, base), QPointF(size / 2, tip))
+    painter.drawLine(QPointF(size / 2, tip), QPointF(size - m, base))
+    painter.end()
+    return pixmap
+
+
 def draw_stop_icon(size: int = 16, y_offset: float = 0.0, color: QColor | None = None) -> QPixmap:
     """Square stop symbol for cancel/stop actions.
 
