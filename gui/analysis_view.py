@@ -1022,16 +1022,36 @@ class AnalysisView(QWidget):
         self._update_plot()
 
     def _update_plot(self) -> None:
-        for plot_widget in self._plot_widgets:
-            plot_widget.clear()
+        """Brings the plots in line with the tree (checked channels, plot
+        assignments, layout).
+
+        Curves that are already shown and stay unchanged are KEPT instead
+        of being rebuilt: this used to clear every plot and recreate every
+        curve on each change, so with long measurements (millions of
+        samples per channel) every further channel dragged onto a plot
+        got slower - each one re-prepared all the curves before it.
+        Kept/removed/added is decided per curve key (plot, file, channel,
+        source data, color, label); see `self._curve_cache`.
+        """
+        cache: dict[tuple, object] = self.__dict__.setdefault("_curve_cache", {})
+        wanted: dict[tuple, object] = {}
         self._curves = []
         self._plot_x_columns = {}
-        if not self._loaded_measurements:
+
+        def _finish() -> None:
+            for key, curve in cache.items():
+                if key not in wanted:
+                    self._plot_widgets[key[0]].getPlotItem().removeItem(curve)
+            cache.clear()
+            cache.update(wanted)
             self._refresh_plot_axis_labels()
+
+        if not self._loaded_measurements:
+            _finish()
             return
         active_indices = self._active_plot_indices()
         if not active_indices:
-            self._refresh_plot_axis_labels()
+            _finish()
             return
 
         # Iterate over tree: top-level items are files
@@ -1066,7 +1086,6 @@ class AnalysisView(QWidget):
                 x_column = meas.x_column if meas.x_column in data.columns else None
                 if x_column is None:
                     continue
-                x_values = data[x_column].to_numpy()
 
                 data_obj = ch_item.data(0, Qt.ItemDataRole.UserRole)
                 display_label = ch_item.text(0)
@@ -1098,21 +1117,30 @@ class AnalysisView(QWidget):
                 self._plot_x_columns.setdefault(plot_index, x_column)
 
                 color = pg.intColor(file_idx * 8 + ch_i, hues=max(self._tree.topLevelItemCount() * 8, 1))
-                curve = plot_widget.plot(
-                    x_values,
-                    data[chan_name].to_numpy(),
-                    pen=pg.mkPen(color=color, width=1.2),
-                    name=f"{file_item.text(0)} - {display_label}",
-                )
-                # Min/max decimation per pixel (see gui/live_view.py:44-53) -
-                # keeps zoom/pan smooth for very large datasets without
-                # losing short spikes/outliers (method="peak" instead of
-                # "mean").
-                curve.setDownsampling(auto=True, method="peak")
-                curve.setClipToView(True)
+                name = f"{file_item.text(0)} - {display_label}"
+                key = (plot_index, str(file_path_str), str(chan_name), id(meas), color.name(), name)
+                curve = cache.get(key)
+                if curve is None:
+                    curve = plot_widget.plot(
+                        data[x_column].to_numpy(),
+                        data[chan_name].to_numpy(),
+                        pen=pg.mkPen(color=color, width=1.2),
+                        name=name,
+                    )
+                    # Min/max decimation per pixel (see gui/live_view.py:44-53)
+                    # - keeps zoom/pan smooth for very large datasets without
+                    # losing short spikes/outliers (method="peak" instead of
+                    # "mean"). Deliberately set AFTER the curve is in the
+                    # plot, not as `plot()` arguments: PyQtGraph prepares the
+                    # display data right at construction, before there is a
+                    # view to downsample for, keeps that full-resolution
+                    # result and would then draw every single sample.
+                    curve.setDownsampling(auto=True, method="peak")
+                    curve.setClipToView(True)
+                wanted[key] = curve
                 self._curves.append(curve)
 
-        self._refresh_plot_axis_labels()
+        _finish()
 
     # ------------------------------------------------------------------ #
     # Analysis functions (FFT, low-/high-pass, smoothing)
