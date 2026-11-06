@@ -1505,6 +1505,7 @@ class ChannelTableWidget(QWidget):
             "plot_popout_y": channel.plot_popout_y,
             "plot_popout_width": channel.plot_popout_width,
             "plot_popout_height": channel.plot_popout_height,
+            "plot_group": channel.plot_group,
         }
 
     def _read_row(self, row: int) -> Channel:
@@ -1592,6 +1593,7 @@ class ChannelTableWidget(QWidget):
             plot_popout_y=display_settings.get("plot_popout_y"),
             plot_popout_width=display_settings.get("plot_popout_width"),
             plot_popout_height=display_settings.get("plot_popout_height"),
+            plot_group=str(display_settings.get("plot_group") or "").strip(),
         )
 
     def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:

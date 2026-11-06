@@ -254,6 +254,15 @@ _translations = {
             "Zeigt diesen Kanal statt im Hauptraster in einem eigenen, frei "
             "verschiebbaren Fenster an - verhindert Doppel-Darstellung."
         ),
+        "plot_group_own": "Eigener Plot",
+        "plot_group_item": "Plot {name}",
+        "plot_group_tooltip": (
+            "Kanäle mit demselben Plot werden gemeinsam in EINEN Plot "
+            "gezeichnet (mit Legende und gemeinsamer Y-Achse). Zeitfenster, "
+            "Hintergrund, Gitter, Y-Bereich, Achsentitel und eigenes Fenster "
+            "gelten dann für den ganzen Plot; Kurvenfarbe, Linienbreite und "
+            "Wertanzeige bleiben pro Kanal."
+        ),
         "axis_time": "Zeit",
         "storage_detail": "Datei: {file_size} — Rückstand: {pending} / {capacity} Samples ({percent} %)",
 
@@ -748,6 +757,15 @@ _translations = {
         "popout_button_tooltip": (
             "Shows this channel in its own, freely movable window instead of "
             "the main grid - prevents duplicate display."
+        ),
+        "plot_group_own": "Own plot",
+        "plot_group_item": "Plot {name}",
+        "plot_group_tooltip": (
+            "Channels with the same plot are drawn together into ONE plot "
+            "(with legend and a shared Y axis). Time window, background, "
+            "grid, Y range, axis titles and popout window then apply to the "
+            "whole plot; curve color, line width and the value readout stay "
+            "per channel."
         ),
         "axis_time": "Time",
         "storage_detail": "File: {file_size} — Backlog: {pending} / {capacity} Samples ({percent} %)",

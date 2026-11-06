@@ -57,6 +57,7 @@ import logging
 import math
 import time
 import weakref
+from dataclasses import dataclass
 
 import numpy as np
 import pyqtgraph as pg
@@ -66,6 +67,7 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QRegularExpressionVa
 from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -272,12 +274,162 @@ def _channel_display_key(channel: Channel) -> tuple[str, str]:
     return (channel.hardware_channel, channel.display_name)
 
 
+# Plot-wide settings: with several channels in ONE plot (see
+# `Channel.plot_group`/`_plot_slots`) these exist only once per plot - one
+# X axis means one time window, one plot area one background/grid/Y range.
+# They are therefore kept identical across the visible members of a group
+# (see `sync_plot_groups`); everything else (curve color/width, value
+# readout, visibility) stays per channel.
+PLOT_LEVEL_FIELDS = (
+    "plot_background",
+    "plot_grid_color",
+    "plot_y_min",
+    "plot_y_max",
+    "plot_autoscale",
+    "plot_time_window_seconds",
+    "plot_show_x_label",
+    "plot_show_y_label",
+    "plot_show_grid",
+    "plot_show_graph",
+    "plot_popout",
+    "plot_popout_x",
+    "plot_popout_y",
+    "plot_popout_width",
+    "plot_popout_height",
+)
+
+# Selectable group names in the channel display dialog ("Plot A", ...).
+PLOT_GROUP_NAMES = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+@dataclass(frozen=True)
+class _PlotSlot:
+    """ONE plot of the live view (main grid cell or own window): the
+    indices into `LiveView._channels` drawn into it, in channel order.
+    The first one ("lead") supplies the plot-wide settings (see
+    `PLOT_LEVEL_FIELDS`) - after `sync_plot_groups` they are identical
+    for all members anyway."""
+
+    indices: tuple[int, ...]
+
+    @property
+    def lead(self) -> int:
+        return self.indices[0]
+
+    @property
+    def is_group(self) -> bool:
+        return len(self.indices) > 1
+
+
+def _plot_slots(channels: list[Channel]) -> list[_PlotSlot]:
+    """Groups the VISIBLE channels (`Channel.plot_visible`) into plots:
+    every channel without `plot_group` gets its own plot (previous
+    behavior), channels with the same `plot_group` share one. A plot sits
+    at the position of its first member, the order is otherwise the
+    channel order."""
+    slots: list[list[int]] = []
+    by_group: dict[str, list[int]] = {}
+    for index, channel in enumerate(channels):
+        if not channel.plot_visible:
+            continue
+        group = (channel.plot_group or "").strip()
+        if not group:
+            slots.append([index])
+        elif group in by_group:
+            by_group[group].append(index)
+        else:
+            by_group[group] = [index]
+            slots.append(by_group[group])
+    return [_PlotSlot(tuple(indices)) for indices in slots]
+
+
+def sync_plot_groups(channels: list[Channel]) -> None:
+    """Copies the plot-wide settings (`PLOT_LEVEL_FIELDS`) of each group's
+    first visible channel to its other visible members, in place - so a
+    group can never end up with e.g. two different time windows (the
+    sweep buffer is sized per channel by `plot_time_window_seconds`, see
+    `LiveView._channel_display_capacity`). Hidden members are left alone;
+    they are synced once they become visible again."""
+    for slot in _plot_slots(channels):
+        if not slot.is_group:
+            continue
+        lead = channels[slot.lead]
+        for index in slot.indices[1:]:
+            for field in PLOT_LEVEL_FIELDS:
+                setattr(channels[index], field, getattr(lead, field))
+
+
+def _plot_title(channels: list[Channel]) -> str:
+    """Plot/window title: "Name [unit]" for a single channel (as before),
+    the channel names for a group (units are on the Y axis/legend)."""
+    if len(channels) == 1:
+        unit_suffix = f" [{channels[0].unit}]" if channels[0].unit else ""
+        return f"{channels[0].display_name}{unit_suffix}"
+    return ", ".join(channel.display_name for channel in channels)
+
+
+def _plot_axis_label(channels: list[Channel]) -> str:
+    """Y axis title of a plot. Single channel: as before (see
+    `_channel_axis_label`). Group with one common unit: just that unit -
+    the names are in the legend. Group with different units: every
+    channel with its unit, e.g. "Kraft [N], Weg [mm]" (ONE shared Y axis,
+    so the title has to say what is on it)."""
+    if len(channels) == 1:
+        return _channel_axis_label(channels[0])
+    units = {channel.unit for channel in channels}
+    if len(units) == 1:
+        unit = next(iter(units))
+        return f"[{unit}]" if unit else ""
+    return ", ".join(_channel_axis_label(channel) for channel in channels)
+
+
+def _union_value_range(
+    ranges: list[tuple[float, float] | None],
+) -> tuple[float, float] | None:
+    """Combined min/max of several curves for the shared Y axis of a
+    group (see `LiveView._apply_channel_y_range`). NaN of one curve is
+    ignored as long as another curve has a real value; for a single
+    curve the range passes through unchanged."""
+    present = [r for r in ranges if r is not None]
+    if not present:
+        return None
+    if len(present) == 1:
+        return present[0]
+    return (
+        float(np.fmin.reduce([r[0] for r in present])),
+        float(np.fmax.reduce([r[1] for r in present])),
+    )
+
+
 def _space_width_px(font: QFont) -> float:
     """Width of a space character in pixels for `font` - fixed gap
     between the value and the unit (see `ChannelPopoutWindow`/
     `LiveView._make_value_box`), instead of a "random" gap whose size
     would otherwise vary with layout/alignment."""
     return QFontMetrics(font).horizontalAdvance(" ")
+
+
+def _style_legend(plot_item) -> None:
+    """Legend of a plot group in the current theme: text in the theme
+    foreground color (PyQtGraph's default is a fixed light gray,
+    unreadable on the light theme) on a semi-transparent plot background,
+    so the legend stays readable where it overlaps the curves. Also
+    recolors entries that already exist (theme change) - PyQtGraph's
+    `setLabelTextColor` alone only affects entries added afterwards.
+    No-op for plots without a legend (single channel)."""
+    legend = getattr(plot_item, "legend", None)
+    if legend is None:
+        return
+    foreground = plot_foreground_color()
+    background = QColor(plot_background_color())
+    background.setAlpha(230)
+    border = QColor(foreground)
+    border.setAlpha(60)
+    legend.setLabelTextColor(foreground)
+    legend.setBrush(pg.mkBrush(background))
+    legend.setPen(pg.mkPen(border))
+    for _sample, label in legend.items:
+        label.setText(label.text, color=foreground)
 
 
 def _downsample_for_display(
@@ -544,6 +696,14 @@ class ChannelDisplayDialog(QDialog):
     This also makes e.g. "value only, no chart" possible (plot checkbox
     off, value checkbox on).
 
+    The "Plot" selection puts several channels into ONE shared plot (see
+    `Channel.plot_group`). The plot-wide settings (`PLOT_LEVEL_FIELDS`:
+    own window, plot on/off, background/grid, Y range, time span, axis
+    titles) are kept identical within a group right here in the dialog:
+    changing them for one member changes them for all, and a channel
+    joining a group takes over the group's current values. Curve
+    color/width and the value readout stay per channel.
+
     The "own window" checkbox (like every other field here) only takes
     effect after OK - unlike earlier versions of this dialog, clicking
     the checkbox does NOT immediately open a window. The actual
@@ -570,6 +730,11 @@ class ChannelDisplayDialog(QDialog):
         self._plot_settings: dict[tuple[str, str], dict] = {}
         self._value_settings: dict[tuple[str, str], dict] = {}
         self._rows: dict[tuple[str, str], dict[str, QWidget]] = {}
+        # Channel order (= `_plot_slots` order) - decides which member of
+        # a group is its lead when the plot-wide values are synced.
+        self._order: list[tuple[str, str]] = []
+        # Guards against the group propagation below re-triggering itself.
+        self._syncing_group = False
         # Per CHANNEL, not one shared set: the curve color a channel falls
         # back to depends on its position in the palette (see
         # `gui/theme.py::channel_curve_color`), so a single shared default
@@ -671,6 +836,25 @@ class ChannelDisplayDialog(QDialog):
             visible_check.setChecked(channel.plot_visible)
             row.addWidget(visible_check)
 
+            # Shared plot (see `Channel.plot_group`) - right after
+            # "active": like "own window", it decides WHERE the channel
+            # appears, not what of it.
+            group_combo = QComboBox()
+            group_combo.setToolTip(t("plot_group_tooltip"))
+            group_combo.addItem(t("plot_group_own"), "")
+            for name in PLOT_GROUP_NAMES[: max(1, min(len(PLOT_GROUP_NAMES), len(channels)))]:
+                group_combo.addItem(t("plot_group_item", name=name), name)
+            current_group = (channel.plot_group or "").strip()
+            if current_group and group_combo.findData(current_group) < 0:
+                # A stored name outside the offered range (e.g. more
+                # channels before) - keep it selectable instead of losing it.
+                group_combo.addItem(t("plot_group_item", name=current_group), current_group)
+            group_combo.setCurrentIndex(max(0, group_combo.findData(current_group)))
+            group_combo.currentIndexChanged.connect(
+                lambda _index, k=key: self._on_group_changed(k)
+            )
+            row.addWidget(group_combo)
+
             # Takes effect (like "active") only after OK via `results()`
             # - see class docstring above. Right after "active", BEFORE
             # the plot/value options - affects WHERE the channel appears,
@@ -729,7 +913,9 @@ class ChannelDisplayDialog(QDialog):
             # meaningless (none of it has any visible effect) - instead
             # of only disabling the popout checkbox (previous behavior),
             # now the ENTIRE remaining row is grayed out.
-            row_widgets = [popout_check, graph_check, graph_button, value_check, value_button]
+            row_widgets = [
+                group_combo, popout_check, graph_check, graph_button, value_check, value_button
+            ]
 
             def _on_visible_toggled(
                 checked: bool,
@@ -757,10 +943,22 @@ class ChannelDisplayDialog(QDialog):
             form.addRow(channel.display_name, row)
             self._rows[key] = {
                 "visible": visible_check,
+                "group": group_combo,
                 "popout": popout_check,
                 "graph": graph_check,
                 "value": value_check,
             }
+            self._order.append(key)
+            # `clicked`, not `toggled`: only a USER click is passed on to
+            # the rest of the group - unchecking "own window" because the
+            # channel was just deactivated (see `_on_visible_toggled`)
+            # must not take the popout away from the other members.
+            popout_check.clicked.connect(
+                lambda checked, k=key: self._propagate_checkbox(k, "popout", checked)
+            )
+            graph_check.clicked.connect(
+                lambda checked, k=key: self._propagate_checkbox(k, "graph", checked)
+            )
 
         button_box = QDialogButtonBox()
         ok_button = button_box.addButton(t("ok"), QDialogButtonBox.ButtonRole.AcceptRole)
@@ -770,6 +968,51 @@ class ChannelDisplayDialog(QDialog):
         # OUTSIDE the scroll area, so the buttons stay reachable however
         # many channels there are (see the scroll area above).
         outer_layout.addWidget(button_box)
+
+    def _group_of(self, key: tuple[str, str]) -> str:
+        return self._rows[key]["group"].currentData() or ""
+
+    def _group_members(self, key: tuple[str, str]) -> list[tuple[str, str]]:
+        """Other channels of `key`'s plot group (in channel order)."""
+        group = self._group_of(key)
+        if not group:
+            return []
+        return [k for k in self._order if k != key and self._group_of(k) == group]
+
+    def _propagate_checkbox(self, key: tuple[str, str], name: str, checked: bool) -> None:
+        """Plot-wide checkbox ("own window"/"plot") clicked for one member
+        -> same state for the whole group."""
+        if self._syncing_group:
+            return
+        self._syncing_group = True
+        try:
+            for other in self._group_members(key):
+                if self._rows[other]["visible"].isChecked():
+                    self._rows[other][name].setChecked(checked)
+        finally:
+            self._syncing_group = False
+
+    def _copy_plot_level_settings(self, source: tuple[str, str], target: tuple[str, str]) -> None:
+        for field in PLOT_LEVEL_FIELDS:
+            if field in self._plot_settings[source]:
+                self._plot_settings[target][field] = self._plot_settings[source][field]
+
+    def _on_group_changed(self, key: tuple[str, str]) -> None:
+        """A channel joining a group takes over the group's current
+        plot-wide values (time span, Y range, ..., own window, plot
+        on/off) - otherwise the first member's values would silently win
+        on OK anyway (see `results()`), unseen by the user."""
+        members = [k for k in self._group_members(key) if self._rows[k]["visible"].isChecked()]
+        if not members:
+            return
+        source = members[0]
+        self._copy_plot_level_settings(source, key)
+        self._syncing_group = True
+        try:
+            for name in ("popout", "graph"):
+                self._rows[key][name].setChecked(self._rows[source][name].isChecked())
+        finally:
+            self._syncing_group = False
 
     def column_count(self) -> int:
         """Channels placed side by side in the main grid, as chosen at the
@@ -791,6 +1034,10 @@ class ChannelDisplayDialog(QDialog):
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_sub_dialog_result(self._plot_settings, key, dialog)
+            # The plot-wide part (everything but curve color/width) holds
+            # for the whole group (see `PLOT_LEVEL_FIELDS`).
+            for other in self._group_members(key):
+                self._copy_plot_level_settings(key, other)
 
     def _open_value_settings(self, key: tuple[str, str], channel_name: str) -> None:
         dialog = ChannelValueSettingsDialog(
@@ -834,7 +1081,22 @@ class ChannelDisplayDialog(QDialog):
                 "plot_show_value": row["value"].isChecked(),
                 "plot_visible": row["visible"].isChecked(),
                 "plot_popout": row["popout"].isChecked(),
+                "plot_group": row["group"].currentData() or "",
             }
+        # Safety net on top of the live syncing above: the first ACTIVE
+        # member of each group (= the plot's lead, see `_plot_slots`)
+        # decides the plot-wide values for all active members.
+        leads: dict[str, tuple[str, str]] = {}
+        for key in self._order:
+            values = results[key]
+            group = values["plot_group"]
+            if not group or not values["plot_visible"]:
+                continue
+            lead = leads.setdefault(group, key)
+            if lead != key:
+                for field in PLOT_LEVEL_FIELDS:
+                    if field in results[lead]:
+                        values[field] = results[lead][field]
         return results
 
 
@@ -1179,28 +1441,47 @@ class ChannelValueSettingsDialog(QDialog):
 
 
 class ChannelPopoutWindow(QWidget):
-    """Standalone window with the live plot of a SINGLE channel.
+    """Standalone window with the live plot of ONE plot slot - a single
+    channel or a plot group (see `Channel.plot_group`/`_PlotSlot`).
 
     Opened when the "own window" checkbox in the channel display dialog
     was applied via OK (see `LiveView._rebuild_plots`/
     `_open_popout_window`). Deliberately holds NO timer of its own and
-    doesn't poll the ring buffer itself - the curve and Y range are
+    doesn't poll the ring buffer itself - the curves and Y range are
     updated by the same timer tick as the main plots (see
     `LiveView._on_timer_tick`), so the ring buffer isn't read twice.
+
+    `curves`/`value_labels`/`unit_labels` are aligned with `channels`
+    (the first one is the lead, see `_PlotSlot`); `curve`/`value_label`/
+    `unit_label` are the lead's, for the single-channel case.
     """
 
-    def __init__(self, channel: Channel, parent: QWidget | None = None) -> None:
+    def __init__(
+        self, channels: list[Channel] | Channel, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent, Qt.WindowType.Window)
+        if isinstance(channels, Channel):
+            channels = [channels]
+        self.channels: list[Channel] = list(channels)
+        channel = self.channels[0]
         self.hardware_channel = channel.hardware_channel
-        # Key for `LiveView._popout_windows` - NOT `hardware_channel`
-        # alone (see `_channel_display_key`).
+        # Key for `LiveView._popout_windows` - the LEAD channel's key, NOT
+        # `hardware_channel` alone (see `_channel_display_key`).
         self.display_key = _channel_display_key(channel)
+        # Which channels this window was built for - `LiveView._rebuild_plots`
+        # rebuilds the window if the group membership changes.
+        self.member_keys = tuple(_channel_display_key(c) for c in self.channels)
         # Live reference to the same Channel object as `LiveView` (see
         # `LiveView._open_popout_window`) - NOT copied, so that values
         # changed later (e.g. `plot_background` via the channel display
         # dialog) are visible here without extra effort (see
         # `_style_value_labels`).
         self._channel = channel
+        # Text colors of the value readouts (aligned with `channels`),
+        # set by `LiveView._apply_channel_appearance`: the curve color in
+        # a group (so a number can be matched to its curve), `None` =
+        # theme foreground (single channel, as before).
+        self.value_colors: list[str | None] = [None] * len(self.channels)
         # If the user closes the window, the C++/Qt object should
         # actually be destroyed (not just hidden) - `LiveView.
         # _on_popout_window_closed` reacts to this via the `destroyed`
@@ -1209,8 +1490,7 @@ class ChannelPopoutWindow(QWidget):
         # dialog) make the channel reappear in the main grid.
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
 
-        unit_suffix = f" [{channel.unit}]" if channel.unit else ""
-        title = f"{channel.display_name}{unit_suffix}"
+        title = _plot_title(self.channels)
         self.setWindowTitle(title)
         self.resize(640, 400)
 
@@ -1227,60 +1507,70 @@ class ChannelPopoutWindow(QWidget):
         outer_layout.addLayout(row)
 
         # Large, current value display to the left of the plot (see
-        # `Channel.plot_show_value`/`LiveView._on_timer_tick`) - number
-        # and unit in TWO separate, fixed-width labels (width computed
-        # directly from `Channel.plot_value_integer_digits`, see
+        # `Channel.plot_show_value`/`LiveView._on_timer_tick`) - one line
+        # per channel (stacked for a group), number and unit in TWO
+        # separate, fixed-width labels (width computed directly from
+        # `Channel.plot_value_integer_digits`, see
         # `_number_field_width_px`), otherwise the unit would visibly
-        # shift with every new value. `unit_label` is set once here and
-        # never updated per tick again.
+        # shift with every new value. The unit labels are set once here
+        # and never updated per tick again.
         #
-        # BOTH labels sit inside a SHARED container widget
+        # All labels sit inside a SHARED container widget
         # (`self._value_container`), NOT directly in the `row` layout:
         # the gap that `QHBoxLayout.setSpacing()` would otherwise leave
         # between them belongs to the WINDOW background (not the channel
         # color) and appears as a visible, differently colored bar
-        # between the number and the unit - the container itself
-        # therefore gets the same background color as the two labels in
-        # `_style_value_labels()`, so the gap is included in the color.
+        # between the number and the unit - the container (and every
+        # line) therefore gets the same background color as the labels
+        # in `_style_value_labels()`, so the gap is included in the color.
         self._value_container = QWidget()
-        value_row = QHBoxLayout(self._value_container)
-        value_row.setContentsMargins(0, 0, 0, 0)
+        value_column = QVBoxLayout(self._value_container)
+        value_column.setContentsMargins(0, 0, 0, 0)
+        value_column.addStretch(1)
 
         number_font = QFont()
         number_font.setPointSize(_VALUE_NUMBER_POINT_SIZE)
         number_font.setBold(True)
-        number_field_width = _number_field_width_px(
-            number_font, channel.plot_value_integer_digits, channel.plot_value_decimal_digits
-        )
 
-        self.value_label = QLabel("--")
-        self.value_label.setFixedWidth(number_field_width)
-        self.value_label.setContentsMargins(0, 0, 0, 0)
-        # RIGHT-aligned, not centered: the gap to the unit should
-        # correspond exactly to one space width (see
-        # `value_row.setSpacing` below) - centered, the actual gap would
-        # depend on the surrounding whitespace of the (fixed-format, see
-        # `_format_channel_value`) number in the field.
-        self.value_label.setAlignment(
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-        )
-        value_row.addWidget(self.value_label)
+        self._value_rows: list[QWidget] = []
+        self.value_labels: list[QLabel] = []
+        self.unit_labels: list[QLabel] = []
+        for member in self.channels:
+            line = QWidget()
+            value_row = QHBoxLayout(line)
+            value_row.setContentsMargins(0, 0, 0, 0)
 
-        self.unit_label = QLabel(channel.unit)
-        self.unit_label.setFixedWidth(_VALUE_UNIT_WIDTH)
-        self.unit_label.setContentsMargins(0, 0, 0, 0)
-        self.unit_label.setAlignment(
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-        )
-        value_row.addWidget(self.unit_label)
+            value_label = QLabel("--")
+            value_label.setContentsMargins(0, 0, 0, 0)
+            # RIGHT-aligned, not centered: the gap to the unit should
+            # correspond exactly to one space width (see
+            # `value_row.setSpacing` below) - centered, the actual gap
+            # would depend on the surrounding whitespace of the
+            # (fixed-format, see `_format_channel_value`) number in the
+            # field.
+            value_label.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            value_row.addWidget(value_label)
 
-        value_row.setSpacing(round(_space_width_px(number_font)))
+            unit_label = QLabel(member.unit)
+            unit_label.setFixedWidth(_VALUE_UNIT_WIDTH)
+            unit_label.setContentsMargins(0, 0, 0, 0)
+            unit_label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            value_row.addWidget(unit_label)
+            value_row.setSpacing(round(_space_width_px(number_font)))
 
-        # Only the container controls visibility (see
-        # `LiveView._apply_channel_appearance`) - for the two labels
-        # themselves, individual visibility stays at the Qt default
-        # (visible), they follow their parent widget automatically anyway.
-        self._value_container.setVisible(channel.plot_show_value)
+            value_column.addWidget(line)
+            self._value_rows.append(line)
+            self.value_labels.append(value_label)
+            self.unit_labels.append(unit_label)
+        value_column.addStretch(1)
+        self.value_label = self.value_labels[0]
+        self.unit_label = self.unit_labels[0]
+        self._apply_number_width()
+        self.apply_value_visibility()
         row.addWidget(self._value_container)
 
         self.plot_widget = pg.PlotWidget()
@@ -1292,16 +1582,28 @@ class ChannelPopoutWindow(QWidget):
         # so the time unit is consistently shown in square brackets
         # everywhere.
         self.plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
-        self.plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
+        self.plot_item.setLabel("left", _plot_axis_label(self.channels), **_axis_label_style())
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
+        if len(self.channels) > 1:
+            # Created BEFORE the curves: PyQtGraph only adds curves with a
+            # `name` to a legend that already exists.
+            self.plot_item.addLegend(offset=(10, 10))
+            _style_legend(self.plot_item)
 
-        self.curve = self.plot_item.plot(pen=pg.mkPen(color=curve_color(), width=channel.plot_line_width))
-        # NO `autoDownsample`: the data already arrives pre-compressed
-        # via `_downsample_for_display()` - PyQtGraph's own,
-        # view-range-dependent variant would needlessly run over the
-        # (now small) point set again on every tick (see there).
-        self.curve.setClipToView(True)
+        self.curves = []
+        for member in self.channels:
+            curve = self.plot_item.plot(
+                pen=pg.mkPen(color=curve_color(), width=member.plot_line_width),
+                name=member.display_name if len(self.channels) > 1 else None,
+            )
+            # NO `autoDownsample`: the data already arrives pre-compressed
+            # via `_downsample_for_display()` - PyQtGraph's own,
+            # view-range-dependent variant would needlessly run over the
+            # (now small) point set again on every tick (see there).
+            curve.setClipToView(True)
+            self.curves.append(curve)
+        self.curve = self.curves[0]
         self.plot_item.enableAutoRange(x=False)
         # See `Channel.plot_show_graph` - a normal Qt widget (not a
         # PyQtGraph `GraphicsLayout`), so `setVisible()` cleanly returns
@@ -1313,23 +1615,42 @@ class ChannelPopoutWindow(QWidget):
         self._retheme()
         connect_theme_changed(self._retheme)
 
+    def set_channels(self, channels: list[Channel]) -> None:
+        """Points the window at the current Channel objects (same members,
+        e.g. after the live view's channel list was replaced) - so
+        geometry tracking and styling use the live objects."""
+        self.channels = list(channels)
+        self._channel = self.channels[0]
+
+    def apply_value_visibility(self) -> None:
+        """One readout line per channel with `plot_show_value`; the whole
+        container only if at least one of them is on."""
+        any_visible = False
+        for line, member in zip(self._value_rows, self.channels):
+            line.setVisible(member.plot_show_value)
+            any_visible = any_visible or member.plot_show_value
+        self._value_container.setVisible(any_visible)
+
     def _apply_number_width(self) -> None:
-        """Adjusts the fixed width of `value_label` to
+        """Adjusts the fixed width of the number labels to
         `Channel.plot_value_integer_digits` - separate from
         `_style_value_labels`, since a change in integer digits (unlike
         color/theme) affects the field width itself (see
-        `LiveView._apply_display_settings_to_live_channels`)."""
+        `LiveView._apply_display_settings_to_live_channels`). ONE width
+        for all lines (the widest format), so the units line up."""
         font = QFont()
         font.setPointSize(_VALUE_NUMBER_POINT_SIZE)
         font.setBold(True)
-        self.value_label.setFixedWidth(
-            _number_field_width_px(
-                font, self._channel.plot_value_integer_digits, self._channel.plot_value_decimal_digits
-            )
+        width = _number_field_width_px(
+            font,
+            max(c.plot_value_integer_digits for c in self.channels),
+            max(c.plot_value_decimal_digits for c in self.channels),
         )
+        for label in self.value_labels:
+            label.setFixedWidth(width)
 
     def _style_value_labels(self) -> None:
-        """Colors both the text AND background of the number/unit -
+        """Colors both the text AND background of the numbers/units -
         shared by `_retheme` (theme change) AND
         `LiveView._apply_channel_appearance` (channel display dialog
         changed live).
@@ -1340,43 +1661,53 @@ class ChannelPopoutWindow(QWidget):
         applies to the actual plot area itself (see
         `LiveView._rebuild_plots`).
 
-        ALSO colors `self._value_container` (not just the two labels
-        themselves): the gap that `QHBoxLayout.setSpacing()` leaves
-        between the number and the unit belongs to the container, not
-        the labels - without its own background color, a visible,
+        ALSO colors `self._value_container` and every line (not just the
+        labels themselves): the gap that `QHBoxLayout.setSpacing()`
+        leaves between the number and the unit belongs to the container,
+        not the labels - without its own background color, a visible,
         differently colored bar would remain there."""
         foreground = plot_foreground_color()
         background = plot_container_background_color()
         self._value_container.setStyleSheet(f"background-color: {background};")
-        self.value_label.setStyleSheet(
-            f"color: {foreground}; background-color: {background}; "
-            f"font-size: {_VALUE_NUMBER_POINT_SIZE}pt; font-weight: bold;"
-        )
-        self.unit_label.setStyleSheet(
-            f"color: {foreground}; background-color: {background}; "
-            f"font-size: {_VALUE_UNIT_POINT_SIZE}pt;"
-        )
+        for line, value_label, unit_label, color in zip(
+            self._value_rows, self.value_labels, self.unit_labels, self.value_colors
+        ):
+            text_color = color or foreground
+            line.setStyleSheet(f"background-color: {background};")
+            value_label.setStyleSheet(
+                f"color: {text_color}; background-color: {background}; "
+                f"font-size: {_VALUE_NUMBER_POINT_SIZE}pt; font-weight: bold;"
+            )
+            unit_label.setStyleSheet(
+                f"color: {text_color}; background-color: {background}; "
+                f"font-size: {_VALUE_UNIT_POINT_SIZE}pt;"
+            )
 
     def _retheme(self) -> None:
         style_plot_container(self.plot_widget)
         style_plot_item(self.plot_item)
+        _style_legend(self.plot_item)
         self._style_value_labels()
 
     def moveEvent(self, event) -> None:  # noqa: N802 - Qt-API
         # Keeps `Channel.plot_popout_x/y` continuously in sync with the
-        # actual window position (not just on close) - `self._channel`
-        # is the same live reference as in `LiveView` (see class
+        # actual window position (not just on close) - `self.channels`
+        # are the same live references as in `LiveView` (see class
         # docstring), so changes are immediately visible there too. Is
         # later (e.g. on app exit, see `gui/main_window.py`) carried
-        # over into the setup channel table and thus persisted.
+        # over into the setup channel table and thus persisted. ALL
+        # members of a group, since the geometry is a plot-wide setting
+        # (see `PLOT_LEVEL_FIELDS`).
         super().moveEvent(event)
-        self._channel.plot_popout_x = self.x()
-        self._channel.plot_popout_y = self.y()
+        for member in self.channels:
+            member.plot_popout_x = self.x()
+            member.plot_popout_y = self.y()
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt-API
         super().resizeEvent(event)
-        self._channel.plot_popout_width = self.width()
-        self._channel.plot_popout_height = self.height()
+        for member in self.channels:
+            member.plot_popout_width = self.width()
+            member.plot_popout_height = self.height()
 
 
 class LiveView(QWidget):
@@ -1487,14 +1818,21 @@ class LiveView(QWidget):
         self._channel_y_auto_active: dict[tuple[str, str], bool] = {}
 
         self._plot_widget = pg.GraphicsLayoutWidget()
+        # One entry per PLOT of the main grid: `self._plot_items[p]` shows
+        # the channels `self._plot_slots[p].indices` (one, or several for
+        # a plot group, see `Channel.plot_group`/`_plot_slots`).
         self._plot_items: list = []
+        self._plot_slots: list[_PlotSlot] = []
+        # One entry per CURVE (= per displayed channel):
+        # `self._curves[i]`/`self._value_labels[i]` belong to channel
+        # `self._channels[self._curve_channel_indices[i]]` and sit in plot
+        # `self._plot_items[self._curve_plot_positions[i]]` - NO LONGER
+        # necessarily `self._channels[i]`, since invisible channels
+        # (`Channel.plot_visible=False`) get no curve and grouped
+        # channels share a plot (see `_rebuild_plots`).
         self._curves: list = []
-        # `self._curves[i]`/`self._plot_items[i]`/`self._value_labels[i]`
-        # belong to channel `self._channels[self._curve_channel_indices[i]]`
-        # - NO LONGER necessarily `self._channels[i]`, since invisible
-        # channels (`Channel.plot_visible=False`) no longer get a
-        # subplot (see `_rebuild_plots`).
         self._curve_channel_indices: list[int] = []
+        self._curve_plot_positions: list[int] = []
         # Large, current value display next to each subplot in the main
         # grid (see `_make_value_box`/`_rebuild_plots`/`_on_timer_tick`)
         # - own windows (`ChannelPopoutWindow`) have their own,
@@ -1531,6 +1869,13 @@ class LiveView(QWidget):
         # its main-grid subplot don't "cache away" each other's scaling.
         self._popout_windows: dict[tuple[str, str], ChannelPopoutWindow] = {}
         self._popout_y_auto_active: dict[tuple[str, str], bool] = {}
+        # Which channels each own window shows (same key as
+        # `_popout_windows`, = the lead channel's key, see `_PlotSlot`).
+        self._popout_slots: dict[tuple[str, str], _PlotSlot] = {}
+        # `id()`s of windows the view itself is closing (group changed,
+        # popout switched off) - their `destroyed` must not be mistaken
+        # for the user closing the window (see `_on_popout_window_closed`).
+        self._popout_programmatic_closes: set[int] = set()
 
         # Channels per row in the main grid (see `_rebuild_plots`). Set from
         # the persisted setting at startup, see `set_plot_columns`.
@@ -1710,6 +2055,7 @@ class LiveView(QWidget):
         """
         if self._reader_id is not None or channels == self._channels:
             return
+        sync_plot_groups(channels)
         self._channels = channels
         self._rebuild_plots()
 
@@ -1762,6 +2108,7 @@ class LiveView(QWidget):
                 `sample_rate_hz` as their native rate, unchanged
                 behavior as before.
         """
+        sync_plot_groups(channels)
         self._channels = channels
         self._sample_rate_hz = sample_rate_hz
         self._rate_groups = rate_groups or []
@@ -2032,8 +2379,8 @@ class LiveView(QWidget):
             # `_apply_axis_label_visibility`) - without this, switching
             # the language would bring back an X title turned off per
             # channel.
-            if pos < len(self._curve_channel_indices):
-                channel = self._channels[self._curve_channel_indices[pos]]
+            if pos < len(self._plot_slots):
+                channel = self._channels[self._plot_slots[pos].lead]
                 _apply_axis_label_visibility(plot_item, channel)
 
         # Own windows (see `ChannelPopoutWindow`) are NOT part of
@@ -2064,15 +2411,18 @@ class LiveView(QWidget):
         self._retheme_action_button_icons()
         for pos, plot_item in enumerate(self._plot_items):
             style_plot_item(plot_item)
-            channel = self._channels[self._curve_channel_indices[pos]]
+            _style_legend(plot_item)
+            channel = self._channels[self._plot_slots[pos].lead]
             plot_item.getViewBox().setBackgroundColor(_channel_background_color(channel))
+        for pos in range(len(self._curves)):
             # Boxes/labels only exist if `channel.plot_show_value` is set
             # (see `_rebuild_plots`) - otherwise the plot reclaims their
             # column space instead of just occupying invisible empty
             # space. Deliberately ALWAYS the window background, NOT the
             # individual channel color (see `_rebuild_plots` for the
             # reasoning) - the channel's own color only applies to the
-            # plot area itself.
+            # plot area itself. Text colors are (re)applied by
+            # `_apply_channel_appearance()` below (curve color in a group).
             if self._value_boxes[pos] is not None:
                 self._value_boxes[pos].setBackgroundColor(plot_container_background_color())
             if self._value_unit_boxes[pos] is not None:
@@ -2255,6 +2605,7 @@ class LiveView(QWidget):
         changed = False
         visibility_changed = False
         time_window_changed = False
+        time_windows_before = [c.plot_time_window_seconds for c in self._channels]
         integer_digits_changed = False
         refresh_rate_changed = False
         show_value_changed = False
@@ -2326,7 +2677,17 @@ class LiveView(QWidget):
                 visibility_changed = True
             channel.plot_visible = new_visible
             channel.plot_popout = new_popout
+            new_group = str(values.get("plot_group", channel.plot_group) or "").strip()
+            if new_group != channel.plot_group:
+                visibility_changed = True
+            channel.plot_group = new_group
             changed = True
+        # Plot-wide settings identical within each group (see
+        # `sync_plot_groups`) - may change a member's time window, which
+        # is why that is compared only AFTER syncing.
+        sync_plot_groups(self._channels)
+        if [c.plot_time_window_seconds for c in self._channels] != time_windows_before:
+            time_window_changed = True
         if refresh_rate_changed:
             # Otherwise a rate just lowered would keep the OLD, already
             # running deadline and the next refresh could come up to one
@@ -2437,10 +2798,22 @@ class LiveView(QWidget):
         related lookups (see there)."""
         return next((c for c in self._channels if _channel_display_key(c) == key), None)
 
-    def _open_popout_window(self, channel: Channel) -> None:
-        """Opens a standalone window with the live plot of a single
-        channel (see `ChannelPopoutWindow`), or activates an already-open
-        window for it instead of opening a second one."""
+    def _open_popout_window(self, target: "_PlotSlot | Channel") -> None:
+        """Opens a standalone window with the live plot of ONE plot slot
+        (single channel or plot group, see `ChannelPopoutWindow`), or
+        activates an already-open window for it instead of opening a
+        second one. `target` may also be a single `Channel` (its slot is
+        looked up)."""
+        if isinstance(target, Channel):
+            index = self._channel_index(target)
+            slot = next(
+                (s for s in _plot_slots(self._channels) if index in s.indices),
+                _PlotSlot((index,)),
+            )
+        else:
+            slot = target
+        members = [self._channels[i] for i in slot.indices]
+        channel = members[0]
         key = _channel_display_key(channel)
         existing = self._popout_windows.get(key)
         if existing is not None:
@@ -2448,17 +2821,16 @@ class LiveView(QWidget):
             existing.activateWindow()
             return
 
-        window = ChannelPopoutWindow(channel, self)
-        channel_index = self._channels.index(channel)
-        x_min = self._channel_cycle_starts.get(channel_index, 0.0)
+        window = ChannelPopoutWindow(members, self)
+        x_min = self._channel_cycle_starts.get(slot.lead, 0.0)
         window.plot_item.setXRange(
             x_min,
             x_min + channel.plot_time_window_seconds,
             padding=0,
         )
-        self._apply_channel_curve_style(
-            window.plot_item, window.curve, channel, channel_index
-        )
+        self._apply_plot_style(window.plot_item, channel)
+        for curve, index in zip(window.curves, slot.indices):
+            self._apply_curve_style(curve, self._channels[index], index)
         self._apply_channel_y_range(window.plot_item, channel, None, self._popout_y_auto_active)
         # IMPORTANT: the closure holds `self` (LiveView) ONLY as a
         # `weakref`, not directly - otherwise a real reference cycle
@@ -2471,13 +2843,17 @@ class LiveView(QWidget):
         # (`NameError: cannot access free variable 'self'`) - reproducible
         # via `profile_live_tick.py` (creating/discarding several LiveView
         # instances in quick succession). With `weakref`, no cycle forms
-        # at all, plain refcounting is enough to clean up.
+        # at all, plain refcounting is enough to clean up. The window
+        # itself only as its `id()`, for the same reason.
         view_ref = weakref.ref(self)
+        window_id = id(window)
 
-        def _on_window_destroyed(_obj=None, key=key, view_ref=view_ref) -> None:
+        def _on_window_destroyed(
+            _obj=None, key=key, view_ref=view_ref, window_id=window_id
+        ) -> None:
             view = view_ref()
             if view is not None:
-                view._on_popout_window_closed(key)
+                view._on_popout_window_closed(key, window_id)
 
         window.destroyed.connect(_on_window_destroyed)
 
@@ -2517,7 +2893,31 @@ class LiveView(QWidget):
             cascade_offset = 32 * len(self._popout_windows)
             window.move(base.x() + 60 + cascade_offset, base.y() + 60 + cascade_offset)
         self._popout_windows[key] = window
+        self._popout_slots[key] = slot
         window.show()
+
+    def _close_popout_window(self, key: tuple[str, str]) -> None:
+        """Closes an own window ON BEHALF OF THE VIEW (popout switched off,
+        group membership changed) - removed from the tracking right away,
+        so a replacement can be opened under the same key immediately,
+        and marked so its (queued) `destroyed` doesn't reset
+        `plot_popout` like a close by the user would (see
+        `_on_popout_window_closed`)."""
+        window = self._popout_windows.pop(key, None)
+        self._popout_slots.pop(key, None)
+        self._popout_y_auto_active.pop(key, None)
+        if window is not None:
+            self._popout_programmatic_closes.add(id(window))
+            window.close()
+
+    def _channel_index(self, channel: Channel) -> int:
+        """Index of `channel` in `self._channels` - by identity first
+        (two channels can compare equal as dataclasses), by value as a
+        fallback."""
+        for index, candidate in enumerate(self._channels):
+            if candidate is channel:
+                return index
+        return self._channels.index(channel)
 
     def get_open_popout_geometries(self) -> dict[tuple[str, str], tuple[int, int, int, int]]:
         """Returns position/size (x, y, width, height) of all currently
@@ -2534,13 +2934,20 @@ class LiveView(QWidget):
             for key, window in self._popout_windows.items()
         }
 
-    def _on_popout_window_closed(self, key: tuple[str, str]) -> None:
+    def _on_popout_window_closed(
+        self, key: tuple[str, str], window_id: int | None = None
+    ) -> None:
         """Cleans up tracking of a closed own window
         (`self._popout_windows`). If the window was closed directly by
         the user (e.g. via the X, instead of the checkbox in the
-        dialog), the channel shouldn't vanish without a trace but
-        reappear in the main grid - hence `plot_popout` is also reset and
-        rebuilt here.
+        dialog), the channel(s) shouldn't vanish without a trace but
+        reappear in the main grid - hence `plot_popout` is also reset
+        (for the whole plot group) and rebuilt here.
+
+        `window_id` identifies the window that was destroyed: a window
+        the view closed itself (see `_close_popout_window`) is ignored
+        here, and so is a stale signal for a window that has meanwhile
+        been replaced by a new one under the same key.
 
         `destroyed` is a QUEUED connection and can therefore still fire
         AFTER the live view itself has already been destroyed (e.g. when
@@ -2548,13 +2955,24 @@ class LiveView(QWidget):
         `sip.isdeleted` prevents accessing an already torn-down
         `self._plot_widget` in `_rebuild_plots()` in that case.
         """
+        programmatic = self.__dict__.get("_popout_programmatic_closes", set())
+        if window_id is not None and window_id in programmatic:
+            programmatic.discard(window_id)
+            return
+        current = self._popout_windows.get(key)
+        if window_id is not None and current is not None and id(current) != window_id:
+            return
         self._popout_windows.pop(key, None)
         self._popout_y_auto_active.pop(key, None)
+        slot = self.__dict__.get("_popout_slots", {}).pop(key, None)
         if sip.isdeleted(self):
             return
         channel = self._find_channel_by_key(key)
         if channel is not None and channel.plot_popout:
-            channel.plot_popout = False
+            indices = slot.indices if slot is not None else (self._channel_index(channel),)
+            for index in indices:
+                if index < len(self._channels):
+                    self._channels[index].plot_popout = False
             self._rebuild_plots()
 
     # ------------------------------------------------------------------ #
@@ -2571,6 +2989,7 @@ class LiveView(QWidget):
         box_width_px: float,
         align: str = "center",
         margin_px: float = 0.0,
+        layout=None,
     ) -> tuple[pg.ViewBox, pg.TextItem]:
         """Creates an axis-/interaction-free `ViewBox` with a `TextItem`
         for one cell of the value readout (see `_rebuild_plots`) -
@@ -2584,8 +3003,13 @@ class LiveView(QWidget):
         gap between the two ALWAYS equals exactly one space-character
         width (see `_rebuild_plots`), instead of depending on the
         (variously wide) text itself.
+
+        `layout`: nested `GraphicsLayout` to place the box in (stacked
+        readouts of a plot group, see `_rebuild_plots`) - default is the
+        main grid itself.
         """
-        box = self._plot_widget.addViewBox(row=row, col=col, lockAspect=False)
+        target = layout if layout is not None else self._plot_widget
+        box = target.addViewBox(row=row, col=col, lockAspect=False)
         box.setMouseEnabled(x=False, y=False)
         box.setMenuEnabled(False)
         box.setRange(xRange=(-1, 1), yRange=(-1, 1), padding=0)
@@ -2609,26 +3033,31 @@ class LiveView(QWidget):
         return box, text_item
 
     def _rebuild_plots(self) -> None:
-        """Creates a separate subplot for each channel visible in the main
-        grid (with an independent X axis, see
-        `Channel.plot_time_window_seconds`).
+        """Creates one subplot per PLOT of the main grid (with an
+        independent X axis, see `Channel.plot_time_window_seconds`) - a
+        single channel, or several channels of the same plot group as
+        several curves with a legend (see `Channel.plot_group`/
+        `_plot_slots`).
 
         A channel does NOT appear here if it is either completely
-        disabled (`Channel.plot_visible=False`) OR is instead shown in
-        its own window (`Channel.plot_popout=True`, see
-        `ChannelPopoutWindow`/`_open_popout_window`) - so every visible
-        channel ends up in EXACTLY one place, never twice.
+        disabled (`Channel.plot_visible=False`) OR its plot is instead
+        shown in its own window (`plot_popout=True` of the plot's lead
+        channel, see `ChannelPopoutWindow`/`_open_popout_window`) - so
+        every visible channel ends up in EXACTLY one place, never twice.
 
-        `self._curve_channel_indices[i]` records which index into
-        `self._channels` `self._curves[i]`/`self._plot_items[i]` refers
-        to - hidden/popped-out channels are skipped, so curve position
-        and channel index in `self._channels` are NO LONGER necessarily
+        Per plot: `self._plot_items[p]`/`self._plot_slots[p]`. Per curve:
+        `self._curves[i]`/`self._curve_channel_indices[i]` (index into
+        `self._channels`)/`self._curve_plot_positions[i]` (its plot) plus
+        the value readout boxes - hidden/popped-out channels are skipped,
+        so curve position and channel index are NOT necessarily
         identical (see `_on_timer_tick`).
         """
         self._plot_widget.clear()
         self._plot_items = []
+        self._plot_slots = []
         self._curves = []
         self._curve_channel_indices = []
+        self._curve_plot_positions = []
         self._value_boxes = []
         self._value_labels = []
         self._value_unit_boxes = []
@@ -2643,9 +3072,7 @@ class LiveView(QWidget):
         # MOST configured integer digits (see
         # `Channel.plot_value_integer_digits`/`_number_field_width_px`),
         # since the column width in the `GraphicsLayoutWidget` applies to
-        # all rows together. Must be settled BEFORE the loop, since it's
-        # needed for the right-aligned positioning of every individual
-        # number (see `_make_value_box`).
+        # the whole column, i.e. to every plot in it.
         number_font = QFont()
         number_font.setPointSize(_VALUE_NUMBER_POINT_SIZE)
         number_font.setBold(True)
@@ -2656,145 +3083,110 @@ class LiveView(QWidget):
         )
         value_unit_gap = _space_width_px(number_font)
 
-        # Channels flow into a grid of `self._plot_columns` cells per row
-        # (see `set_plot_columns`). Each cell spans THREE layout columns:
-        # number, unit, plot - so cell c starts at layout column c * 3.
-        # With the default of one column this is exactly the previous
-        # one-channel-per-row layout.
+        slots = _plot_slots(self._channels)
         columns = max(1, self._plot_columns)
         position = 0
-        for index, channel in enumerate(self._channels):
-            if not channel.plot_visible or channel.plot_popout:
+        for slot in slots:
+            lead = self._channels[slot.lead]
+            if lead.plot_popout:
                 continue
-            background = _channel_background_color(channel)
+            members = [self._channels[i] for i in slot.indices]
+            background = _channel_background_color(lead)
             row, cell = divmod(position, columns)
             col_base = cell * 3
 
-            # Large value readout LEFT of the subplot (see
-            # `Channel.plot_show_value`/`_on_timer_tick`) - number (column
-            # 0, right-aligned) and unit (column 1, left-aligned with
-            # `value_unit_gap` spacing) in TWO separate, fixed-width
-            # `ViewBox`es (see `setColumnFixedWidth` below AND
-            # `_make_value_box`) - the gap between the two therefore
-            # ALWAYS equals exactly one space-character width, regardless
-            # of the (fixed-format, see `_format_channel_value`) text
-            # content. DELIBERATELY `ViewBox`+`TextItem` instead of a
-            # plain `LabelItem`: `LabelItem.setText()` internally sets its
-            # own `minimumWidth` to the width of the JUST-rendered text
-            # (`updateMin()`) - that kept breaking the fixed column width
-            # on every new number value and made the plot visibly shift
-            # along with it. A `ViewBox`, on the other hand, has no
-            # content-dependent minimum width.
-            #
-            # Background color of the value-readout boxes is ALWAYS the
-            # window background color (`plot_container_background_color()`),
-            # NOT the individual channel color (`background` above, only
-            # for the plot ViewBox itself) - the channel's own color
-            # should apply exclusively within the actual plot area,
-            # everything around it (including this readout) follows the
-            # window background.
-            #
-            # Boxes are ONLY created if `plot_show_value` is set
-            # (otherwise `None`) - in that case the plot instead gets
-            # `colspan=3` and claims the freed-up column width itself. A
-            # plain `.setVisible(False)` on a box that's created anyway
-            # would NOT give back its FIXED grid column width
-            # (`setColumnFixedWidth` below) - the plot would stay confined
-            # to column 2, with visible empty space to its left. As a
-            # consequence, changing `plot_show_value` now needs a full
-            # `_rebuild_plots()` instead of just
-            # `_apply_channel_appearance()` (see
-            # `_apply_display_settings_to_live_channels`) - the unit is
-            # set ONCE here and never updated again per tick afterward.
-            if channel.plot_show_value:
-                value_box, value_text = self._make_value_box(
-                    row,
-                    col_base,
-                    "--",
-                    point_size=_VALUE_NUMBER_POINT_SIZE,
-                    bold=True,
-                    box_width_px=number_field_width,
-                    align="right",
-                )
-                value_box.setBackgroundColor(plot_container_background_color())
-
-                unit_box, unit_text = self._make_value_box(
-                    row,
-                    col_base + 1,
-                    channel.unit,
-                    point_size=_VALUE_UNIT_POINT_SIZE,
-                    bold=False,
-                    box_width_px=_VALUE_UNIT_WIDTH,
-                    align="left",
-                    margin_px=value_unit_gap,
-                )
-                unit_box.setBackgroundColor(plot_container_background_color())
+            # Value readouts: one per channel with `plot_show_value` -
+            # for a group STACKED in a nested layout inside the number/
+            # unit columns (one line per channel, in its curve color, see
+            # `_apply_channel_appearance`).
+            value_indices = [i for i in slot.indices if self._channels[i].plot_show_value]
+            boxes: dict[int, tuple] = {}
+            if value_indices:
+                number_layout = unit_layout = None
+                if slot.is_group:
+                    number_layout = self._plot_widget.addLayout(row=row, col=col_base)
+                    unit_layout = self._plot_widget.addLayout(row=row, col=col_base + 1)
+                    for layout in (number_layout, unit_layout):
+                        layout.setContentsMargins(0, 0, 0, 0)
+                        layout.setSpacing(0)
+                for line, index in enumerate(value_indices):
+                    value_box, value_text = self._make_value_box(
+                        line if slot.is_group else row,
+                        0 if slot.is_group else col_base,
+                        "--",
+                        point_size=_VALUE_NUMBER_POINT_SIZE,
+                        bold=True,
+                        box_width_px=number_field_width,
+                        align="right",
+                        layout=number_layout,
+                    )
+                    value_box.setBackgroundColor(plot_container_background_color())
+                    unit_box, unit_text = self._make_value_box(
+                        line if slot.is_group else row,
+                        0 if slot.is_group else col_base + 1,
+                        self._channels[index].unit,
+                        point_size=_VALUE_UNIT_POINT_SIZE,
+                        bold=False,
+                        box_width_px=_VALUE_UNIT_WIDTH,
+                        align="left",
+                        margin_px=value_unit_gap,
+                        layout=unit_layout,
+                    )
+                    unit_box.setBackgroundColor(plot_container_background_color())
+                    boxes[index] = (value_box, value_text, unit_box, unit_text)
                 plot_col, plot_colspan = col_base + 2, 1
             else:
-                value_box = value_text = unit_box = unit_text = None
                 plot_col, plot_colspan = col_base, 3
 
-            unit_suffix = f" [{channel.unit}]" if channel.unit else ""
             plot_item = self._plot_widget.addPlot(
                 row=row,
                 col=plot_col,
                 colspan=plot_colspan,
-                title=f"{channel.display_name}{unit_suffix}",
+                title=_plot_title(members),
             )
-            plot_item.showGrid(x=channel.plot_show_grid, y=channel.plot_show_grid, alpha=_GRID_ALPHA)
-            # `units=` NOT used (see `ChannelPopoutWindow.__init__`) -
-            # time unit consistently in square brackets everywhere.
+            plot_item.showGrid(x=lead.plot_show_grid, y=lead.plot_show_grid, alpha=_GRID_ALPHA)
             plot_item.setLabel("bottom", f"{t('axis_time')} [s]", **_axis_label_style())
-            plot_item.setLabel("left", _channel_axis_label(channel), **_axis_label_style())
+            plot_item.setLabel("left", _plot_axis_label(members), **_axis_label_style())
             style_plot_item(plot_item)
-            # NO `setXLink` between the subplots: each channel has its
-            # own, independently configurable time window
-            # (`Channel.plot_time_window_seconds`) - a linked X axis
-            # would force the most recently set range onto all other
-            # subplots and make the per-channel setting pointless.
-            curve = plot_item.plot(
-                pen=pg.mkPen(
-                    color=channel.plot_color or channel_curve_color(index),
-                    width=channel.plot_line_width,
+            if slot.is_group:
+                # BEFORE the curves: PyQtGraph only adds curves with a
+                # `name` to a legend that already exists.
+                plot_item.addLegend(offset=(10, 10))
+                _style_legend(plot_item)
+            plot_pos = len(self._plot_items)
+            for index in slot.indices:
+                channel = self._channels[index]
+                curve = plot_item.plot(
+                    pen=pg.mkPen(
+                        color=channel.plot_color or channel_curve_color(index),
+                        width=channel.plot_line_width,
+                    ),
+                    name=channel.display_name if slot.is_group else None,
                 )
-            )
-            # NO `autoDownsample` - see comment in `ChannelPopoutWindow.__init__`.
-            curve.setClipToView(True)
+                # NO `autoDownsample` - see comment in `ChannelPopoutWindow.__init__`.
+                curve.setClipToView(True)
+                value_box, value_text, unit_box, unit_text = boxes.get(index, (None,) * 4)
+                self._curves.append(curve)
+                self._curve_channel_indices.append(index)
+                self._curve_plot_positions.append(plot_pos)
+                self._value_boxes.append(value_box)
+                self._value_labels.append(value_text)
+                self._value_unit_boxes.append(unit_box)
+                self._value_unit_labels.append(unit_text)
             plot_item.getViewBox().setBackgroundColor(background)
-            # No `plot_show_graph` -> chart hidden, only the numeric value
-            # (if active) stays visible. DELIBERATELY still created and
-            # fed with data (see `_on_timer_tick`), not `None` as with
-            # `plot_show_value=False` for the value box: the fixed column
-            # width/position in the `GraphicsLayoutWidget` doesn't depend
-            # on this item, unlike the value box (see comment above) - a
-            # plain `setVisible()` is sufficient here. This keeps
-            # reserving the column width (no automatic collapsing of the
-            # number readout onto the full row width).
-            plot_item.setVisible(channel.plot_show_graph)
+            plot_item.setVisible(lead.plot_show_graph)
 
             # Sweep display (oscilloscope-style, see class doc further
-            # up): the time window is fixed at [0, window length] - it
-            # does NOT scroll along, the curve itself runs from left to
-            # right within this fixed window.
+            # up): X range fixed at the window width, only shifted on a
+            # cycle change (see `_on_timer_tick`).
             plot_item.enableAutoRange(x=False)
-            plot_item.setXRange(0.0, channel.plot_time_window_seconds, padding=0)
+            plot_item.setXRange(0.0, lead.plot_time_window_seconds, padding=0)
 
             self._plot_items.append(plot_item)
-            self._curves.append(curve)
-            self._curve_channel_indices.append(index)
-            self._value_boxes.append(value_box)
-            self._value_labels.append(value_text)
-            self._value_unit_boxes.append(unit_box)
-            self._value_unit_labels.append(unit_text)
+            self._plot_slots.append(slot)
             position += 1
 
         if self._plot_items:
-            # Number/unit column fixed width - see comment above
-            # (`number_field_width` already computed before the loop,
-            # since it's needed there for right-aligned positioning). The
-            # plot gets all of the remaining space.
-            # Repeated per CHANNEL column: the fixed widths apply to layout
-            # columns, and every channel column has its own number/unit pair.
             for cell in range(columns):
                 col_base = cell * 3
                 self._plot_widget.ci.layout.setColumnFixedWidth(
@@ -2805,56 +3197,42 @@ class LiveView(QWidget):
                 )
                 self._plot_widget.ci.layout.setColumnStretchFactor(col_base + 2, 1)
 
-        # Close own windows (see `ChannelPopoutWindow`) for channels that
-        # no longer exist under this channel configuration, that have
-        # since been completely disabled (`plot_visible=False`), OR whose
-        # "own window" checkbox was unchecked again in the dialog
-        # (`plot_popout=False`) - the latter is, since "only takes effect
-        # on OK", the ONLY way to close a window again if the user
-        # doesn't close it directly themselves (see
-        # `_on_popout_window_closed`). Also prevents orphaned windows with
-        # frozen stale data. Automatically removed from
-        # `self._popout_windows` via `window.destroyed` (see
-        # `_on_popout_window_closed`).
+        # Own windows: one per plot whose lead has `plot_popout`. A window
+        # whose plot no longer exists - or whose group membership changed
+        # - is closed (and, in the latter case, reopened below).
+        wanted: dict[tuple[str, str], _PlotSlot] = {
+            _channel_display_key(self._channels[slot.lead]): slot
+            for slot in slots
+            if self._channels[slot.lead].plot_popout
+        }
         for key in list(self._popout_windows.keys()):
-            channel = self._find_channel_by_key(key)
-            if channel is None or not channel.plot_visible or not channel.plot_popout:
-                self._popout_windows[key].close()
-
-        # Automatically open channels that are configured as "own window"
-        # (`plot_popout=True`, e.g. from a loaded configuration or after a
-        # measurement start) but don't have an open window yet -
-        # otherwise such a channel would vanish without a trace (neither
-        # main grid nor window visible).
-        for channel in self._channels:
-            if (
-                channel.plot_visible
-                and channel.plot_popout
-                and _channel_display_key(channel) not in self._popout_windows
-            ):
-                self._open_popout_window(channel)
+            slot = wanted.get(key)
+            window = self._popout_windows[key]
+            member_keys = (
+                tuple(_channel_display_key(self._channels[i]) for i in slot.indices)
+                if slot is not None
+                else None
+            )
+            if slot is None or getattr(window, "member_keys", None) != member_keys:
+                self._close_popout_window(key)
+            else:
+                self._popout_slots[key] = slot
+                if hasattr(window, "set_channels"):
+                    window.set_channels([self._channels[i] for i in slot.indices])
+        for key, slot in wanted.items():
+            if key not in self._popout_windows:
+                self._open_popout_window(slot)
 
         self._apply_channel_appearance()
         self._apply_y_range_mode()
 
     @staticmethod
-    def _apply_channel_curve_style(
-        plot_item, curve, channel: Channel, index: int = 0
-    ) -> None:
-        """Applies curve color and width, background color, gridline color
-        and grid visibility of a SINGLE channel to its plot/curve pair -
-        theme default if no own color is configured. Shared by main-grid
-        subplots (`_apply_channel_appearance`) and own windows
+    def _apply_plot_style(plot_item, channel: Channel) -> None:
+        """Plot-wide part of the styling (background, gridline color, grid
+        and axis title visibility, plot on/off) - from the plot's lead
+        channel (see `PLOT_LEVEL_FIELDS`). Shared by main-grid subplots
+        (`_apply_channel_appearance`) and own windows
         (`_open_popout_window`)."""
-        # Falls back to the channel's PALETTE slot, not one shared color:
-        # every channel used to be drawn in the same blue, which made a grid
-        # of subplots hard to scan. Derived from the position on each
-        # repaint, never stored - a stored color would stop following the
-        # theme (see `channel_curve_color`).
-        color = channel.plot_color or channel_curve_color(index)
-        # Clamped like everywhere the width is read: a stored 0 would make
-        # the curve invisible with nothing in the dialog explaining why.
-        curve.setPen(pg.mkPen(color=color, width=max(0.1, channel.plot_line_width)))
         plot_item.getViewBox().setBackgroundColor(_channel_background_color(channel))
         grid_color = _channel_grid_color(channel)
         for axis_name in ("left", "bottom", "right", "top"):
@@ -2875,9 +3253,31 @@ class LiveView(QWidget):
         )
         plot_item.setVisible(channel.plot_show_graph)
 
+    @staticmethod
+    def _apply_curve_style(curve, channel: Channel, index: int = 0) -> None:
+        """Per-curve part of the styling: color and width of ONE channel."""
+        # Falls back to the channel's PALETTE slot, not one shared color:
+        # every channel used to be drawn in the same blue, which made a grid
+        # of subplots hard to scan. Derived from the position on each
+        # repaint, never stored - a stored color would stop following the
+        # theme (see `channel_curve_color`).
+        color = channel.plot_color or channel_curve_color(index)
+        # Clamped like everywhere the width is read: a stored 0 would make
+        # the curve invisible with nothing in the dialog explaining why.
+        curve.setPen(pg.mkPen(color=color, width=max(0.1, channel.plot_line_width)))
+
+    @staticmethod
+    def _apply_channel_curve_style(
+        plot_item, curve, channel: Channel, index: int = 0
+    ) -> None:
+        """Plot AND curve styling of a single-channel plot (see
+        `_apply_plot_style`/`_apply_curve_style`)."""
+        LiveView._apply_plot_style(plot_item, channel)
+        LiveView._apply_curve_style(curve, channel, index)
+
     def _apply_channel_appearance(self) -> None:
         """Applies curve color, background color, and plot visibility per
-        channel (see `open_channel_display_dialog`), for main-grid
+        plot/channel (see `open_channel_display_dialog`), for main-grid
         subplots AND open own windows.
 
         `plot_show_value` itself is NO LONGER handled HERE - a change
@@ -2886,47 +3286,70 @@ class LiveView(QWidget):
         boxes no longer even exist for main-grid channels without a value
         readout (`None`, see there). `plot_show_graph`, on the other
         hand, only needs a plain show/hide here (see
-        `_apply_channel_curve_style` for the main-grid part of that).
+        `_apply_plot_style` for the main-grid part of that).
+
+        Value readout text: theme foreground for a single channel (as
+        before), the curve color in a group - with several numbers
+        stacked next to one plot, the color is what says which is which.
         """
-        for pos, (plot_item, curve) in enumerate(zip(self._plot_items, self._curves)):
-            channel = self._channels[self._curve_channel_indices[pos]]
-            self._apply_channel_curve_style(
-                plot_item, curve, channel, self._curve_channel_indices[pos]
-            )
+        for pos, plot_item in enumerate(self._plot_items):
+            self._apply_plot_style(plot_item, self._channels[self._plot_slots[pos].lead])
+        for pos, curve in enumerate(self._curves):
+            index = self._curve_channel_indices[pos]
+            channel = self._channels[index]
+            self._apply_curve_style(curve, channel, index)
             # Window background color, not the individual channel color -
             # see `_rebuild_plots` for the reasoning.
             if self._value_boxes[pos] is not None:
                 self._value_boxes[pos].setBackgroundColor(plot_container_background_color())
             if self._value_unit_boxes[pos] is not None:
                 self._value_unit_boxes[pos].setBackgroundColor(plot_container_background_color())
+            slot = self._plot_slots[self._curve_plot_positions[pos]]
+            text_color = (
+                channel.plot_color or channel_curve_color(index)
+                if slot.is_group
+                else plot_foreground_color()
+            )
+            for label in (self._value_labels[pos], self._value_unit_labels[pos]):
+                if label is not None:
+                    label.setColor(text_color)
         for key, window in self._popout_windows.items():
-            channel = self._find_channel_by_key(key)
-            if channel is not None:
-                self._apply_channel_curve_style(
-                    window.plot_item,
-                    window.curve,
-                    channel,
-                    self._channels.index(channel),
-                )
-                # Own window is a normal Qt layout (not a PyQtGraph
-                # `GraphicsLayout` with a fixed column width like in the
-                # main grid) - `setVisible()` on the `PlotWidget` itself
-                # is enough here, cleanly returns the space to the value
-                # readout next to it.
-                window.plot_widget.setVisible(channel.plot_show_graph)
-                window._apply_number_width()
-                window._style_value_labels()
-                window._value_container.setVisible(channel.plot_show_value)
+            slot = self._popout_slots.get(key)
+            if slot is None:
+                channel = self._find_channel_by_key(key)
+                if channel is None:
+                    continue
+                slot = _PlotSlot((self._channel_index(channel),))
+            lead = self._channels[slot.lead]
+            self._apply_plot_style(window.plot_item, lead)
+            for curve, index in zip(window.curves, slot.indices):
+                self._apply_curve_style(curve, self._channels[index], index)
+            window.value_colors = [
+                (self._channels[index].plot_color or channel_curve_color(index))
+                if slot.is_group
+                else None
+                for index in slot.indices
+            ]
+            # Own window is a normal Qt layout (not a PyQtGraph
+            # `GraphicsLayout` with a fixed column width like in the
+            # main grid) - `setVisible()` on the `PlotWidget` itself
+            # is enough here, cleanly returns the space to the value
+            # readout next to it.
+            window.plot_widget.setVisible(lead.plot_show_graph)
+            window._apply_number_width()
+            window._style_value_labels()
+            window.apply_value_visibility()
 
     def _apply_y_range_mode(self) -> None:
         """Applies the Y range (fixed, autoscale, or hybrid) to all
         subplots AND open own windows - without current readings (see
         `_apply_channel_y_range`), e.g. directly after `_rebuild_plots()`
         or after changing the settings in the dialog, before the next
-        tick delivers new data.
+        tick delivers new data. Per plot from its lead channel (see
+        `PLOT_LEVEL_FIELDS`).
         """
         for pos, plot_item in enumerate(self._plot_items):
-            channel = self._channels[self._curve_channel_indices[pos]]
+            channel = self._channels[self._plot_slots[pos].lead]
             self._apply_channel_y_range(plot_item, channel, None)
         for key, window in self._popout_windows.items():
             channel = self._find_channel_by_key(key)
@@ -3126,36 +3549,45 @@ class LiveView(QWidget):
                     )
                 )
 
-        # Re-evaluate per-channel hybrid autoscaling (fixed range, until
+        # Re-evaluate per-plot hybrid autoscaling (fixed range, until
         # readings exceed/undershoot it - see `_apply_channel_y_range`)
-        # with the values ACTUALLY displayed NOW.
+        # with the values ACTUALLY displayed NOW - for a group over ALL of
+        # its curves (one shared Y axis).
         for pos, plot_item in enumerate(self._plot_items):
-            channel_index = self._curve_channel_indices[pos]
+            slot = self._plot_slots[pos]
             self._apply_channel_y_range(
-                plot_item, self._channels[channel_index], value_ranges[channel_index]
+                plot_item,
+                self._channels[slot.lead],
+                _union_value_range([value_ranges[i] for i in slot.indices]),
             )
 
         # Update own windows (see `ChannelPopoutWindow`) with the same
         # values, independent of the main grid - `draw_data` is always
         # indexed by `self._channels` (see `apply_scaling`), regardless of
         # `plot_visible`, hence by index rather than position here.
-        if self._popout_windows:
-            for index, channel in enumerate(self._channels):
-                window = self._popout_windows.get(_channel_display_key(channel))
-                if window is None:
-                    continue
-                window.curve.setData(*draw_data[index])
+        for key, window in self._popout_windows.items():
+            slot = self._popout_slots.get(key)
+            if slot is None:
+                continue
+            for curve, value_label, index in zip(
+                window.curves, window.value_labels, slot.indices
+            ):
+                channel = self._channels[index]
+                curve.setData(*draw_data[index])
                 if index in due_values:
-                    window.value_label.setText(
+                    value_label.setText(
                         _format_channel_value(
                             due_values[index],
                             channel.plot_value_integer_digits,
                             channel.plot_value_decimal_digits,
                         )
                     )
-                self._apply_channel_y_range(
-                    window.plot_item, channel, value_ranges[index], self._popout_y_auto_active
-                )
+            self._apply_channel_y_range(
+                window.plot_item,
+                self._channels[slot.lead],
+                _union_value_range([value_ranges[i] for i in slot.indices]),
+                self._popout_y_auto_active,
+            )
 
         # The X range itself stays fixed at window width (sweep doesn't
         # scroll) - only shifted to the new absolute time span on an
@@ -3165,7 +3597,9 @@ class LiveView(QWidget):
         # window length (and thus the cycle rhythm) can differ per
         # channel.
         for pos, plot_item in enumerate(self._plot_items):
-            channel_index = self._curve_channel_indices[pos]
+            # Per PLOT, from its lead channel - all members of a group
+            # have the same time window (see `sync_plot_groups`).
+            channel_index = self._plot_slots[pos].lead
             x_min = self._channel_cycle_starts.get(channel_index, 0.0)
             if self._channel_x_range_applied.get(channel_index) == x_min:
                 continue

@@ -900,6 +900,15 @@ class Channel:
     plot_popout_y: Optional[int] = None
     plot_popout_width: Optional[int] = None
     plot_popout_height: Optional[int] = None
+    # Shared plot in the live view (see `gui/live_view.py::_plot_slots`):
+    # channels with the same, non-empty group name are drawn as several
+    # curves into ONE plot (with legend, shared Y axis) instead of one
+    # plot each. "" (default) = own plot, i.e. the previous behavior.
+    # Within a group, the plot-wide settings (time window, background,
+    # grid, Y range, axis titles, own window, see
+    # `gui/live_view.py::PLOT_LEVEL_FIELDS`) are kept identical; curve
+    # color/width and the value readout stay per channel.
+    plot_group: str = ""
 
     def to_physical(self, raw_value: float) -> float:
         """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
@@ -950,6 +959,7 @@ class Channel:
             "plot_popout_y": self.plot_popout_y,
             "plot_popout_width": self.plot_popout_width,
             "plot_popout_height": self.plot_popout_height,
+            "plot_group": self.plot_group,
         }
 
     @classmethod
@@ -1008,6 +1018,7 @@ class Channel:
             plot_popout_y=cls._optional_int(data.get("plot_popout_y")),
             plot_popout_width=cls._optional_int(data.get("plot_popout_width")),
             plot_popout_height=cls._optional_int(data.get("plot_popout_height")),
+            plot_group=str(data.get("plot_group") or "").strip(),
         )
 
     @staticmethod
