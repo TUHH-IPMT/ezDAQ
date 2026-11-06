@@ -17,6 +17,8 @@ regardless of how fast or slow the live view reads in parallel.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import threading
 import time
@@ -24,8 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 import pyarrow as pa
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 from core.measurement import apply_scaling
@@ -84,16 +86,13 @@ def _build_columns(
     return data
 
 
-def _build_dataframe(
-    scaled_block: np.ndarray,
-    channels: list[Channel],
-    start_sample_index: int,
-    sample_rate_hz: float,
-) -> pd.DataFrame:
-    """Like `_build_columns`, but as a DataFrame (used for CSV)."""
-    return pd.DataFrame(
-        _build_columns(scaled_block, channels, start_sample_index, sample_rate_hz)
-    )
+def _csv_header_line(column_names: list[str]) -> bytes:
+    """Header line in the same format `pandas.DataFrame.to_csv` used to
+    write (quotes only where needed) - pyarrow's own CSV writer would
+    always quote every column name."""
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerow(column_names)
+    return buffer.getvalue().encode("utf-8")
 
 
 def parquet_row_group_rows(num_channels: int, sample_rate_hz: float) -> int:
@@ -121,8 +120,15 @@ class StorageWriter:
           `PARQUET_ROW_GROUP_MAX_BYTES` / `PARQUET_ROW_GROUP_MAX_SECONDS`),
           the remainder when stopping. The file layout (columns
           "time_s" + one per channel) is unaffected by this.
-        * CSV: every block is appended immediately
-          (`DataFrame.to_csv(mode="a")`).
+        * CSV: every block is appended immediately via `pyarrow.csv`
+          (the file stays open for the entire measurement). Previously
+          `DataFrame.to_csv(mode="a")`: several times slower, reopened the
+          file for every block and - the actual problem - held Python's
+          GIL while formatting the numbers, so the live view stuttered
+          while recording as CSV at high data rates. pyarrow formats
+          without holding the GIL. Same values and columns as before;
+          numbers may be spelled differently (e.g. `0.00001953125`
+          instead of `1.953125e-05`, `0` instead of `0.0`).
 
     Crash behavior: a CSV file contains the data up to the last block
     written. A Parquet file only becomes readable once it has been closed
@@ -187,7 +193,9 @@ class StorageWriter:
         self._parquet_pending: list[np.ndarray] = []
         self._parquet_pending_samples = 0
         self._parquet_pending_start = 0
-        self._csv_header_written = False
+        self._csv_file: Optional[pa.NativeFile] = None
+        self._csv_writer: Optional[pacsv.CSVWriter] = None
+        self._csv_schema: Optional[pa.Schema] = None
 
     @property
     def is_running(self) -> bool:
@@ -370,23 +378,38 @@ class StorageWriter:
             while self._parquet_pending_samples >= self._parquet_row_group_rows:
                 self._flush_parquet(self._parquet_row_group_rows)
         else:
+            if self._csv_writer is None:
+                self._open_csv_writer()
             scaled = apply_scaling(raw_block, self._channels)
-            df = _build_dataframe(
+            columns = _build_columns(
                 scaled, self._channels, self._total_samples_written, self._sample_rate_hz
             )
-            df.to_csv(
-                self._output_path,
-                mode="a",
-                header=not self._csv_header_written,
-                index=False,
+            schema = self._csv_schema
+            # `from_pandas=True`: NaN becomes null, i.e. an empty field -
+            # like pandas wrote it (pyarrow would otherwise write "nan").
+            table = pa.Table.from_arrays(
+                [pa.array(columns[name], from_pandas=True) for name in schema.names],
+                schema=schema,
             )
-            self._csv_header_written = True
+            self._csv_writer.write_table(table)
 
     def _parquet_schema(self) -> pa.Schema:
+        """File schema: "time_s" + one float64 column per channel
+        (shared by Parquet and CSV)."""
         columns = _build_columns(
             np.empty((len(self._channels), 0)), self._channels, 0, self._sample_rate_hz
         )
         return pa.schema([(name, pa.float64()) for name in columns])
+
+    def _open_csv_writer(self) -> None:
+        schema = self._csv_schema = self._parquet_schema()
+        # `OSFile` is unbuffered: every block goes straight to the OS, so a
+        # crash of the app keeps everything up to the last block.
+        self._csv_file = pa.OSFile(str(self._output_path), "wb")
+        self._csv_file.write(_csv_header_line(schema.names))
+        self._csv_writer = pacsv.CSVWriter(
+            self._csv_file, schema, write_options=pacsv.WriteOptions(include_header=False)
+        )
 
     def _open_parquet_writer(self) -> None:
         self._parquet_writer = pq.ParquetWriter(
@@ -420,10 +443,18 @@ class StorageWriter:
         self._parquet_pending_start += rows
 
     def _close_writer(self) -> None:
-        """Closes a possibly open Parquet writer (idempotent)."""
+        """Closes a possibly open Parquet/CSV writer (idempotent)."""
         if self._parquet_writer is not None:
             try:
                 self._parquet_writer.close()
             except Exception:
                 logger.exception("Fehler beim Schließen des Parquet-Writers")
             self._parquet_writer = None
+        for name in ("_csv_writer", "_csv_file"):
+            handle = getattr(self, name)
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    logger.exception("Fehler beim Schließen der CSV-Datei")
+                setattr(self, name, None)

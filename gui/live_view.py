@@ -360,6 +360,106 @@ def _downsample_for_display(
     return downsampled_times, downsampled_values
 
 
+class _SweepCache:
+    """Incrementally maintained derived data of ONE channel's current
+    sweep: time axis, min/max envelope (see `_downsample_for_display`)
+    and the running value range (for `LiveView._apply_channel_y_range`).
+
+    Why: within a sweep, the display buffer only ever grows at the end
+    (see `LiveView._write_to_display_buffer`) - but the time axis, the
+    envelope and min/max used to be recomputed over the WHOLE sweep on
+    every tick (~66x/s). At e.g. 16 channels x 51.2 kHz x 5 s that is
+    ~256k samples per channel per tick, and made up most of the per-tick
+    Python time - noticeable as a stuttering live view on older PCs.
+    Here, every tick only processes the samples added since the last
+    one; the result is identical to the full recomputation (same bins,
+    same values, same NaN propagation), which
+    `tests/test_live_view_cache.py` checks against
+    `_downsample_for_display`.
+
+    Becomes invalid (and is rebuilt by `LiveView._sweep_cache`) as soon
+    as a new sweep starts, the position moves backwards or capacity/rate
+    change.
+    """
+
+    __slots__ = (
+        "cycle_start", "capacity", "rate", "position", "times",
+        "factor", "bins", "env_max", "env_min", "value_min", "value_max",
+    )
+
+    def __init__(self, cycle_start: float, capacity: int, rate: float) -> None:
+        self.cycle_start = cycle_start
+        self.capacity = capacity
+        self.rate = rate
+        self.position = 0
+        # Same values as `cycle_start + np.arange(position) / rate`
+        # (element-wise identical), computed ONCE per sweep.
+        self.times = cycle_start + (np.arange(capacity) / rate)
+        self.factor = max(1, capacity // _MAX_DISPLAY_POINTS_PER_CURVE)
+        self.bins = 0
+        self.env_max = np.empty(capacity // self.factor + 1)
+        self.env_min = np.empty(capacity // self.factor + 1)
+        self.value_min: float | None = None
+        self.value_max: float | None = None
+
+    def matches(self, cycle_start: float, capacity: int, rate: float, position: int) -> bool:
+        return (
+            self.cycle_start == cycle_start
+            and self.capacity == capacity
+            and self.rate == rate
+            and position >= self.position
+        )
+
+    def advance(self, values: np.ndarray) -> None:
+        """Takes in `values` = the sweep's samples so far (only the part
+        beyond `self.position` is new)."""
+        position = values.shape[0]
+        new = values[self.position:position]
+        if new.size:
+            # `np.minimum`/`np.maximum` propagate NaN like `np.min` over
+            # the whole sweep did.
+            new_min, new_max = new.min(), new.max()
+            self.value_min = new_min if self.value_min is None else np.minimum(self.value_min, new_min)
+            self.value_max = new_max if self.value_max is None else np.maximum(self.value_max, new_max)
+        complete_bins = position // self.factor
+        if complete_bins > self.bins:
+            block = values[self.bins * self.factor:complete_bins * self.factor].reshape(
+                -1, self.factor
+            )
+            self.env_max[self.bins:complete_bins] = block.max(axis=1)
+            self.env_min[self.bins:complete_bins] = block.min(axis=1)
+            self.bins = complete_bins
+        self.position = position
+
+    def value_range(self) -> tuple[float, float] | None:
+        if self.value_min is None:
+            return None
+        return float(self.value_min), float(self.value_max)
+
+    def display_data(self, values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Same result as `_downsample_for_display(times, values,
+        capacity)`, from the cached envelope."""
+        n = values.shape[0]
+        times = self.times[:n]
+        factor = self.factor
+        if n <= 2 * _MAX_DISPLAY_POINTS_PER_CURVE or factor < 2 or n < factor:
+            return times, values
+        bin_count = n // factor
+        usable = bin_count * factor
+        stx = factor // 2
+        downsampled_times = np.repeat(times[stx:stx + usable:factor], 2)
+        downsampled_values = np.empty(bin_count * 2, dtype=values.dtype)
+        downsampled_values[0::2] = self.env_max[:bin_count]
+        downsampled_values[1::2] = self.env_min[:bin_count]
+        remainder = n - usable
+        if remainder > 0:
+            tail = values[usable:]
+            tail_time = times[usable + remainder // 2]
+            downsampled_times = np.append(downsampled_times, (tail_time, tail_time))
+            downsampled_values = np.append(downsampled_values, (tail.max(), tail.min()))
+        return downsampled_times, downsampled_values
+
+
 def _format_channel_value(
     value: float, integer_digits: int, decimals: int = _VALUE_DECIMALS
 ) -> str:
@@ -1366,6 +1466,9 @@ class LiveView(QWidget):
         # channel (see `_on_timer_tick`) - the X range is only reset on
         # an actual cycle change, not on every tick.
         self._channel_x_range_applied: dict[int, float | None] = {}
+        # Incremental time axis/envelope/value range per channel (see
+        # `_SweepCache`) - cleared wherever the sweep state is reset.
+        self._sweep_caches: dict[int, _SweepCache] = {}
 
         # Per-channel display (curve color, background, Y range,
         # autoscaling behavior) lives directly on the `Channel` objects
@@ -1704,6 +1807,7 @@ class LiveView(QWidget):
         self._channel_buffer_positions = {index: 0 for index in range(len(channels))}
         self._channel_cycle_starts = {index: 0.0 for index in range(len(channels))}
         self._channel_x_range_applied = {index: None for index in range(len(channels))}
+        self._sweep_caches = {}
         self._channel_total_ticks_seen = {index: 0 for index in range(len(channels))}
         self._reset_value_readout_state()
         self._timer.start()
@@ -2532,6 +2636,7 @@ class LiveView(QWidget):
         self._channel_buffer_positions = {index: 0 for index in range(len(self._channels))}
         self._channel_cycle_starts = {index: 0.0 for index in range(len(self._channels))}
         self._channel_x_range_applied = {index: None for index in range(len(self._channels))}
+        self._sweep_caches = {}
         self._channel_y_auto_active = {}
 
         # Width of the number column is based on the channel with the
@@ -2834,19 +2939,20 @@ class LiveView(QWidget):
         self,
         plot_item,
         channel: Channel,
-        data: np.ndarray | None,
+        data_range: tuple[float, float] | None,
         auto_active_cache: dict[tuple[str, str], bool] | None = None,
     ) -> None:
         """Sets the Y axis of a single subplot according to the
         autoscaling configured per channel (see `ChannelDisplayDialog`).
 
         Not a plain on/off: if autoscaling is enabled for the channel
-        (default), the configured fixed range is used AS LONG AS `data`
-        (the currently displayed readings, `None` = none yet) lies within
+        (default), the configured fixed range is used AS LONG AS
+        `data_range` (min/max of the currently displayed readings, see
+        `_SweepCache.value_range`; `None` = none yet) lies within
         it - as soon as even one value exceeds/undershoots that range,
         PyQtGraph's autoscale takes over for the rest of the current
         sweep. If autoscaling is disabled, the fixed range always stays
-        active, regardless of `data`.
+        active, regardless of `data_range`.
 
         `auto_active_cache` (default `self._channel_y_auto_active`)
         prevents unnecessary `setYRange`/`enableAutoRange` calls when the
@@ -2868,9 +2974,8 @@ class LiveView(QWidget):
 
         if autoscale:
             use_auto = bool(
-                data is not None
-                and data.size > 0
-                and (float(np.min(data)) < y_min or float(np.max(data)) > y_max)
+                data_range is not None
+                and (data_range[0] < y_min or data_range[1] > y_max)
             )
         else:
             use_auto = False
@@ -2995,20 +3100,22 @@ class LiveView(QWidget):
         # shows two different numbers at the same moment.
         due_values = self._update_value_readouts(scaled)
 
-        channel_views = {
-            index: self._get_channel_display_view(index)
-            for index in range(len(self._channels))
-        }
-        if not any(values.size for _times, values in channel_views.values()):
+        # Per channel ONCE per tick (shared by the main grid and own
+        # windows), incrementally - see `_SweepCache`.
+        draw_data: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        value_ranges: dict[int, tuple[float, float] | None] = {}
+        for index in range(len(self._channels)):
+            cache, values = self._sweep_cache(index)
+            draw_data[index] = (
+                cache.display_data(values) if cache is not None else (np.array([]), values)
+            )
+            value_ranges[index] = cache.value_range() if cache is not None else None
+        if not any(values.size for _times, values in draw_data.values()):
             return
 
         for pos, curve in enumerate(self._curves):
             channel_index = self._curve_channel_indices[pos]
-            times, values = channel_views[channel_index]
-            draw_times, draw_values = _downsample_for_display(
-                times, values, self._channel_display_capacity(channel_index)
-            )
-            curve.setData(draw_times, draw_values)
+            curve.setData(*draw_data[channel_index])
             if channel_index in due_values and self._value_labels[pos] is not None:
                 channel = self._channels[channel_index]
                 self._value_labels[pos].setText(
@@ -3025,11 +3132,11 @@ class LiveView(QWidget):
         for pos, plot_item in enumerate(self._plot_items):
             channel_index = self._curve_channel_indices[pos]
             self._apply_channel_y_range(
-                plot_item, self._channels[channel_index], channel_views[channel_index][1]
+                plot_item, self._channels[channel_index], value_ranges[channel_index]
             )
 
         # Update own windows (see `ChannelPopoutWindow`) with the same
-        # values, independent of the main grid - `channel_views` is always
+        # values, independent of the main grid - `draw_data` is always
         # indexed by `self._channels` (see `apply_scaling`), regardless of
         # `plot_visible`, hence by index rather than position here.
         if self._popout_windows:
@@ -3037,11 +3144,7 @@ class LiveView(QWidget):
                 window = self._popout_windows.get(_channel_display_key(channel))
                 if window is None:
                     continue
-                times, values = channel_views[index]
-                draw_times, draw_values = _downsample_for_display(
-                    times, values, self._channel_display_capacity(index)
-                )
-                window.curve.setData(draw_times, draw_values)
+                window.curve.setData(*draw_data[index])
                 if index in due_values:
                     window.value_label.setText(
                         _format_channel_value(
@@ -3051,7 +3154,7 @@ class LiveView(QWidget):
                         )
                     )
                 self._apply_channel_y_range(
-                    window.plot_item, channel, values, self._popout_y_auto_active
+                    window.plot_item, channel, value_ranges[index], self._popout_y_auto_active
                 )
 
         # The X range itself stays fixed at window width (sweep doesn't
@@ -3115,6 +3218,7 @@ class LiveView(QWidget):
             self._display_capacity_samples = capacity
             self._display_buffer = np.zeros((num_channels, capacity), dtype=np.float64)
             self._buffer_write_pos = 0
+            self._sweep_caches = {}
 
     def _channel_display_capacity(self, channel_index: int) -> int:
         """Maximum sample count of ONE sweep cycle for `channel_index`
@@ -3262,14 +3366,28 @@ class LiveView(QWidget):
         grow at the tick-rate pace, so a slot would correspond to the
         wrong (too short) time span at the global rate.
         """
-        if self._display_buffer is None:
+        cache, values = self._sweep_cache(channel_index)
+        if cache is None:
             return np.array([]), np.empty((0,))
+        return cache.times[:values.shape[0]], values
+
+    def _sweep_cache(self, channel_index: int) -> tuple[_SweepCache | None, np.ndarray]:
+        """Brings the `_SweepCache` of `channel_index` up to date and
+        returns it together with the current sweep's values (a view into
+        the display buffer). `(None, empty)` if the sweep has no data yet.
+        """
+        if self._display_buffer is None:
+            return None, np.empty((0,))
         position = self._channel_buffer_positions.get(channel_index, 0)
         if position == 0:
-            return np.array([]), np.empty((0,))
+            return None, np.empty((0,))
         values = self._display_buffer[channel_index, :position]
-        native_rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
-        times = self._channel_cycle_starts.get(channel_index, 0.0) + (
-            np.arange(position) / native_rate
-        )
-        return times, values
+        cycle_start = self._channel_cycle_starts.get(channel_index, 0.0)
+        capacity = self._channel_display_capacity(channel_index)
+        rate = self._channel_native_rates.get(channel_index, self._sample_rate_hz)
+        caches = self.__dict__.setdefault("_sweep_caches", {})
+        cache = caches.get(channel_index)
+        if cache is None or not cache.matches(cycle_start, capacity, rate, position):
+            cache = caches[channel_index] = _SweepCache(cycle_start, capacity, rate)
+        cache.advance(values)
+        return cache, values

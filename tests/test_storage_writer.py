@@ -210,6 +210,30 @@ class CsvTest(unittest.TestCase):
             self.assertEqual(seen, {"rows": _BLOCK, "buffered": 0})
             pd.testing.assert_frame_equal(pd.read_csv(path), _expected(raw, 1_000.0))
 
+    def test_csv_header_and_missing_values_like_pandas(self) -> None:
+        # The old writer used `DataFrame.to_csv`: header quoted only where
+        # needed, NaN as an empty field. Both must stay that way.
+        channels = [
+            Channel(hardware_channel="a", display_name="Kraft [N]"),
+            Channel(hardware_channel="b", display_name="x,y"),
+        ]
+        raw = np.array([[1.0, np.nan, 3.0], [0.5, 0.25, np.nan]])
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "messung.csv"
+            ring_buffer = RingBuffer(num_channels=2, capacity=10)
+            writer = StorageWriter(ring_buffer, channels, path, StorageFormat.CSV, 2.0)
+            ring_buffer.write(raw)
+            writer.start()
+            writer.stop()
+
+            lines = path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(lines[0], 'time_s,Kraft [N],"x,y"')
+            self.assertEqual(lines[2], "0.5,,0.25")
+            self.assertEqual(lines[3], "1,3,")
+            loaded = pd.read_csv(path)
+            self.assertEqual(loaded.columns.tolist(), ["time_s", "Kraft [N]", "x,y"])
+            np.testing.assert_array_equal(loaded["x,y"].to_numpy(), raw[1])
+
 
 if __name__ == "__main__":
     unittest.main()
