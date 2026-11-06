@@ -415,6 +415,22 @@ def _space_width_px(font: QFont) -> float:
     return QFontMetrics(font).horizontalAdvance(" ")
 
 
+def _natural_axis_width(axis) -> int:
+    """Width a PyQtGraph `AxisItem` (left/right) would choose for itself
+    - the same computation as `AxisItem._updateWidth` without a fixed
+    width: widest tick text (tracked by PyQtGraph while drawing, also when
+    a fixed width is set) + tick offset/length + the title, if shown."""
+    style = axis.style
+    width = 0.0
+    if style["showValues"]:
+        width = axis.textWidth if style["autoExpandTextSpace"] else style["tickTextWidth"]
+        width += style["tickTextOffset"][0]
+    width += max(0, style["tickLength"])
+    if axis.label.isVisible():
+        width += axis.label.boundingRect().height() * 0.8
+    return int(math.ceil(width))
+
+
 def _style_legend(plot_item) -> None:
     """Legend of a plot group in the current theme: text in the theme
     foreground color (PyQtGraph's default is a fixed light gray,
@@ -3090,6 +3106,21 @@ class LiveView(QWidget):
 
         slots = _plot_slots(self._channels)
         columns = max(1, self._plot_columns)
+        # Per grid column: does ANY plot in it show a value readout? Then
+        # every plot of that column starts after the readout columns, also
+        # those without a readout - otherwise a plot without readout would
+        # stretch over the empty readout space and its Y axis would sit
+        # further left than the ones above and below it.
+        grid_slots = [s for s in slots if not self._channels[s.lead].plot_popout]
+        column_has_values = [
+            any(
+                self._channels[i].plot_show_value
+                for pos, s in enumerate(grid_slots)
+                if pos % columns == cell
+                for i in s.indices
+            )
+            for cell in range(columns)
+        ]
         position = 0
         for slot in slots:
             lead = self._channels[slot.lead]
@@ -3139,6 +3170,9 @@ class LiveView(QWidget):
                     )
                     unit_box.setBackgroundColor(plot_container_background_color())
                     boxes[index] = (value_box, value_text, unit_box, unit_text)
+                plot_col, plot_colspan = col_base + 2, 1
+            elif column_has_values[cell]:
+                # Readout columns stay empty here, see `column_has_values`.
                 plot_col, plot_colspan = col_base + 2, 1
             else:
                 plot_col, plot_colspan = col_base, 3
@@ -3344,6 +3378,36 @@ class LiveView(QWidget):
             window._apply_number_width()
             window._style_value_labels()
             window.apply_value_visibility()
+        # Axis titles may have been switched on/off - see `_align_y_axes`.
+        self._align_y_axes()
+
+    def _align_y_axes(self) -> None:
+        """Gives the Y axes of all plots in the same grid column the same
+        width - so the plot areas (and their time axes) start exactly
+        below each other. PyQtGraph sizes each axis to its own tick
+        labels and title, so "-1000" next to "10", or a plot with and one
+        without Y title, used to shift the plots against each other.
+
+        The widest axis of the column wins. Re-checked on every tick (see
+        `_on_timer_tick`): the tick labels change with autoscaling, and
+        only setting a width that actually changed costs a relayout.
+        Plots switched off (`plot_show_graph`) don't count.
+        """
+        # Via `__dict__`: also callable on partially built views in tests.
+        columns = max(1, self.__dict__.get("_plot_columns", 1))
+        slots = self.__dict__.get("_plot_slots", [])
+        by_column: dict[int, list] = {}
+        for pos, plot_item in enumerate(self._plot_items):
+            if pos >= len(slots):
+                break
+            if not self._channels[slots[pos].lead].plot_show_graph:
+                continue
+            by_column.setdefault(pos % columns, []).append(plot_item.getAxis("left"))
+        for axes in by_column.values():
+            width = max(_natural_axis_width(axis) for axis in axes)
+            for axis in axes:
+                if axis.fixedWidth != width:
+                    axis.setWidth(width)
 
     def _apply_y_range_mode(self) -> None:
         """Applies the Y range (fixed, autoscale, or hybrid) to all
@@ -3565,6 +3629,8 @@ class LiveView(QWidget):
                 self._channels[slot.lead],
                 _union_value_range([value_ranges[i] for i in slot.indices]),
             )
+        # Tick labels may have changed width with the new range.
+        self._align_y_axes()
 
         # Update own windows (see `ChannelPopoutWindow`) with the same
         # values, independent of the main grid - `draw_data` is always
