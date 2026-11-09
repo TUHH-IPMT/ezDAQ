@@ -376,16 +376,19 @@ def _plot_title(channels: list[Channel]) -> str:
 
 def _plot_axis_label(channels: list[Channel]) -> str:
     """Y axis title of a plot. Single channel: as before (see
-    `_channel_axis_label`). Group with one common unit: just that unit -
-    the names are in the legend. Group with different units: every
-    channel with its unit, e.g. "Kraft [N], Weg [mm]" (ONE shared Y axis,
-    so the title has to say what is on it)."""
+    `_channel_axis_label`). Group with one common unit: all names, the
+    unit once at the end, e.g. "Acc X, Acc Y, Acc Z [g]" - the axis
+    names its channels like a single-channel plot does, not just the
+    unit. Group with different units: every channel with its unit, e.g.
+    "Kraft [N], Weg [mm]" (ONE shared Y axis, so the title has to say
+    what is on it)."""
     if len(channels) == 1:
         return _channel_axis_label(channels[0])
     units = {channel.unit for channel in channels}
     if len(units) == 1:
         unit = next(iter(units))
-        return f"[{unit}]" if unit else ""
+        names = ", ".join(channel.display_name for channel in channels)
+        return f"{names} [{unit}]" if unit else names
     return ", ".join(_channel_axis_label(channel) for channel in channels)
 
 

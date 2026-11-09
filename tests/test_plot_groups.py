@@ -142,7 +142,9 @@ class SlotTest(unittest.TestCase):
 
         channels = _channels()
         self.assertEqual(_plot_axis_label([channels[0]]), "Acc X [g]")
-        self.assertEqual(_plot_axis_label([channels[0], channels[1]]), "[g]")
+        self.assertEqual(_plot_axis_label([channels[0], channels[1]]), "Acc X, Acc Y [g]")
+        unitless = [Channel("cDAQ1Mod1/ai0", "A"), Channel("cDAQ1Mod1/ai1", "B")]
+        self.assertEqual(_plot_axis_label(unitless), "A, B")
         self.assertEqual(_plot_axis_label([channels[0], channels[2]]), "Acc X [g], Force [N]")
 
     def test_union_range(self) -> None:
@@ -218,7 +220,7 @@ class LiveViewGroupTest(unittest.TestCase):
         legend_names = [label.text for _sample, label in group_plot.legend.items]
         self.assertEqual(legend_names, ["Acc X", "Acc Y", "Acc Z"])
         self.assertIsNone(getattr(force_plot, "legend", None))
-        self.assertEqual(group_plot.getAxis("left").labelText, "[g]")
+        self.assertEqual(group_plot.getAxis("left").labelText, "Acc X, Acc Y, Acc Z [g]")
 
     def test_every_curve_gets_its_own_data(self) -> None:
         self._start()
