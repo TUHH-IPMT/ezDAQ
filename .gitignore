@@ -12,3 +12,11 @@ dist/
 .idea/
 .vscode/
 *.egg-info/
+# User manual: only the finished PDFs are part of the repository (the
+# application opens them via Help -> User Manual, see gui/manual.py).
+# Sources, screenshots and the build tools stay local.
+doc/manual/*
+!doc/manual/ezDAQ_Handbuch.pdf
+!doc/manual/ezDAQ_Manual.pdf
+tools/build_manual.py
+tools/manual_screenshots.py

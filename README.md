@@ -34,6 +34,9 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Storage during measurement as Parquet (preferred) or CSV, including a
   `metadata` JSON file (start time, sample rate, hardware, channels,
   scaling, units)
+- Parquet files with large row groups (max. 64 MB or 10 s of measurement
+  time) for fast reading; older measurement files with many small row
+  groups can be rewritten losslessly with `tools/rewrite_parquet.py`
 - Per-channel parameters depending on signal type (scaling, offset,
   sensitivity, thermocouple type, gage factor/bridge type for strain)
   via a dedicated settings dialog per channel, including 2-point
@@ -44,6 +47,8 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
   OpenGL-accelerated)
 - Freely configurable channel display (curve color, background, Y range,
   hybrid autoscaling) – part of the saved configuration
+- Several channels in one shared plot (same plot group, with legend and
+  a shared Y axis) – also as a popout window
 - Preview of configured channels before a measurement is even started
 
 **Analysis View**
@@ -58,6 +63,8 @@ NI cDAQ systems (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 **Other**
 - Multilingual (German/English) and light/dark theme, both switchable at
   runtime
+- User manual as PDF (German/English) under *Help → User Manual* or F1
+  (`doc/manual/`)
 - Project management (one project at a time) with `project.json`,
   `measurements/`, and `metadata/`
 - Persistent application settings (window geometry, last-used
@@ -117,6 +124,8 @@ Directories:
 - `config/` – persistent configuration
 - `resources/` – application icon (`icon.png`/`icon.ico`), accessed at
   runtime via `config.settings.get_resource_path()`
+- `tools/` – helper scripts (`rewrite_parquet.py`: rewrite old Parquet
+  files with large row groups)
 - `doc/` – supplementary documentation (scripted/headless measurement
   usage, an Arduino sketch for testing the serial trigger)
 

@@ -68,6 +68,7 @@ from data.naming import (
 from gui.analysis_view import AnalysisView
 from gui.i18n import connect_language_changed, get_language, set_language, t
 from gui.live_view import LiveView
+from gui.manual import open_manual
 from gui.serial_trigger import SerialTriggerListener
 from gui.setup_view import NamingScheme, SetupView
 from gui.trigger_settings_dialog import TriggerSettingsDialog
@@ -516,6 +517,12 @@ class MainWindow(QMainWindow):
         self._trigger_settings_action.triggered.connect(self._on_open_trigger_settings_dialog)
 
         self._help_menu = menu_bar.addMenu(f"&{t('menu_help')}")
+        # User manual (PDF, see `gui/manual.py`) - F1 like in most Windows
+        # programs; registered on the action, so it works from every view.
+        self._manual_action = self._help_menu.addAction(t("menu_manual"))
+        self._manual_action.setShortcut(QKeySequence("F1"))
+        self._manual_action.triggered.connect(lambda: open_manual(self))
+        self._help_menu.addSeparator()
         self._check_updates_action = self._help_menu.addAction(f"{t('menu_check_updates')}...")
         self._check_updates_action.triggered.connect(self._on_check_updates_action_triggered)
         self._help_menu.addSeparator()
@@ -687,6 +694,7 @@ class MainWindow(QMainWindow):
         self._trigger_settings_action.setText(t("menu_trigger_settings"))
 
         self._help_menu.setTitle(f"&{t('menu_help')}")
+        self._manual_action.setText(t("menu_manual"))
         self._check_updates_action.setText(f"{t('menu_check_updates')}...")
         self._about_action.setText(t("menu_about"))
 

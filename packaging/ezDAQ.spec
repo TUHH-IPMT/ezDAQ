@@ -80,8 +80,14 @@ analysis = Analysis(
     pathex=[PROJECT_ROOT],
     binaries=[],
     # Icons and the splash logo, addressed via
-    # `config/settings.py::get_resource_path`.
-    datas=[(os.path.join(PROJECT_ROOT, "resources"), "resources")] + metadata,
+    # `config/settings.py::get_resource_path`; the user manual PDFs (Help
+    # -> User Manual, see `gui/manual.py`) under the same path as in the
+    # repository - only the PDFs, not their Markdown sources/screenshots.
+    datas=[
+        (os.path.join(PROJECT_ROOT, "resources"), "resources"),
+        (os.path.join(PROJECT_ROOT, "doc", "manual", "ezDAQ_Handbuch.pdf"), os.path.join("doc", "manual")),
+        (os.path.join(PROJECT_ROOT, "doc", "manual", "ezDAQ_Manual.pdf"), os.path.join("doc", "manual")),
+    ] + metadata,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

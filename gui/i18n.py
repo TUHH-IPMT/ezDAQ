@@ -32,6 +32,16 @@ _translations = {
         "menu_settings": "Optionen",
         "menu_quit": "Beenden",
         "menu_help": "Hilfe",
+        "menu_manual": "Handbuch (PDF)",
+        "manual_missing_title": "Handbuch nicht gefunden",
+        "manual_missing_body": (
+            "Das Handbuch ist in dieser Installation nicht enthalten:\n{path}"
+        ),
+        "manual_open_failed_title": "Handbuch konnte nicht geöffnet werden",
+        "manual_open_failed_body": (
+            "Für PDF-Dateien ist kein Programm eingerichtet. Das Handbuch "
+            "liegt hier:\n{path}"
+        ),
         "menu_check_updates": "Nach Updates suchen",
         "menu_about": "Über...",
         "menu_save_config": "Konfiguration speichern",
@@ -254,6 +264,16 @@ _translations = {
             "Zeigt diesen Kanal statt im Hauptraster in einem eigenen, frei "
             "verschiebbaren Fenster an - verhindert Doppel-Darstellung."
         ),
+        "plot_number_label": "Plotgruppe",
+        "plot_number_tooltip": (
+            "Plotgruppe: Kanäle mit GLEICHER Gruppennummer werden gemeinsam "
+            "in einen Plot gezeichnet (mit Legende und gemeinsamer Y-Achse), "
+            "verschiedene Nummern ergeben einzelne Plots. Die Plots werden "
+            "nach Nummer sortiert. Zeitfenster, Hintergrund, Gitter, "
+            "Y-Bereich, Achsentitel und eigenes Fenster gelten für den "
+            "ganzen Plot; Kurvenfarbe, Linienbreite und Wertanzeige bleiben "
+            "pro Kanal."
+        ),
         "axis_time": "Zeit",
         "storage_detail": "Datei: {file_size} — Rückstand: {pending} / {capacity} Samples ({percent} %)",
 
@@ -386,6 +406,15 @@ _translations = {
             "\"Angeschlossene Geräte\" auf \"Geräte suchen\" klicken."
         ),
         "hw_channel_already_used": "{channel} (bereits belegt)",
+        "hw_channel_used_by": "{channel}  (belegt von \"{name}\" - wird getauscht)",
+        "hw_channel_swap_hint": (
+            "Bereits belegte Kanäle können ebenfalls gewählt werden - die "
+            "beiden Zeilen tauschen dann ihre Hardwarekanäle."
+        ),
+        "move_channel_up_button": "Nach oben",
+        "move_channel_down_button": "Nach unten",
+        "move_channel_up_tooltip": "Ausgewählte Kanäle eine Zeile nach oben verschieben",
+        "move_channel_down_tooltip": "Ausgewählte Kanäle eine Zeile nach unten verschieben",
         "hw_channel_unsupported_module": "{channel} (Modul nicht unterstützt)",
         "hw_channel_device_offline": "{channel} (Gerät nicht verbunden)",
         "device_module_unsupported": "nicht unterstützt",
@@ -528,6 +557,16 @@ _translations = {
         "menu_settings": "Options",
         "menu_quit": "Quit",
         "menu_help": "Help",
+        "menu_manual": "User Manual (PDF)",
+        "manual_missing_title": "User Manual Not Found",
+        "manual_missing_body": (
+            "The user manual is not included in this installation:\n{path}"
+        ),
+        "manual_open_failed_title": "Could Not Open the User Manual",
+        "manual_open_failed_body": (
+            "No program is set up to open PDF files. The manual is located "
+            "here:\n{path}"
+        ),
         "menu_check_updates": "Check for Updates",
         "menu_about": "About...",
         "menu_save_config": "Save Configuration",
@@ -749,6 +788,15 @@ _translations = {
             "Shows this channel in its own, freely movable window instead of "
             "the main grid - prevents duplicate display."
         ),
+        "plot_number_label": "Plot group",
+        "plot_number_tooltip": (
+            "Plot group: channels with the SAME group number are drawn together "
+            "into one plot (with legend and a shared Y axis), different "
+            "numbers give separate plots. Plots are ordered by number. Time "
+            "window, background, grid, Y range, axis titles and popout "
+            "window apply to the whole plot; curve color, line width and "
+            "the value readout stay per channel."
+        ),
         "axis_time": "Time",
         "storage_detail": "File: {file_size} — Backlog: {pending} / {capacity} Samples ({percent} %)",
 
@@ -880,6 +928,15 @@ _translations = {
             "the \"Connected Devices\" section first."
         ),
         "hw_channel_already_used": "{channel} (already assigned)",
+        "hw_channel_used_by": "{channel}  (assigned to \"{name}\" - will be swapped)",
+        "hw_channel_swap_hint": (
+            "Channels that are already assigned can be chosen too - the two "
+            "rows then swap their hardware channels."
+        ),
+        "move_channel_up_button": "Move Up",
+        "move_channel_down_button": "Move Down",
+        "move_channel_up_tooltip": "Move the selected channels up one row",
+        "move_channel_down_tooltip": "Move the selected channels down one row",
         "hw_channel_unsupported_module": "{channel} (module not supported)",
         "hw_channel_device_offline": "{channel} (device not connected)",
         "device_module_unsupported": "not supported",

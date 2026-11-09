@@ -900,6 +900,19 @@ class Channel:
     plot_popout_y: Optional[int] = None
     plot_popout_width: Optional[int] = None
     plot_popout_height: Optional[int] = None
+    # Plot number in the live view (see `gui/live_view.py::_plot_slots`):
+    # channels with the SAME number are drawn as several curves into ONE
+    # plot (with legend, shared Y axis), different numbers give separate
+    # plots, and the plots are ordered by number. `None` = not set yet
+    # (e.g. an older configuration or a newly added channel): such
+    # channels get their own plot after all numbered ones, in channel
+    # order (see `gui/live_view.py::effective_plot_numbers`) - so without
+    # any numbers set, every channel has its own plot as before. Within a
+    # shared plot, the plot-wide settings (time window, background, grid,
+    # Y range, axis titles, own window, see
+    # `gui/live_view.py::PLOT_LEVEL_FIELDS`) are kept identical; curve
+    # color/width and the value readout stay per channel.
+    plot_number: Optional[int] = None
 
     def to_physical(self, raw_value: float) -> float:
         """Wandelt einen Rohwert in den skalierten physikalischen Wert um."""
@@ -950,6 +963,7 @@ class Channel:
             "plot_popout_y": self.plot_popout_y,
             "plot_popout_width": self.plot_popout_width,
             "plot_popout_height": self.plot_popout_height,
+            "plot_number": self.plot_number,
         }
 
     @classmethod
@@ -1008,7 +1022,17 @@ class Channel:
             plot_popout_y=cls._optional_int(data.get("plot_popout_y")),
             plot_popout_width=cls._optional_int(data.get("plot_popout_width")),
             plot_popout_height=cls._optional_int(data.get("plot_popout_height")),
+            plot_number=cls._optional_plot_number(data.get("plot_number")),
         )
+
+    @staticmethod
+    def _optional_plot_number(value) -> Optional[int]:
+        """`plot_number` from JSON: a positive int, anything else `None`."""
+        try:
+            number = int(value)
+        except (TypeError, ValueError):
+            return None
+        return number if number >= 1 else None
 
     @staticmethod
     def _optional_int(value) -> Optional[int]:

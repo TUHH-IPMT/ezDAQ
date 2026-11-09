@@ -30,6 +30,9 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Speicherung während der Messung als Parquet (bevorzugt) oder CSV,
   inklusive `metadata`-JSON (Startzeit, Abtastrate, Hardware, Kanäle,
   Skalierungen, Einheiten)
+- Parquet-Dateien mit großen Row Groups (max. 64 MB bzw. 10 s Messzeit)
+  für schnelles Einlesen; ältere Messdateien mit vielen kleinen Row Groups
+  lassen sich mit `tools/rewrite_parquet.py` verlustfrei umschreiben
 - Kanalparameter je nach Signaltyp (Skalierung, Offset, Sensitivität,
   Thermoelement-Typ, Gage-Faktor/Brückentyp bei Dehnung) über einen
   eigenen Einstellungsdialog pro Kanal, inklusive 2-Punkt-Kalibrierung
@@ -39,6 +42,8 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 - Echtzeit-Visualisierung mehrerer Kanäle (PyQtGraph, OpenGL-beschleunigt)
 - Kanal-Darstellung frei konfigurierbar (Kurvenfarbe, Hintergrund,
   Y-Bereich, hybride Autoskalierung) – Teil der gespeicherten Konfiguration
+- Mehrere Kanäle in einem gemeinsamen Plot (gleiche Plotgruppe, mit
+  Legende und gemeinsamer Y-Achse) – auch als eigenes Fenster
 - Vorschau der konfigurierten Kanäle bereits vor Messstart
 
 **Analyse-Ansicht**
@@ -53,6 +58,8 @@ NI-cDAQ-Systemen (NI 9215, NI 9234, NI 9210, NI 9213, NI 9235).
 **Sonstiges**
 - Mehrsprachig (Deutsch/Englisch) und Hell/Dunkel-Theme, beides zur
   Laufzeit umschaltbar
+- Benutzerhandbuch als PDF (Deutsch/Englisch) unter *Hilfe → Handbuch* bzw.
+  F1 (`doc/manual/`)
 - Projektverwaltung (ein Projekt gleichzeitig) mit `project.json`,
   `measurements/` und `metadata/`
 - Persistente Anwendungseinstellungen (Fenstergeometrie, zuletzt
@@ -114,6 +121,8 @@ Verzeichnisse:
 - `config/` – persistente Konfiguration
 - `resources/` – Anwendungs-Icon (`icon.png`/`icon.ico`), Zugriff zur
   Laufzeit über `config.settings.get_resource_path()`
+- `tools/` – Hilfsskripte (`rewrite_parquet.py`: alte Parquet-Dateien
+  mit großen Row Groups neu schreiben)
 - `doc/` – ergänzende Dokumentation (Messung per Skript steuern, ein
   Arduino-Sketch zum Testen des seriellen Triggers)
 

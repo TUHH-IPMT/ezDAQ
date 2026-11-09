@@ -15,6 +15,7 @@ import re
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QBrush, QIcon, QPixmap
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -51,6 +52,7 @@ from gui.widgets.spinbox import PrecisionDoubleSpinBox
 from gui.theme import (
     connect_theme_changed,
     disabled_text_color,
+    draw_chevron_icon,
     draw_ellipsis_icon,
     draw_minus_icon,
     draw_plus_icon,
@@ -143,12 +145,20 @@ class HardwareChannelPickerDialog(QDialog):
     selection would either fail when the measurement starts or (worse) be
     silently misconfigured via the former NI9215 fallback in
     `_apply_device_constraint`.
+
+    Channels already assigned to ANOTHER row stay SELECTABLE when
+    `used_channels` names their row (a dict channel -> channel name):
+    choosing one swaps the two rows' hardware channels (see
+    `ChannelTableWidget._on_choose_hw_channel_clicked`) - otherwise, with
+    every channel assigned, reassigning two channels meant deleting and
+    re-adding rows. The label says who has the channel and that it will be
+    swapped. A plain `set` keeps the old behavior (shown, not selectable).
     """
 
     def __init__(
         self,
         devices: list[DeviceInfo],
-        used_channels: set[str],
+        used_channels: "set[str] | dict[str, str]",
         current_channel: str,
         parent: QWidget | None = None,
     ) -> None:
@@ -172,6 +182,12 @@ class HardwareChannelPickerDialog(QDialog):
             layout.addWidget(close_box)
             self.resize(360, 140)
             return
+
+        swappable = isinstance(used_channels, dict)
+        if swappable and any(ch != current_channel for ch in used_channels):
+            hint_label = QLabel(t("hw_channel_swap_hint"))
+            hint_label.setWordWrap(True)
+            layout.addWidget(hint_label)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
@@ -213,13 +229,15 @@ class HardwareChannelPickerDialog(QDialog):
                     label = t("hw_channel_device_offline", channel=channel)
                 elif is_unsupported_module:
                     label = t("hw_channel_unsupported_module", channel=channel)
+                elif is_used and swappable:
+                    label = t("hw_channel_used_by", channel=channel, name=used_channels[channel])
                 elif is_used:
                     label = t("hw_channel_already_used", channel=channel)
                 else:
                     label = channel
                 channel_item = QTreeWidgetItem([label])
                 channel_item.setData(0, _ROLE_CHANNEL_VALUE, channel)
-                if is_used or is_unsupported_module or is_offline:
+                if (is_used and not swappable) or is_unsupported_module or is_offline:
                     channel_item.setFlags(
                         channel_item.flags()
                         & ~Qt.ItemFlag.ItemIsEnabled
@@ -247,7 +265,7 @@ class HardwareChannelPickerDialog(QDialog):
         if selected_item is not None:
             self._tree.setCurrentItem(selected_item)
 
-        self.resize(380, 420)
+        self.resize(460 if swappable else 380, 420)
 
     def selected_channel(self) -> str | None:
         return self._selected_channel
@@ -804,13 +822,28 @@ class ChannelTableWidget(QWidget):
         button_row = QHBoxLayout()
         self._add_button = QPushButton(t("add_channel_button"))
         self._remove_button = QPushButton(t("remove_channel_button"))
-        self._add_button.setIconSize(QSize(14, 14))
-        self._remove_button.setIconSize(QSize(14, 14))
+        # Reordering rows (icon + text, like add/remove) - the order is
+        # the column order in the stored file and the plot order in the
+        # live view; before, the only way to change it was deleting and
+        # re-adding rows (see `_move_selected_rows`).
+        self._move_up_button = QPushButton(t("move_channel_up_button"))
+        self._move_down_button = QPushButton(t("move_channel_down_button"))
+        self._move_up_button.setToolTip(t("move_channel_up_tooltip"))
+        self._move_down_button.setToolTip(t("move_channel_down_tooltip"))
+        for button in (
+            self._add_button, self._remove_button, self._move_up_button, self._move_down_button
+        ):
+            button.setIconSize(QSize(14, 14))
         self._retheme_action_button_icons()
         self._add_button.clicked.connect(self._on_add_clicked)
         self._remove_button.clicked.connect(self._on_remove_clicked)
+        self._move_up_button.clicked.connect(lambda: self._move_selected_rows(-1))
+        self._move_down_button.clicked.connect(lambda: self._move_selected_rows(1))
         button_row.addWidget(self._add_button)
         button_row.addWidget(self._remove_button)
+        button_row.addSpacing(12)
+        button_row.addWidget(self._move_up_button)
+        button_row.addWidget(self._move_down_button)
         button_row.addStretch(1)
         layout.addLayout(button_row)
 
@@ -826,6 +859,10 @@ class ChannelTableWidget(QWidget):
         self._table.setHorizontalHeaderLabels([t(key) for key in _COLUMN_KEYS])
         self._add_button.setText(t("add_channel_button"))
         self._remove_button.setText(t("remove_channel_button"))
+        self._move_up_button.setText(t("move_channel_up_button"))
+        self._move_down_button.setText(t("move_channel_down_button"))
+        self._move_up_button.setToolTip(t("move_channel_up_tooltip"))
+        self._move_down_button.setToolTip(t("move_channel_down_tooltip"))
         for row in range(self._table.rowCount()):
             # Without a selection, the hardware channel button shows a
             # translated placeholder (see `_create_hw_channel_widget`) -
@@ -1030,6 +1067,43 @@ class ChannelTableWidget(QWidget):
                 used.add(channel)
         return used
 
+    def _hw_channel_owners(self, exclude_row: int | None = None) -> dict[str, int]:
+        """Like `_used_hw_channels`, but which ROW holds each channel (for
+        swapping, see `_on_choose_hw_channel_clicked`)."""
+        owners: dict[str, int] = {}
+        for row in range(self._table.rowCount()):
+            if row == exclude_row:
+                continue
+            widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
+            channel = self._get_hw_channel_text_from_widget(widget).strip()
+            if channel:
+                owners[channel] = row
+        return owners
+
+    def _row_display_key(self, row: int) -> tuple[str, str]:
+        """(hardware_channel, display_name) of a row - the key of
+        `_display_settings` (see `_read_row`)."""
+        hw_widget = self._table.cellWidget(row, _COL_HW_CHANNEL)
+        name_widget = self._table.cellWidget(row, _COL_NAME)
+        return (
+            self._get_hw_channel_text_from_widget(hw_widget).strip(),
+            name_widget.text().strip() if name_widget is not None else "",
+        )
+
+    def _rekey_display_settings(self, moves: list[tuple[tuple[str, str], tuple[str, str]]]) -> None:
+        """Carries the live view display settings along when a row's key
+        changes (other hardware channel, renamed) - they are stored per
+        (hardware_channel, display_name) (see `_display_settings`) and
+        would otherwise silently fall back to the defaults on the next
+        `_read_row`. All old entries are taken out BEFORE any is written,
+        so a swap (A->B, B->A) doesn't overwrite one with the other."""
+        taken = [
+            (self._display_settings.pop(old, None), new) for old, new in moves if old != new
+        ]
+        for values, new in taken:
+            if values is not None:
+                self._display_settings[new] = values
+
     def set_available_devices(self, devices: list[DeviceInfo]) -> None:
         """Sets the currently discovered devices/modules (device discovery).
 
@@ -1221,16 +1295,50 @@ class ChannelTableWidget(QWidget):
             return
 
         current_channel = str(button.property("hw_channel") or "")
+        owners = self._hw_channel_owners(exclude_row=row)
+        used_by_name = {
+            channel: self._row_display_key(owner_row)[1] or channel
+            for channel, owner_row in owners.items()
+        }
         dialog = HardwareChannelPickerDialog(
-            self._available_devices, self._used_hw_channels(exclude_row=row), current_channel, self
+            self._available_devices, used_by_name, current_channel, self
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         selected = dialog.selected_channel()
-        if not selected:
+        if not selected or selected == current_channel:
             return
+        self.assign_hw_channel(row, selected)
 
-        button.setProperty("hw_channel", selected)
+    def assign_hw_channel(self, row: int, hw_channel: str) -> None:
+        """Assigns `hw_channel` to `row`. If another row already has it, the
+        two rows SWAP their hardware channels (that row gets `row`'s
+        previous channel, or none if `row` had none) - everything else
+        (name, unit, signal type, parameters, display settings) stays with
+        its row. The module, and with it the allowed signal types, is then
+        re-derived for both rows (see `_apply_device_constraint`)."""
+        button = self._table.cellWidget(row, _COL_HW_CHANNEL)
+        previous = str(button.property("hw_channel") or "")
+        other_row = self._hw_channel_owners(exclude_row=row).get(hw_channel)
+
+        moves = [(self._row_display_key(row), (hw_channel, self._row_display_key(row)[1]))]
+        if other_row is not None:
+            other_key = self._row_display_key(other_row)
+            moves.append((other_key, (previous, other_key[1])))
+        self._rekey_display_settings(moves)
+
+        button.setProperty("hw_channel", hw_channel)
+        if other_row is not None:
+            other_button = self._table.cellWidget(other_row, _COL_HW_CHANNEL)
+            # The modules travel with their channels - `_apply_device_constraint`
+            # only re-derives them for DISCOVERED channels and otherwise keeps
+            # the widget's module (e.g. a loaded configuration without the
+            # hardware connected).
+            previous_module = button.property("module_type") or ""
+            button.setProperty("module_type", other_button.property("module_type") or "")
+            other_button.setProperty("hw_channel", previous)
+            other_button.setProperty("module_type", previous_module)
+            self._apply_device_constraint(other_row)
         self._apply_device_constraint(row)
 
     def _create_signal_type_widget(self, current_value: str) -> "_PickerCell":
@@ -1430,6 +1538,31 @@ class ChannelTableWidget(QWidget):
             self._table.removeRow(row)
         self._update_row_numbers()
 
+    def _move_selected_rows(self, delta: int) -> None:
+        """Moves the selected rows one row up (`delta=-1`) or down (`+1`),
+        keeping their relative order; does nothing if a selected row is
+        already at that edge. Works on complete `Channel`s (read, reorder,
+        rebuild via `set_channels`), so every setting of a row - including
+        the display settings stored next to the table - moves with it.
+        The rows stay selected, so repeated clicks keep moving them."""
+        selected = sorted({index.row() for index in self._table.selectedIndexes()})
+        if not selected:
+            return
+        count = self._table.rowCount()
+        if (delta < 0 and selected[0] == 0) or (delta > 0 and selected[-1] == count - 1):
+            return
+        channels = self.get_channels()
+        order = list(range(count))
+        for row in selected if delta < 0 else reversed(selected):
+            order[row], order[row + delta] = order[row + delta], order[row]
+        self.set_channels([channels[i] for i in order])
+        self._table.clearSelection()
+        mode = self._table.selectionMode()
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        for row in selected:
+            self._table.selectRow(row + delta)
+        self._table.setSelectionMode(mode)
+
     def _add_row(self, channel: Channel) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
@@ -1450,7 +1583,15 @@ class ChannelTableWidget(QWidget):
             _COL_HW_CHANNEL,
             self._create_hw_channel_widget(channel.hardware_channel, channel.module_type.value),
         )
-        self._table.setCellWidget(row, _COL_NAME, self._line_edit(channel.display_name))
+        name_edit = self._line_edit(channel.display_name)
+        # Remembers the name the display settings are stored under (see
+        # `_rekey_display_settings`) - renaming a channel used to drop its
+        # plot colors/Y range etc. on the next readout of the table.
+        name_edit.setProperty("display_key_name", channel.display_name.strip())
+        name_edit.editingFinished.connect(
+            lambda edit=name_edit: self._on_name_edited(edit)
+        )
+        self._table.setCellWidget(row, _COL_NAME, name_edit)
         self._table.setCellWidget(row, _COL_UNIT, self._line_edit(channel.unit))
 
         allowed_signal_types = _MODULE_SIGNAL_TYPES.get(channel.module_type, list(SignalType))
@@ -1505,7 +1646,20 @@ class ChannelTableWidget(QWidget):
             "plot_popout_y": channel.plot_popout_y,
             "plot_popout_width": channel.plot_popout_width,
             "plot_popout_height": channel.plot_popout_height,
+            "plot_number": channel.plot_number,
         }
+
+    def _on_name_edited(self, edit: QLineEdit) -> None:
+        row = self._find_row_for_widget(_COL_NAME, edit)
+        if row is None:
+            return
+        old_name = str(edit.property("display_key_name") or "")
+        new_name = edit.text().strip()
+        if new_name == old_name:
+            return
+        hw_channel = self._row_display_key(row)[0]
+        self._rekey_display_settings([((hw_channel, old_name), (hw_channel, new_name))])
+        edit.setProperty("display_key_name", new_name)
 
     def _read_row(self, row: int) -> Channel:
         enabled_widget = self._table.cellWidget(row, _COL_ENABLED)
@@ -1592,6 +1746,7 @@ class ChannelTableWidget(QWidget):
             plot_popout_y=display_settings.get("plot_popout_y"),
             plot_popout_width=display_settings.get("plot_popout_width"),
             plot_popout_height=display_settings.get("plot_popout_height"),
+            plot_number=Channel._optional_plot_number(display_settings.get("plot_number")),
         )
 
     def apply_display_settings(self, settings: dict[tuple[str, str], dict]) -> None:
@@ -1619,6 +1774,8 @@ class ChannelTableWidget(QWidget):
     def _retheme_action_button_icons(self) -> None:
         self._add_button.setIcon(QIcon(draw_plus_icon(16)))
         self._remove_button.setIcon(QIcon(draw_minus_icon(16)))
+        self._move_up_button.setIcon(QIcon(draw_chevron_icon(16, up=True)))
+        self._move_down_button.setIcon(QIcon(draw_chevron_icon(16, up=False)))
         # The ellipsis icon of the hardware channel/signal type/parameter
         # buttons is colored theme-dependently (see
         # `_apply_picker_button_icon`/`_apply_parameter_button_icon`) -

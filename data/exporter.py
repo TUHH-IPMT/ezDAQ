@@ -2,8 +2,8 @@
 data/exporter.py
 
 Storage Writer: reads continuously and losslessly from the ring buffer
-and writes measurement data to disk in blocks WHILE the measurement is
-running (Parquet or CSV).
+and writes measurement data to disk WHILE the measurement is running
+(Parquet or CSV).
 
 Architecture (per spec):
 
@@ -17,6 +17,8 @@ regardless of how fast or slow the live view reads in parallel.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 import threading
 import time
@@ -24,8 +26,8 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import pandas as pd
 import pyarrow as pa
+import pyarrow.csv as pacsv
 import pyarrow.parquet as pq
 
 from core.measurement import apply_scaling
@@ -33,6 +35,28 @@ from core.ringbuffer import RingBuffer
 from data.models import Channel, StorageFormat
 
 logger = logging.getLogger(__name__)
+
+# Parquet row groups: the storage writer collects the small DAQ blocks
+# (typically `samples_per_read` = 1000 samples) and only writes a row
+# group once one of these two limits is reached. Writing every DAQ block
+# as its own row group produced thousands of tiny row groups per
+# measurement - a footer of several MB that every reader has to parse
+# first, poor compression, slow reads (especially for readers that work
+# row group by row group, e.g. MATLAB), and noticeably more CPU in the
+# writer thread while the measurement is running.
+#
+# The byte limit bounds the RAM used by the buffer regardless of sample
+# rate and channel count; the time limit (in measurement time) keeps
+# row groups reasonably small for slow measurements.
+PARQUET_ROW_GROUP_MAX_BYTES = 64 * 1024 * 1024
+PARQUET_ROW_GROUP_MAX_SECONDS = 10.0
+
+# Dictionary encoding only pays off for columns with frequently repeating
+# values. Measurement values (and the time column) practically never
+# repeat, so pyarrow would build a dictionary for every row group, notice
+# it is useless and fall back - costing CPU time and leaving the started
+# dictionary page in the file. Has no effect on how the file is read.
+_PARQUET_WRITER_OPTIONS = {"use_dictionary": False}
 
 
 def _sanitize_column_name(name: str) -> str:
@@ -45,20 +69,43 @@ def _sanitize_column_name(name: str) -> str:
     return stripped if stripped else "kanal"
 
 
-def _build_dataframe(
+def _build_columns(
     scaled_block: np.ndarray,
     channels: list[Channel],
     start_sample_index: int,
     sample_rate_hz: float,
-) -> pd.DataFrame:
-    """Converts an already physically scaled raw data block into a
-    DataFrame with a computed time column ("time_s")."""
+) -> dict[str, np.ndarray]:
+    """Converts an already physically scaled raw data block into the
+    file columns: a computed time column ("time_s") plus one column per
+    channel."""
     n = scaled_block.shape[1]
     time_s = (start_sample_index + np.arange(n)) / sample_rate_hz
     data: dict[str, np.ndarray] = {"time_s": time_s}
     for i, channel in enumerate(channels):
         data[_sanitize_column_name(channel.display_name)] = scaled_block[i]
-    return pd.DataFrame(data)
+    return data
+
+
+def _csv_header_line(column_names: list[str]) -> bytes:
+    """Header line in the same format `pandas.DataFrame.to_csv` used to
+    write (quotes only where needed) - pyarrow's own CSV writer would
+    always quote every column name."""
+    buffer = io.StringIO()
+    csv.writer(buffer, lineterminator="\n").writerow(column_names)
+    return buffer.getvalue().encode("utf-8")
+
+
+def parquet_row_group_rows(num_channels: int, sample_rate_hz: float) -> int:
+    """Number of rows per Parquet row group for a measurement.
+
+    Whichever is reached first: `PARQUET_ROW_GROUP_MAX_BYTES` (time column
+    plus one float64 column per channel) or `PARQUET_ROW_GROUP_MAX_SECONDS`
+    of measurement time. Always at least 1.
+    """
+    bytes_per_row = (num_channels + 1) * 8
+    by_bytes = PARQUET_ROW_GROUP_MAX_BYTES // bytes_per_row
+    by_time = int(PARQUET_ROW_GROUP_MAX_SECONDS * sample_rate_hz)
+    return max(1, min(by_bytes, by_time))
 
 
 class StorageWriter:
@@ -67,13 +114,27 @@ class StorageWriter:
     Reads via its own ring-buffer reader and writes new blocks to the
     target file immediately as they arrive:
         * Parquet: incrementally via `pyarrow.parquet.ParquetWriter`
-          (one writer stays open for the entire measurement, each block
-          is appended as another row group).
-        * CSV: incremental appending (`DataFrame.to_csv(mode="a")`).
+          (one writer stays open for the entire measurement). The DAQ
+          blocks are collected in memory and written as one row group as
+          soon as `parquet_row_group_rows` samples are together (at most
+          `PARQUET_ROW_GROUP_MAX_BYTES` / `PARQUET_ROW_GROUP_MAX_SECONDS`),
+          the remainder when stopping. The file layout (columns
+          "time_s" + one per channel) is unaffected by this.
+        * CSV: every block is appended immediately via `pyarrow.csv`
+          (the file stays open for the entire measurement). Previously
+          `DataFrame.to_csv(mode="a")`: several times slower, reopened the
+          file for every block and - the actual problem - held Python's
+          GIL while formatting the numbers, so the live view stuttered
+          while recording as CSV at high data rates. pyarrow formats
+          without holding the GIL. Same values and columns as before;
+          numbers may be spelled differently (e.g. `0.00001953125`
+          instead of `1.953125e-05`, `0` instead of `0.0`).
 
-    This means measurement data survives up to the last block written
-    even if the app crashes during a long measurement (see project spec
-    "save data while the measurement is running").
+    Crash behavior: a CSV file contains the data up to the last block
+    written. A Parquet file only becomes readable once it has been closed
+    in `stop()` - the footer describing all row groups is written last.
+    If the app crashes mid-measurement, the Parquet file is unreadable
+    no matter how often row groups were written before.
     """
 
     def __init__(
@@ -124,7 +185,17 @@ class StorageWriter:
         self._total_samples_written = 0
         self._lost_samples = 0
         self._parquet_writer: Optional[pq.ParquetWriter] = None
-        self._csv_header_written = False
+        self._parquet_row_group_rows = parquet_row_group_rows(
+            len(channels), sample_rate_hz
+        )
+        # Raw (unscaled) DAQ blocks not yet written as a row group, and
+        # the index of the first sample in it (for the time column).
+        self._parquet_pending: list[np.ndarray] = []
+        self._parquet_pending_samples = 0
+        self._parquet_pending_start = 0
+        self._csv_file: Optional[pa.NativeFile] = None
+        self._csv_writer: Optional[pacsv.CSVWriter] = None
+        self._csv_schema: Optional[pa.Schema] = None
 
     @property
     def is_running(self) -> bool:
@@ -138,13 +209,21 @@ class StorageWriter:
 
     @property
     def total_samples_written(self) -> int:
-        """Number of samples written so far, per channel."""
+        """Number of samples taken over from the ring buffer so far, per
+        channel (for Parquet including those still collected in memory
+        for the next row group - they are written at the latest in `stop()`)."""
         return self._total_samples_written
 
     @property
     def output_path(self) -> Path:
         """Target file being written to."""
         return self._output_path
+
+    @property
+    def buffered_samples(self) -> int:
+        """Number of samples (per channel) collected in memory for the
+        next Parquet row group, not yet in the file. Always 0 for CSV."""
+        return self._parquet_pending_samples
 
     @property
     def pending_samples(self) -> int:
@@ -209,6 +288,21 @@ class StorageWriter:
                     "StorageWriter reagiert nicht innerhalb von %.1fs auf das Stop-Signal.",
                     timeout,
                 )
+        thread_finished = self._thread is None or not self._thread.is_alive()
+        if thread_finished and self._last_error is None:
+            # Remainder of the last, not yet complete Parquet row group.
+            # Only once the thread is done - never concurrently with it.
+            try:
+                self._flush_parquet()
+            except Exception as exc:
+                logger.exception("Fehler beim Schreiben der letzten Row Group")
+                self._last_error = exc
+        elif self._parquet_pending_samples:
+            logger.error(
+                "%d gepufferte Samples konnten nicht mehr nach %s geschrieben werden.",
+                self._parquet_pending_samples,
+                self._output_path,
+            )
         self._close_writer()
 
         # Verluste und Fehler VOR dem Abmelden des Readers ablesen - danach
@@ -228,8 +322,11 @@ class StorageWriter:
         if self._last_error is not None:
             logger.error(
                 "StorageWriter wurde durch einen Fehler beendet, %s enthaelt "
-                "nur die Daten bis zum letzten erfolgreichen Block: %s",
+                "nur die Daten bis zum letzten erfolgreich geschriebenen "
+                "Block (bei Parquet: bis zur letzten vollstaendigen Row "
+                "Group, max. %.0f s): %s",
                 self._output_path,
+                PARQUET_ROW_GROUP_MAX_SECONDS,
                 self._last_error,
             )
         if lost > 0:
@@ -265,31 +362,99 @@ class StorageWriter:
             self._last_error = exc
 
     def _write_block(self, raw_block: np.ndarray) -> None:
-        """Scales and writes a single raw data block."""
-        scaled = apply_scaling(raw_block, self._channels)
-        df = _build_dataframe(
-            scaled, self._channels, self._total_samples_written, self._sample_rate_hz
+        """Takes over a single raw data block: for CSV it is scaled and
+        appended immediately, for Parquet it is collected and written as
+        soon as a row group is full."""
+        if self._storage_format == StorageFormat.PARQUET:
+            if self._parquet_writer is None:
+                # Open the file right away (not only with the first row
+                # group), so it exists from the start of the recording -
+                # e.g. for the file-size display in the live view.
+                self._open_parquet_writer()
+            if self._parquet_pending_samples == 0:
+                self._parquet_pending_start = self._total_samples_written
+            self._parquet_pending.append(raw_block)
+            self._parquet_pending_samples += raw_block.shape[1]
+            while self._parquet_pending_samples >= self._parquet_row_group_rows:
+                self._flush_parquet(self._parquet_row_group_rows)
+        else:
+            if self._csv_writer is None:
+                self._open_csv_writer()
+            scaled = apply_scaling(raw_block, self._channels)
+            columns = _build_columns(
+                scaled, self._channels, self._total_samples_written, self._sample_rate_hz
+            )
+            schema = self._csv_schema
+            # `from_pandas=True`: NaN becomes null, i.e. an empty field -
+            # like pandas wrote it (pyarrow would otherwise write "nan").
+            table = pa.Table.from_arrays(
+                [pa.array(columns[name], from_pandas=True) for name in schema.names],
+                schema=schema,
+            )
+            self._csv_writer.write_table(table)
+
+    def _parquet_schema(self) -> pa.Schema:
+        """File schema: "time_s" + one float64 column per channel
+        (shared by Parquet and CSV)."""
+        columns = _build_columns(
+            np.empty((len(self._channels), 0)), self._channels, 0, self._sample_rate_hz
+        )
+        return pa.schema([(name, pa.float64()) for name in columns])
+
+    def _open_csv_writer(self) -> None:
+        schema = self._csv_schema = self._parquet_schema()
+        # `OSFile` is unbuffered: every block goes straight to the OS, so a
+        # crash of the app keeps everything up to the last block.
+        self._csv_file = pa.OSFile(str(self._output_path), "wb")
+        self._csv_file.write(_csv_header_line(schema.names))
+        self._csv_writer = pacsv.CSVWriter(
+            self._csv_file, schema, write_options=pacsv.WriteOptions(include_header=False)
         )
 
-        if self._storage_format == StorageFormat.PARQUET:
-            table = pa.Table.from_pandas(df, preserve_index=False)
-            if self._parquet_writer is None:
-                self._parquet_writer = pq.ParquetWriter(str(self._output_path), table.schema)
-            self._parquet_writer.write_table(table)
-        else:
-            df.to_csv(
-                self._output_path,
-                mode="a",
-                header=not self._csv_header_written,
-                index=False,
-            )
-            self._csv_header_written = True
+    def _open_parquet_writer(self) -> None:
+        self._parquet_writer = pq.ParquetWriter(
+            str(self._output_path), self._parquet_schema(), **_PARQUET_WRITER_OPTIONS
+        )
+
+    def _flush_parquet(self, max_rows: Optional[int] = None) -> None:
+        """Writes up to `max_rows` (default: all) collected samples as one
+        row group; anything beyond that stays collected."""
+        if self._parquet_pending_samples == 0:
+            return
+        pending = (
+            self._parquet_pending[0]
+            if len(self._parquet_pending) == 1
+            else np.concatenate(self._parquet_pending, axis=1)
+        )
+        rows = pending.shape[1] if max_rows is None else min(max_rows, pending.shape[1])
+        chunk, rest = pending[:, :rows], pending[:, rows:]
+
+        scaled = apply_scaling(chunk, self._channels)
+        columns = _build_columns(
+            scaled, self._channels, self._parquet_pending_start, self._sample_rate_hz
+        )
+        table = pa.Table.from_pydict(columns, schema=self._parquet_writer.schema)
+        self._parquet_writer.write_table(table, row_group_size=rows)
+
+        # Copy the (smaller) remainder, so the view doesn't keep the whole
+        # concatenated buffer alive until the next row group.
+        self._parquet_pending = [rest.copy()] if rest.shape[1] > 0 else []
+        self._parquet_pending_samples = rest.shape[1]
+        self._parquet_pending_start += rows
 
     def _close_writer(self) -> None:
-        """Closes a possibly open Parquet writer (idempotent)."""
+        """Closes a possibly open Parquet/CSV writer (idempotent)."""
         if self._parquet_writer is not None:
             try:
                 self._parquet_writer.close()
             except Exception:
                 logger.exception("Fehler beim Schließen des Parquet-Writers")
             self._parquet_writer = None
+        for name in ("_csv_writer", "_csv_file"):
+            handle = getattr(self, name)
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    logger.exception("Fehler beim Schließen der CSV-Datei")
+                setattr(self, name, None)
