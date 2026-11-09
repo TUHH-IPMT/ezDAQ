@@ -81,7 +81,8 @@ class CheckForUpdateTest(unittest.TestCase):
             UpdateCheckResult(
                 update_available=True,
                 current_version="0.5.0",
-                latest_version="v9.9.9",
+                # Without the tag's "v" - the dialog adds its own.
+                latest_version="9.9.9",
                 release_url="https://github.com/TUHH-IPMT/ezDAQ/releases/tag/v9.9.9",
             ),
         )
