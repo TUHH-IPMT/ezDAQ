@@ -52,13 +52,13 @@ def _bare_window() -> MainWindow:
 _UPDATE_RESULT = UpdateCheckResult(
     update_available=True,
     current_version="0.5.0",
-    latest_version="v9.9.9",
+    latest_version="9.9.9",
     release_url="https://github.com/TUHH-IPMT/ezDAQ/releases/tag/v9.9.9",
 )
 _UP_TO_DATE_RESULT = UpdateCheckResult(
     update_available=False,
     current_version="0.5.0",
-    latest_version="v0.5.0",
+    latest_version="0.5.0",
     release_url="https://github.com/TUHH-IPMT/ezDAQ/releases/tag/v0.5.0",
 )
 
@@ -157,6 +157,21 @@ class UpdateAvailableDialogTest(unittest.TestCase):
             self.assertTrue(desktop_services.openUrl.called)
             (opened_url,), _kwargs = desktop_services.openUrl.call_args
             self.assertEqual(opened_url.toString(), _UPDATE_RESULT.release_url)
+
+    def test_versions_are_shown_with_a_single_v(self) -> None:
+        """Regression: the GitHub tag "v9.9.9" used to end up as "vv9.9.9"."""
+        window = _bare_window()
+
+        with patch("gui.main_window.QMessageBox") as message_box_cls, patch(
+            "gui.main_window.QDesktopServices"
+        ):
+            message_box_cls.return_value.clickedButton.return_value = None
+            window._show_update_available_dialog(_UPDATE_RESULT)
+            (text,), _kwargs = message_box_cls.return_value.setText.call_args
+
+        self.assertIn("v9.9.9", text)
+        self.assertIn("v0.5.0", text)
+        self.assertNotIn("vv", text)
 
     def test_choosing_close_does_not_open_anything(self) -> None:
         window = _bare_window()

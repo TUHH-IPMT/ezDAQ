@@ -48,6 +48,10 @@ class UpdateCheckResult:
     with changelog and download link), not at the API URL - it is what
     gets opened in the browser if the user chooses to update (see
     `gui/main_window.py::_show_update_available_dialog`).
+
+    `latest_version` is the bare version ("0.6.2") like `current_version`,
+    WITHOUT the "v" of the GitHub tag - the dialog text puts its own "v"
+    in front of both, which used to show "vv0.6.2".
     """
 
     update_available: bool
@@ -112,7 +116,7 @@ def check_for_update(
     with urllib.request.urlopen(request, timeout=timeout) as response:
         payload = json.loads(response.read().decode("utf-8"))
 
-    latest_version = payload["tag_name"]
+    latest_version = re.sub(r"^[vV]", "", payload["tag_name"].strip())
     release_url = payload["html_url"]
     return UpdateCheckResult(
         update_available=is_newer_version(latest_version, current_version),
